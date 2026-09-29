@@ -1,5 +1,9 @@
 # 会话日志(最新在上)
 
+## 2026-09-29 14:59 | model=zcode-glm | task=T008 完成
+- 摘要: 完成 T007/T008:v1.0.0 tag 重打到含 R7 修复的 HEAD(8337bcc)并推送,GitHub Release 发布;CI 三矩阵全绿
+- 负结果: filter-branch msg-filter 用 BSD sed 地址语法(/pat/s|||)报 extra characters,改用普通 s||| 按截断主题前缀匹配;session_end 提交消息截 80 字符,历史清洗的模式必须按截断后的真实消息写
+
 ## 2026-09-29 14:55 | model=zcode-glm | task=维护
 - 摘要: R7 维护语义:task=维护 的条目不计入发散窗口(自托管真机抓到的规则粒度缺陷——onboard/开源化/迁移类会话挂 task=无 被误判停滞);session_end 增 maintenance 参数;四处规则文本同步;本仓库历史维护条目如实改标
 - 留给下一个: 此前 tag 打在 R7 误报的提交上,需删除重建
