@@ -1,5 +1,6 @@
 # relay-mcp — 接力棒 MCP
 
+[![CI](https://github.com/KentQi/relay-mcp/actions/workflows/ci.yml/badge.svg)](https://github.com/KentQi/relay-mcp/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Node](https://img.shields.io/badge/node-%E2%89%A518-brightgreen)](package.json)
 [![deps](https://img.shields.io/badge/dependencies-0-blue)](package.json)
