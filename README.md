@@ -113,4 +113,4 @@ Design derivation & interface contract (Chinese): [docs-design/](docs-design/). 
 
 ## License
 
-[MIT](LICENSE) © 2026 KentQi
+[MIT](LICENSE) © 2026 kent (kirroyu@126.com)

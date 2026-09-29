@@ -10,8 +10,8 @@
 
 **不要用公开 Issue 报告安全漏洞。**
 
-- English: use GitHub's [private vulnerability reporting](https://github.com/KentQi/relay-mcp/security/advisories/new), or DM the maintainer [@KentQi](https://github.com/KentQi).
-- 中文:请通过 GitHub 私密漏洞报告(同上链接)或私信维护者,我们会在 72 小时内响应。
+- English: use GitHub's [private vulnerability reporting](https://github.com/KentQi/relay-mcp/security/advisories/new), or email the maintainer **kirroyu@126.com**.
+- 中文:请通过 GitHub 私密漏洞报告(同上链接)或发邮件至 **kirroyu@126.com**,我们会在 72 小时内响应。
 
 ## Scope notes / 范围说明
 

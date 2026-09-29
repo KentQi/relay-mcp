@@ -52,7 +52,7 @@ an individual is officially representing the community in public spaces.
 
 Instances of abusive, harassing, or otherwise unacceptable behavior may be
 reported to the community leaders responsible for enforcement at
-**the GitHub issue tracker (using a private security advisory) or direct message to the maintainer [@KentQi](https://github.com/KentQi)**.
+**the GitHub issue tracker (using a private security advisory), direct message to the maintainer [@KentQi](https://github.com/KentQi), or email kirroyu@126.com**.
 All complaints will be reviewed and investigated promptly and fairly.
 
 All community leaders are obligated to respect the privacy and security of the

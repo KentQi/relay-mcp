@@ -14,6 +14,9 @@
 (空——认领后由 relay_claim 移入;认领锁在 .relay/claims/,TTL 4 小时,崩溃会话的认领到期自动可接管)
 
 ## 待办
+- [ ] T006 git 历史身份重写(与本次树内修改同主题)
+  验收: git log 全部提交 an/committer 为 kent <kirroyu@126.com>,远端 force push 后 CI 仍全绿
+  备注: 零 fork 窗口期内一次性完成;重写后旧 commit sha 全部变化
 - [ ] T005 CI 矩阵三绿确认与 README badge 补链
   验收: GitHub Actions node 22/24/26 三个 job 全绿后,把 badge 链接到实际 Actions 页
   备注: 首跑失败日志:git commit fatal(无身份);本地 macOS 因 hostname 自动兜底而全绿——环境差异只能靠真机 CI 抓

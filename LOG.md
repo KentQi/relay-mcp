@@ -1,5 +1,9 @@
 # 会话日志(最新在上)
 
+## 2026-09-29 12:32 | model=zcode-glm | task=无
+- 摘要: 统一开源作者身份:kent <kirroyu@126.com>(LICENSE/package.json author+license 字段/SECURITY 与 CoC 联系邮箱/README 版权行);GitHub 句柄 KentQi 仅保留在仓库链接与 badge
+- 留给下一个: 零 fork 窗口期内一次性完成;重写后旧 commit sha 全部变化
+
 ## 2026-09-29 12:14 | model=zcode-glm | task=T004 完成
 - 摘要: 修复 CI 首跑红:Linux runner 无 git 身份致提交被拒。新增 gitIdentityArgs 兜底(仅命令级 -c 注入,不写全局),统一三个提交点;并修注入参数位置(git -c 在子命令前,commit -c 是复用消息)
 - 留给下一个: 首跑失败日志:git commit fatal(无身份);本地 macOS 因 hostname 自动兜底而全绿——环境差异只能靠真机 CI 抓

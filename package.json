@@ -4,6 +4,8 @@
   "private": true,
   "type": "module",
   "description": "relay — 多模型接力开发 MCP:仓库即交接棒",
+  "author": "kent <kirroyu@126.com>",
+  "license": "MIT",
   "scripts": {
     "test": "node scripts/smoke.mjs"
   }
