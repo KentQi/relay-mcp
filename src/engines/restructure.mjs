@@ -13,7 +13,7 @@
 import { readdir, stat, writeFile } from 'node:fs/promises';
 import { basename, dirname, extname, join, resolve } from 'node:path';
 import {
-  backupFile, ensureDir, gitIdentityArgs, gitRun, isGitRepo, nowIso,
+  backupFile, ensureDir, findSensitiveChanges, gitIdentityArgs, gitRun, isGitRepo, nowIso,
   readFileSafe, stamp,
 } from '../util.mjs';
 
@@ -223,6 +223,12 @@ export const relayRestructure = async (args = {}) => {
     await appendDecisions(root, done);
     await insertLog(root, done.length, taskId);
 
+    // 密钥安检(H-B):移动/提交不搬运疑似密钥文件,转人工(与 session_end 同一条规则)
+    const stSec = await gitRun(root, '-c', 'core.quotePath=false', 'status', '--porcelain');
+    const sens = stSec.ok ? findSensitiveChanges(stSec.stdout.split('\n')) : [];
+    if (sens.length) {
+      return err(`提交跳过:发现疑似密钥/敏感文件,拒绝卷入 git 历史(需人工处理):${sens.slice(0, 3).map((s) => s.path).join(', ')}。移动与协议记录已完成,提交请人工执行`);
+    }
     const cm = await gitRun(root, 'add', '-A');
     const cc = cm.ok ? await gitRun(root, ...(await gitIdentityArgs(root)), 'commit', '-m', `relay: restructure — 标准化目录(${done.length} 项移动)`) : cm;
     const gitLine = cc.ok

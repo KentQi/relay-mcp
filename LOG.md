@@ -1,5 +1,10 @@
 # 会话日志(最新在上)
 
+## 2026-09-29 15:14 | model=zcode-glm | task=T009 完成
+- 摘要: 第三方审计 P0 修复:①验收门路径安检——test: 路径不得以 - 开头(击穿 CLI 选项注入/预载攻击)、须在项目目录内、仅限 js/ts 测试文件,红灯核验同规格;②密钥安检从 session_end 抽到 util 共享,init/onboard/restructure 三个自动提交点全覆盖;③CI 加 permissions: contents: read 最小权限;④CONTRIBUTING 死链修复(npm run verify、CONTRACT.md 位置);⑤SECURITY 声明同步;⑥冒烟新增 7 条安检回归(89/89)
+- 负结果: BSD sed 在 filter-branch 地址语法会报错(已知);冒烟回归设计时注意:嵌套的 -- 开头文件会被 node 当普通路径(非选项注入),真注入向量是整段参数以 - 开头且攻击者可修宪绕 R2
+- 留给下一个: 第三方审计 H-C/H-D/H-E 与幂等项;审计报告第五轮待用户约
+
 ## 2026-09-29 14:59 | model=zcode-glm | task=T008 完成
 - 摘要: 完成 T007/T008:v1.0.0 tag 重打到含 R7 修复的 HEAD(8337bcc)并推送,GitHub Release 发布;CI 三矩阵全绿
 - 负结果: filter-branch msg-filter 用 BSD sed 地址语法(/pat/s|||)报 extra characters,改用普通 s||| 按截断主题前缀匹配;session_end 提交消息截 80 字符,历史清洗的模式必须按截断后的真实消息写

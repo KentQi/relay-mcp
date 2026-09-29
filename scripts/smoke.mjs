@@ -235,7 +235,47 @@ try {
   ok(!rv7.isError && !rv7.text.includes('| R7 | ERROR'), '维护会话不计入 R7 发散窗口');
   writeFileSync(logP, savedLog);
 
-  // ---------- CLI 逃生口 ----------
+  // ---------- P0 安检回归:H-A 选项注入/目录逃逸 + H-B onboard 密钥安检 ----------
+  console.log('\n== P0 安检回归 ==');
+  const tkP = path.join(tmpA, 'TASKS.md');
+  const tkSaved = readFileSync(tkP, 'utf8');
+  // H-A-1a: 整段参数以 - 开头 = 真正的 CLI 选项注入(node --test --require=pwn.js 会预载任意脚本);
+  // 攻击者可修宪把伪装文件加进白名单绕过 R2,所以这里同时篡改 manifest 模拟该前提
+  writeFileSync(path.join(tmpA, '--require=pwn.js'), 'require("fs").writeFileSync("PWNED","1")\n');
+  const mfP = path.join(tmpA, '.relay', 'manifest.json');
+  const mfSaved = readFileSync(mfP, 'utf8');
+  writeFileSync(mfP, mfSaved.replace('"allowedTopLevel": [', '"allowedTopLevel": [\n    "--require=pwn.js",'));
+  const tk1 = tkSaved.replace('## 待办', '## 待办\n- [ ] T010 伪装验收\n  验收: test:--require=pwn.js');
+  writeFileSync(tkP, tk1);
+  const pwn1 = await tool('relay_session_end', { root: tmpA, model: 'smoke-model', summary: '注入尝试', done_task: 'T010' });
+  ok(pwn1.isError && pwn1.text.includes("不得以 '-' 开头"), 'H-A: 整段 - 开头的 test: 路径被拒(选项注入失效)', JSON.stringify(pwn1.isError) + pwn1.text.slice(0, 500));
+  ok(!existsSync(path.join(tmpA, 'PWNED')), 'H-A: 预载脚本未被执行');
+  writeFileSync(mfP, mfSaved);
+  rmSync(path.join(tmpA, '--require=pwn.js'));
+  // H-A-1b: 嵌套的 -- 开头段会被 node 当普通文件路径跑(非选项注入),但必须是真测试文件才绿——伪装文件照样被"不绿"拒绝
+  mkdirSync(path.join(tmpA, 'scripts'), { recursive: true });
+  writeFileSync(path.join(tmpA, 'scripts', '--require=pwn.js'), 'require("fs").writeFileSync("PWNED2","1")\n');
+  const tk1b = tkSaved.replace('## 待办', '## 待办\n- [ ] T012 伪装验收嵌套\n  验收: test:scripts/--require=pwn.js');
+  writeFileSync(tkP, tk1b);
+  const pwn3 = await tool('relay_session_end', { root: tmpA, model: 'smoke-model', summary: '嵌套注入尝试', done_task: 'T012' });
+  ok(pwn3.isError && pwn3.text.includes('不绿'), 'H-A: 嵌套伪装文件被"不绿"拒绝(当文件跑也进不了绿灯)', pwn3.text.slice(0, 300));
+  ok(!existsSync(path.join(tmpA, 'PWNED2')), 'H-A: 嵌套伪装文件未产生副作用');
+  // H-A-2: ../ 目录逃逸
+  writeFileSync(path.join(tmpdir(), 'outside.test.js'), 'test("x",()=>{});\n');
+  const tkEscape = tkSaved.replace('## 待办', '## 待办\n- [ ] T011 逃逸验收\n  验收: test:../outside.test.js');
+  writeFileSync(tkP, tkEscape);
+  const pwn2 = await tool('relay_session_end', { root: tmpA, model: 'smoke-model', summary: '逃逸尝试', done_task: 'T011' });
+  ok(pwn2.isError && pwn2.text.includes('位于项目目录内'), 'H-A: ../ 目录逃逸被拒', pwn2.text.slice(0, 200));
+  writeFileSync(tkP, tkSaved);
+  rmSync(path.join(tmpA, 'scripts', '--require=pwn.js')); rmSync(path.join(tmpdir(), 'outside.test.js'));
+  // H-B: onboard 遇工作区密钥 → 拒绝自动提交
+  const secP = path.join(tmpB, 'id_rsa');
+  writeFileSync(secP, '-----BEGIN PRIVATE KEY-----\n');
+  const commitsBefore = gitSafe(tmpB, 'rev-list', '--count', 'HEAD').stdout.trim();
+  const roSec = await tool('relay_onboard', { root: tmpB });
+  const commitsAfter = gitSafe(tmpB, 'rev-list', '--count', 'HEAD').stdout.trim();
+  ok(!roSec.isError && roSec.text.includes('密钥'), 'H-B: onboard 发现密钥→拒绝自动入库(不置错,转人工)', roSec.text.slice(0, 200));
+  ok(commitsBefore === commitsAfter, `H-B: 未产生新提交(${commitsBefore} → ${commitsAfter})`);
   console.log('\n== CLI ==');
   const cli = spawnSync2('node', [path.join(RELAY, 'src/cli.mjs'), 'relay_rules']);
   ok(cli.status === 0 && cli.stdout.includes('R9'), 'cli relay_rules 可用');

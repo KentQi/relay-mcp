@@ -14,11 +14,12 @@
 (空——认领后由 relay_claim 移入;认领锁在 .relay/claims/,TTL 4 小时,崩溃会话的认领到期自动可接管)
 
 ## 待办
-- [ ] T007 发布 v1.0.0 tag(CHANGELOG 已声明,打点后推 tag 并建 Release)
-  验收: git tag -a v1.0.0 清洗后的 HEAD 并推送;GitHub 出现 Releases/v1.0.0
+- [ ] T010 P1 一致性加固:TASKS/LOG 写串行化(引入仓库级出场锁)+ 幂等出场 + TTL 接管原子化
+  验收: npm test 全绿且新增并发双进程回归断言(两会话并发 session_end 不丢更新)
+  备注: 第三方审计 H-C/H-D/H-E 与幂等项;审计报告第五轮待用户约
+- [x] T007 发布 v1.0.0 tag  (2026-09-29)
   备注: 审计 P0 项;零 fork 窗口内与历史清洗同批完成
-- [ ] T006 git 历史身份重写(与本次树内修改同主题)
-  验收: git log 全部提交 an/committer 为 kent <kirroyu@126.com>,远端 force push 后 CI 仍全绿
+- [x] T006 git 历史身份重写  (2026-09-29)
   备注: 零 fork 窗口期内一次性完成;重写后旧 commit sha 全部变化
 - [ ] T005 CI 矩阵三绿确认与 README badge 补链
   验收: GitHub Actions node 22/24/26 三个 job 全绿后,把 badge 链接到实际 Actions 页
@@ -29,6 +30,8 @@
   验收: verify 全绿 且 `npm test` 通过 且 新增并发认领回归断言(两模型同时 claim 不同任务,两条认领均不丢失)
 
 ## 已完成
+- [x] T009 第三方审计 P0 安全修复(验收门选项注入/目录逃逸安检 + init/onboard/restructure 密钥安检 + CI 最小权限 + 指南死链)  (2026-09-29)
+  验收: npm test 全绿(含新增安检回归断言)且 ./verify 无 ERROR
 - [x] T008 发布 v1.0.0 tag 与 Release(重打到含 R7 修复的 HEAD)  (2026-09-29)
   验收: git tag v1.0.0 指向当前 HEAD 并推送;GitHub Releases 出现 v1.0.0;CI 三矩阵全绿
   备注: 此前 tag 打在 R7 误报的提交上,需删除重建

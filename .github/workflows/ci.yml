@@ -4,6 +4,9 @@ name: ci
 on:
   push:
   pull_request:
+# 最小权限:流水线只读仓库内容,不发 token 写权限
+permissions:
+  contents: read
 jobs:
   test:
     runs-on: ubuntu-latest
@@ -18,5 +21,5 @@ jobs:
           node-version: ${{ matrix.node-version }}
       - name: relay verify (structure, self-hosted engine)
         run: node src/cli.mjs relay_verify --root .
-      - name: smoke tests (end-to-end, 81 assertions)
+      - name: smoke tests (end-to-end)
         run: npm test

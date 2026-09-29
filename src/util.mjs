@@ -123,3 +123,26 @@ export const stamp = () => {
 
 // ISO 日期时间
 export const nowIso = () => new Date().toISOString();
+
+// —— 疑似密钥文件守卫(H3/H-B):在场即不自动提交,强制人类过目 ——
+// 单一实现,session_end / init / onboard / restructure 各自动提交点共用
+export const SECRET_RULES = [
+  [/(^|\/)\.env(\..+)?$/i, '.env 疑似密钥'],
+  [/(^|\/)[^/]*secret[^/]*$/i, '文件名含 secret'],
+  [/(^|\/)[^/]*credential[^/]*$/i, '文件名含 credential'],
+  [/\.(key|pem)$/i, '*.key / *.pem 私钥'],
+  [/(^|\/)id_rsa(\..+)?$/i, 'id_rsa 私钥'],
+];
+export const findSensitiveChanges = (statusLines) => {
+  const hits = new Map();
+  for (const line of statusLines || []) {
+    if (line.length < 4) continue;
+    for (const raw of line.slice(3).split(' -> ')) {
+      let p = raw.trim();
+      if (p.length >= 2 && p.startsWith('"') && p.endsWith('"')) p = p.slice(1, -1);
+      const rule = SECRET_RULES.find(([re]) => re.test(p));
+      if (rule) hits.set(p, rule[1]);
+    }
+  }
+  return [...hits.entries()].map(([path, why]) => ({ path, why })).sort((a, b) => a.path.localeCompare(b.path));
+};

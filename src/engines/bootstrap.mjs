@@ -13,7 +13,7 @@
 import { basename, dirname, join, relative, resolve } from 'node:path';
 import { access, chmod, readdir, writeFile } from 'node:fs/promises';
 import {
-  backupFile, ensureDir, gitIdentityArgs, gitRun, isGitRepo, nowIso,
+  backupFile, ensureDir, findSensitiveChanges, gitIdentityArgs, gitRun, isGitRepo, nowIso,
   readFileSafe, stamp, templatesDir, writeFileIfAbsent,
 } from '../util.mjs';
 import { generateEntryFiles } from './sync.mjs';
@@ -126,6 +126,13 @@ const gitCommitFlow = async (root, needInit, message) => {
       return lines;
     }
     lines.push('已初始化 git 仓库');
+  }
+  // 密钥安检(H-B):与 session_end 同一条规则——工作区有疑似密钥/私钥文件,拒绝自动入库,转人工
+  const stSec = await safeGit(root, '-c', 'core.quotePath=false', 'status', '--porcelain');
+  const sens = stSec.ok ? findSensitiveChanges(stSec.stdout.split('\n')) : [];
+  if (sens.length) {
+    lines.push(`提交跳过:发现疑似密钥/敏感文件,拒绝卷入 git 历史(需人工处理后再提交):${sens.slice(0, 3).map((s) => s.path).join(', ')}${sens.length > 3 ? ` 等 ${sens.length} 项` : ''}`);
+    return lines;
   }
   const add = await safeGit(root, 'add', '-A');
   if (!add.ok) {

@@ -7,9 +7,9 @@
 // 受保护路径(verify/.relay//tests//*.test.*/*.spec.*):文件照常更新,但不自动 commit(需人类批准,isError 不置位)。
 //   注意:护栏只看未提交 diff——模型中途自行 git commit 即可绕过,该边界写明在 README。
 // 疑似密钥文件(.env*/*secret*/*credential*/*.key/*.pem/id_rsa)在场:同护栏处理,不自动提交(H3)。
-import { readFileSafe, isGitRepo, gitIdentityArgs, gitRun, stamp, nowIso, templatesDir, ensureDir } from '../util.mjs';
+import { readFileSafe, isGitRepo, gitIdentityArgs, gitRun, findSensitiveChanges, stamp, nowIso, templatesDir, ensureDir } from '../util.mjs';
 import { writeFile, open as fsOpen, stat as fsStat, unlink as fsUnlink } from 'node:fs/promises';
-import { join } from 'node:path';
+import { join, resolve, sep } from 'node:path';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { runChecks, formatChecks, TASK_LINE_RE, LOG_TITLE_RE, parseLogEntries } from './verify.mjs';
@@ -106,28 +106,6 @@ const findProtectedChanges = (statusLines) => {
   return [...hits.entries()].map(([path, why]) => ({ path, why })).sort((a, b) => a.path.localeCompare(b.path));
 };
 
-// —— 疑似密钥文件守卫(H3):在场即不自动提交,强制人类过目 ——
-const SECRET_RULES = [
-  [/(^|\/)\.env(\..+)?$/i, '.env 疑似密钥'],
-  [/(^|\/)[^/]*secret[^/]*$/i, '文件名含 secret'],
-  [/(^|\/)[^/]*credential[^/]*$/i, '文件名含 credential'],
-  [/\.(key|pem)$/i, '*.key / *.pem 私钥'],
-  [/(^|\/)id_rsa(\..+)?$/i, 'id_rsa 私钥'],
-];
-const findSensitiveChanges = (statusLines) => {
-  const hits = new Map();
-  for (const line of statusLines || []) {
-    if (line.length < 4) continue;
-    for (const raw of line.slice(3).split(' -> ')) {
-      let p = raw.trim();
-      if (p.length >= 2 && p.startsWith('"') && p.endsWith('"')) p = p.slice(1, -1);
-      const rule = SECRET_RULES.find(([re]) => re.test(p));
-      if (rule) hits.set(p, rule[1]);
-    }
-  }
-  return [...hits.entries()].map(([path, why]) => ({ path, why })).sort((a, b) => a.path.localeCompare(b.path));
-};
-
 // —— 受保护路径细则:认领锁是本地运行时文件,不算护栏事件 ——
 // (PROTECTED_RULES 的 .relay/** 规则在上方定义处排除 .relay/claims/)
 
@@ -147,6 +125,20 @@ const tailOf = (s, n = 500) => {
   return t.length > n ? `…${t.slice(-n)}` : t;
 };
 const existsFile = async (p) => (await readFileSafe(p, null)) !== null;
+
+// —— 验收测试路径安检(H-A):交接单上的 test: 路径必须是一枚"真测试文件"——
+// 不能是伪装成路径的命令行选项(--require=… 会让 node 加载任意预载脚本,绿灯语义被击穿),
+// 也不能用 ../ 逃出项目目录。安检不过 = 拒绝出场,而不是降级人工。
+const inspectTestPath = (root, p) => {
+  const raw = String(p || '').trim();
+  if (!raw) return { bad: '验收 test: 路径为空' };
+  if (raw.startsWith('-')) return { bad: `路径不得以 '-' 开头(会被当作 node 命令行选项执行): ${raw}` };
+  const abs = resolve(root, raw);
+  const rootAbs = resolve(root);
+  if (abs !== rootAbs && !abs.startsWith(rootAbs + sep)) return { bad: `路径必须位于项目目录内: ${raw}` };
+  if (!/\.(m|c)?[jt]sx?$/i.test(raw)) return { bad: `只接受 js/ts 测试文件,其他类型不予执行: ${raw}` };
+  return { abs, raw };
+};
 
 // —— 验收执行门(H1):完成声明必须有可执行的绿灯背书 ——
 // 返回 { lines: string[](已执行并通过), fails: string[](任何一条即拒绝出场), executed: number, notes: string[] }
@@ -170,18 +162,21 @@ const acceptanceGate = async (root, doneTask) => {
       }
     }
   }
-  // a) test: 验收——文件必须存在;js 系用 node --test 实跑,完成时必须绿(红灯协议的"绿"端执法)
+  // a) test: 验收——先过安检(H-A),再查存在;js 系用 node --test 实跑,完成时必须绿(红灯协议的"绿"端执法)
   if (doneTask && testPath) {
-    if (!(await existsFile(join(root, testPath)))) {
+    const chk = inspectTestPath(root, testPath);
+    if (chk.bad) {
+      fails.push(`验收 test: 安检未通过——${chk.bad}(裁判只执行真正的测试文件)`);
+    } else if (!(await existsFile(chk.abs))) {
       fails.push(`验收 \`${testPath}\` 的测试文件不存在——完成声明无法证实(红灯协议:完成时该测试必须存在且通过)`);
-    } else if (/\.(m|c)?js$/i.test(testPath)) {
+    } else if (/\.(m|c)?js$/i.test(chk.raw)) {
       executed += 1;
-      const r = await runCmd('node', ['--test', testPath], root);
+      const r = await runCmd('node', ['--test', chk.raw], root);
       if (r.ok === null) notes.push(`验收 test:${testPath} 存在,但无法执行(${r.out})——人工确认`);
       else if (!r.ok) fails.push(`\`node --test ${testPath}\` 失败(验收 test: 不绿):\n${tailOf(r.out)}`);
       else lines.push(`- 验收 \`test:\`:node --test ${testPath} 通过`);
     } else {
-      lines.push(`- 验收 \`test:\`:${testPath} 存在(非 js 入口,未自动执行,人工确认其通过)`);
+      lines.push(`- 验收 \`test:\`:${testPath} 存在(ts 系测试,未自动执行,人工确认其通过)`);
     }
   }
   // b) 项目测试入口:package.json scripts.test → npm test
@@ -203,11 +198,15 @@ const acceptanceGate = async (root, doneTask) => {
 const redLightCheck = async (root, next) => {
   if (!next || !String(next.acceptance ?? '').trim().startsWith('test:')) return [];
   const p = String(next.acceptance).trim().slice(5).trim();
-  if (!(await existsFile(join(root, p)))) {
+  const chk = inspectTestPath(root, p);
+  if (chk.bad) {
+    return [`- 红灯 \`${p}\`:安检未通过(${chk.bad})——请先修正 TASKS 中的验收行`];
+  }
+  if (!(await existsFile(chk.abs))) {
     return [`- 红灯 \`${p}\`:测试文件尚不存在——接班者第一件事是编写该失败测试(先红后绿)`];
   }
-  if (/\.(m|c)?js$/i.test(p)) {
-    const r = await runCmd('node', ['--test', p], root);
+  if (/\.(m|c)?js$/i.test(chk.raw)) {
+    const r = await runCmd('node', ['--test', chk.raw], root);
     if (r.ok === true) return [`- 红灯 \`${p}\`:当前是绿的——下一任务可能已被完成,请人工确认意图`];
     return [`- 红灯 \`${p}\`:确认当前为失败状态(接班者以让它变绿为目标)`];
   }
