@@ -1,4 +1,6 @@
-# relay-mcp 接口契约(并行分工的唯一边界,所有模块必须严格遵守)
+# relay-mcp 接口契约
+
+> 注:本文档是开源前并行开发的内部 memo("W1-W4"为当时的专家分工编号),保留作为设计记录;绝对路径已脱敏为占位符。
 
 接力棒 MCP:让任意模型(Claude/Codex/Gemini/Cursor/ZCode…)在任意项目上接力开发。
 零依赖纯 Node ESM(仅用 node: 内置模块),**无构建步骤**,入口 `node src/index.mjs`。

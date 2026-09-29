@@ -15,7 +15,6 @@
     "CHANGELOG.md",
     "CLAUDE.md",
     "CODE_OF_CONDUCT.md",
-    "CONTRACT.md",
     "CONTRIBUTING.md",
     "DECISIONS.md",
     "GEMINI.md",
@@ -28,12 +27,10 @@
     "TASKS.md",
     "docs",
     "docs-design",
-    "mcp-design.txt",
     "package.json",
     "scripts",
     "src",
     "templates",
-    "tests",
     "verify"
   ],
   "docsPhases": [
@@ -45,6 +42,5 @@
     "archive",
     "templates"
   ],
-  "onboardedAt": "2026-09-29T03:38:22.077Z",
-  "relayHome": "<relay-mcp 安装目录>"
+  "onboardedAt": "2026-09-29T03:38:22.077Z"
 }

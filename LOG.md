@@ -1,11 +1,15 @@
 # 会话日志(最新在上)
 
+## 2026-09-29 14:45 | model=zcode-glm | task=无
+- 摘要: 公开仓库脱敏:verify 改为自委托版(移除本机固化路径,克隆者可直跑);manifest 清理 relayHome 与幽灵白名单条目;LOG 本机操作条目泛化;docs-design 绝对路径脱敏并标注内部 memo 性质;DECISIONS 固化『公开仓库接力信息脱敏』决策;历史提交消息与历史 blob 中的本机路径同步 scrub
+- 留给下一个: 审计 P0 项;零 fork 窗口内与历史清洗同批完成
+
 ## 2026-09-29 14:06 | model=zcode-glm | task=无
-- 摘要: 引擎迁移 <引擎目录> → <引擎目录>(惯例:活跃开发的自托管引擎放 dev 目录);同步 verify 兜底路径与 manifest.relayHome;ZCode 注册路径已同步
+- 摘要: 引擎部署路径迁移,本机各 harness 注册同步(细节属本机环境,不入公开史)
 
 ## 2026-09-29 12:32 | model=zcode-glm | task=无
-- 摘要: 统一开源作者身份:kent <kirroyu@126.com>(LICENSE/package.json author+license 字段/SECURITY 与 CoC 联系邮箱/README 版权行);GitHub 句柄 KentQi 仅保留在仓库链接与 badge
-- 留给下一个: 零 fork 窗口期内一次性完成;重写后旧 commit sha 全部变化
+- 摘要: 统一开源作者信息(LICENSE/package.json/SECURITY 与 CoC 联系人/README 版权行)
+- 留给下一个: 历史重写在零 fork 窗口期内完成;旧 commit sha 已全部变化
 
 ## 2026-09-29 12:14 | model=zcode-glm | task=T004 完成
 - 摘要: 修复 CI 首跑红:Linux runner 无 git 身份致提交被拒。新增 gitIdentityArgs 兜底(仅命令级 -c 注入,不写全局),统一三个提交点;并修注入参数位置(git -c 在子命令前,commit -c 是复用消息)

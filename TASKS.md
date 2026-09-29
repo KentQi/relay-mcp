@@ -14,6 +14,9 @@
 (空——认领后由 relay_claim 移入;认领锁在 .relay/claims/,TTL 4 小时,崩溃会话的认领到期自动可接管)
 
 ## 待办
+- [ ] T007 发布 v1.0.0 tag(CHANGELOG 已声明,打点后推 tag 并建 Release)
+  验收: git tag -a v1.0.0 清洗后的 HEAD 并推送;GitHub 出现 Releases/v1.0.0
+  备注: 审计 P0 项;零 fork 窗口内与历史清洗同批完成
 - [ ] T006 git 历史身份重写(与本次树内修改同主题)
   验收: git log 全部提交 an/committer 为 kent <kirroyu@126.com>,远端 force push 后 CI 仍全绿
   备注: 零 fork 窗口期内一次性完成;重写后旧 commit sha 全部变化

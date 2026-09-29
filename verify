@@ -1,11 +1,5 @@
 #!/bin/sh
-# relay verify — 单一真相在 relay-mcp 引擎,本脚本只是委托。
-# 换机 / 团队成员克隆后失效时:export RELAY_HOME=/path/to/relay-mcp(优先),否则用下方固化路径。
+# relay-mcp 自身仓库的 verify:引擎就在本仓库,直接委托 src/cli.mjs(无外部依赖、无本机路径)。
+# 注意:被接入项目用的是 templates/verify.sh(RELAY_HOME 委托版);本文件是引擎仓库的自托管版。
 ROOT="$(cd "$(dirname "$0")" && pwd)"
-RELAY_HOME="${RELAY_HOME:-<relay-mcp 安装目录>}"
-if [ ! -f "$RELAY_HOME/src/cli.mjs" ]; then
-  echo "verify: 找不到 relay 引擎:$RELAY_HOME/src/cli.mjs" >&2
-  echo "修复:安装 relay-mcp 后 export RELAY_HOME=<relay-mcp 绝对路径>,再重跑 ./verify" >&2
-  exit 2
-fi
-exec node "$RELAY_HOME/src/cli.mjs" relay_verify --root "$ROOT"
+exec node "$ROOT/src/cli.mjs" relay_verify --root "$ROOT"
