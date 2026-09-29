@@ -13,8 +13,8 @@
 import { readdir, stat, writeFile } from 'node:fs/promises';
 import { basename, dirname, extname, join, resolve } from 'node:path';
 import {
-  backupFile, ensureDir, findSensitiveChanges, gitIdentityArgs, gitRun, isGitRepo, nowIso,
-  readFileSafe, stamp,
+  acquireRepoLock, backupFile, ensureDir, findSensitiveChanges, gitIdentityArgs, gitRun, isGitRepo, nowIso,
+  readFileSafe, releaseRepoLock, stamp,
 } from '../util.mjs';
 
 const ok = (text) => ({ content: [{ type: 'text', text }], isError: false });
@@ -199,6 +199,10 @@ export const relayRestructure = async (args = {}) => {
     if (!st.ok) return err(`无法读取 git 状态:${firstLine(st.stderr)}`);
     if (st.stdout.trim()) return err(['工作区不干净,拒绝执行:', ...st.stdout.trim().split('\n').slice(0, 5).map((l) => `- ${l}`), '先提交或暂存(git stash)再来。'].join('\n'));
 
+    // 仓库级写锁:重构期间独占 TASKS/LOG/manifest(与 session_end / claim 同一把)
+    const rLock = await acquireRepoLock(root, 'restructure');
+    if (!rLock.ok) return err(`另一会话(**${rLock.holder}**)正在本仓库出场/认领,请稍后重试。`);
+    try {
     const done = [];
     for (const m of moves) {
       await ensureDir(join(root, dirname(m.to)));
@@ -247,6 +251,9 @@ export const relayRestructure = async (args = {}) => {
       '',
       '### 下一棒', `1. \`relay_session_start\` 进场 → 认领 ${taskId},逐个修复 import/脚本引用`, '2. `relay_verify` 全绿 + 测试通过后 `relay_session_end` 出场',
     ].join('\n'));
+    } finally {
+      await releaseRepoLock(root);
+    }
   } catch (e) {
     return err(`relay_restructure 执行失败:${firstLine(e && e.message) || String(e)}`);
   }

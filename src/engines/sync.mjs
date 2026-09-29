@@ -9,7 +9,7 @@
 
 import { basename, dirname, join, relative, resolve } from 'node:path';
 import { access, writeFile } from 'node:fs/promises';
-import { backupFile, readFileSafe, stamp, templatesDir } from '../util.mjs';
+import { acquireRepoLock, backupFile, readFileSafe, releaseRepoLock, stamp, templatesDir } from '../util.mjs';
 
 const MARKER_PREFIX = '<!-- relay:generated';
 const MARKER = '<!-- relay:generated v1 -->';
@@ -193,6 +193,11 @@ export const relaySync = async (args = {}) => {
     const entryFiles = Array.isArray(manifest.entryFiles) && manifest.entryFiles.length
       ? manifest.entryFiles : [...DEFAULT_ENTRY_FILES];
 
+    // 仓库级写锁:入口重投影期间独占(与 session_end / claim 同一把)
+    const sLock = await acquireRepoLock(root, 'sync');
+    if (!sLock.ok) return err(`另一会话(**${sLock.holder}**)正在本仓库出场/认领,请稍后重试。`);
+    let res;
+    try {
     const res = await generateEntryFiles(root, {
       mode: 'sync',
       entryFiles,
@@ -229,6 +234,9 @@ export const relaySync = async (args = {}) => {
     if (res.notes.length) lines.push('', '### 说明', ...res.notes.map((n) => `- ${n}`));
     lines.push('', '下一步:可运行 relay_verify 复核 R1(入口文件标记)。');
     return ok(lines.join('\n'));
+    } finally {
+      await releaseRepoLock(root);
+    }
   } catch (e) {
     return err(`relay_sync 执行失败:${firstLine(e && e.message) || String(e)}`);
   }

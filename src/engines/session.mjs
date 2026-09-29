@@ -7,7 +7,7 @@
 // 受保护路径(verify/.relay//tests//*.test.*/*.spec.*):文件照常更新,但不自动 commit(需人类批准,isError 不置位)。
 //   注意:护栏只看未提交 diff——模型中途自行 git commit 即可绕过,该边界写明在 README。
 // 疑似密钥文件(.env*/*secret*/*credential*/*.key/*.pem/id_rsa)在场:同护栏处理,不自动提交(H3)。
-import { readFileSafe, isGitRepo, gitIdentityArgs, gitRun, findSensitiveChanges, stamp, nowIso, templatesDir, ensureDir } from '../util.mjs';
+import { acquireRepoLock, readFileSafe, isGitRepo, gitIdentityArgs, gitRun, findSensitiveChanges, releaseRepoLock, stamp, nowIso, templatesDir, ensureDir } from '../util.mjs';
 import { writeFile, open as fsOpen, stat as fsStat, unlink as fsUnlink } from 'node:fs/promises';
 import { join, resolve, sep } from 'node:path';
 import { execFile } from 'node:child_process';
@@ -219,24 +219,27 @@ const lockPathOf = (root, task) => join(root, '.relay', 'claims', `${task}.lock`
 const acquireClaimLock = async (root, task, model, ttlMin = CLAIM_TTL_MIN) => {
   await ensureDir(join(root, '.relay', 'claims'));
   const p = lockPathOf(root, task);
-  try {
-    const h = await fsOpen(p, 'wx');
-    await h.writeFile(`${model}\n${nowIso()}\n`, 'utf8');
-    await h.close();
-    return { ok: true, created: true };
-  } catch (e) {
-    if (!e || e.code !== 'EEXIST') throw e;
-    let holder = '';
-    let ageMin = Infinity;
+  for (;;) {
     try {
-      const st = await fsStat(p);
-      ageMin = (Date.now() - st.mtimeMs) / 60000;
-      holder = String(await readFileSafe(p, '')).split('\n')[0].trim() || '(未知持有者)';
-    } catch { /* 锁文件不可读按到期处理 */ }
-    if (holder === model) return { ok: true, created: false };
-    if (ageMin < ttlMin) return { ok: false, holder, ageMin, ttlMin };
-    await writeFile(p, `${model}\n${nowIso()}\n(接管自 ${holder},其锁已超过 TTL ${ttlMin} 分钟)\n`, 'utf8');
-    return { ok: true, created: false, tookOver: holder };
+      const h = await fsOpen(p, 'wx');
+      await h.writeFile(`${model}\n${nowIso()}\n`, 'utf8');
+      await h.close();
+      return { ok: true, created: true };
+    } catch (e) {
+      if (!e || e.code !== 'EEXIST') throw e;
+      let holder = '';
+      let ageMin = Infinity;
+      try {
+        const st = await fsStat(p);
+        ageMin = (Date.now() - st.mtimeMs) / 60000;
+        holder = String(await readFileSafe(p, '')).split('\n')[0].trim() || '(未知持有者)';
+      } catch { /* 锁文件刚好消失 → 重试抢位 */ continue; }
+      if (holder === model) return { ok: true, created: false };
+      if (ageMin < ttlMin) return { ok: false, holder, ageMin, ttlMin };
+      // TTL 接管:unlink + wx 重新竞争(原子落位;并发接管时只有一个 wx 成功,败者读到新持有者)
+      try { await fsUnlink(p); } catch { /* 已被他人接管 */ }
+      // 立即重试 wx:成功=接管;EEXIST=读到的已是别人 → 走正常判定
+    }
   }
 };
 const releaseClaimLock = async (root, task) => {
@@ -320,12 +323,22 @@ export const relaySessionStart = async (args = {}) => {
       if (!m) continue;
       count++;
       let summary = '';
-      for (let j = i + 1; j < Math.min(i + 6, lines.length); j++) {
+      let neg = '';
+      let handoff = '';
+      for (let j = i + 1; j < Math.min(i + 8, lines.length); j++) {
         if (/^## /.test(lines[j])) break;
         const sm = lines[j].match(/^- 摘要:\s*(.*)$/);
-        if (sm) { summary = sm[1]; break; }
+        if (sm && !summary) summary = sm[1];
+        // 负结果/留给下一个是 LOG 的存在理由(认知审计 H-E):接班者大概率不重开 LOG.md,
+        // 至少把最新一条带进简报,防止重踩坑
+        const ng = lines[j].match(/^- 负结果:\s*(.*)$/);
+        if (ng && !neg) neg = ng[1];
+        const hf = lines[j].match(/^- 留给下一个:\s*(.*)$/);
+        if (hf && !handoff) handoff = hf[1];
       }
       out.push(`- ${m[1]} | ${m[2]} | ${m[3]}${summary ? ` — ${summary}` : ''}`);
+      if (neg) out.push(`  ⚠ 负结果: ${neg.slice(0, 120)}`);
+      if (handoff) out.push(`  → 留给下一个: ${handoff.slice(0, 120)}`);
     }
     return out;
   };
@@ -353,18 +366,40 @@ export const relaySessionStart = async (args = {}) => {
   // verify 快检(fast:跳过 R5/R6/R8)
   const checks = await runChecks(root, { full: false });
   const errors = checks.filter((c) => c.result === 'ERROR');
-  const briefChecks = checks.map((c) => {
-    const d = c.result === 'PASS' ? '' : ` — ${c.detail}${c.fix ? `。${c.fix}` : ''}`;
-    return `- \`${c.id}\` ${c.result}${d}`;
-  }).join('\n');
+  // SKIP 项折叠为单行(认知审计:R5/R6/R8 三条重复提示占简报中部注意力,信息增益≈0)
+  const skips = checks.filter((c) => c.result === 'SKIP');
+  const briefChecks = [
+    ...checks.filter((c) => c.result !== 'SKIP').map((c) => {
+      const d = c.result === 'PASS' ? '' : ` — ${c.detail}${c.fix ? `。${c.fix}` : ''}`;
+      return `- \`${c.id}\` ${c.result}${d}`;
+    }),
+    ...(skips.length ? [`- \`${skips.map((s) => s.id).join('/')}\` SKIP(出场时全量执行)`].map((l) => l) : []),
+  ].join('\n');
 
   // 建议第一动作
   let firstAction;
   if (errors.length) {
     firstAction = ['检查存在 ERROR,先修复再开工:', ...errors.map((e) => `- ${e.id}:${e.fix}`)].join('\n');
+  } else if (inProgress.length) {
+    // 崩溃恢复优先(认知审计 H-E):进行中任务 + 崩溃的持有者 = 孤儿任务,简报不得静默绕过
+    const t = inProgress[0];
+    const metaTime = (t.meta || '').match(/\d{4}-\d{2}-\d{2} \d{2}:\d{2}/);
+    const heldHours = metaTime ? ((Date.now() - new Date(metaTime[0].replace(' ', 'T') + ':00').getTime()) / 3600000) : null;
+    const stale = heldHours != null && !Number.isNaN(heldHours) && heldHours >= 4;
+    firstAction = [
+      `⚠ 存在进行中任务 **${t.id} ${t.title}**(${t.meta || '认领信息缺失'})——这是上一棒留下的现场,先处理它再谈新任务:`,
+      `- 若持有者还活着(并行会话):不要动,选待办区其他任务;`,
+      stale
+        ? `- 认领已超过 TTL(4 小时):持有者大概率已崩溃,**可直接 relay_claim 接管**(自动覆盖过期锁,认领时注明接管):`
+        : `- 认领未超 TTL:联系/等待持有者;确信崩溃需等满 4 小时后 relay_claim 接管;`,
+      '',
+      '```json',
+      `{ "root": "${root}", "task": "${t.id}", "model": "<你的模型标识>" }`,
+      '```',
+    ].join('\n');
   } else if (firstTodo) {
     firstAction = [
-      `认领待办区第一条 **${firstTodo.id} ${firstTodo.title}** —— 调用 relay_claim:`,
+      `认领待办区第一条 **${firstTodo.id} ${firstTodo.title}** —— 调用 relay_claim(注意把 model 换成你的真实模型标识,占位符会被拒收):`,
       '',
       '```json',
       `{ "root": "${root}", "task": "${firstTodo.id}", "model": "<你的模型标识>" }`,
@@ -372,9 +407,6 @@ export const relaySessionStart = async (args = {}) => {
       '',
       `认领后该任务标记为 \`[~]\` 并附 (model, 时间);并行会话中其他人不得再动此任务。完成判定:见任务行「验收:」→ ${firstTodo.acceptance || '(未写验收行,认领前先补)'}`,
     ].join('\n');
-  } else if (inProgress.length) {
-    const t = inProgress[0];
-    firstAction = `待办区为空,但存在进行中任务 **${t.id} ${t.title}**(${t.meta || '认领信息缺失'})。先确认其是否被并行会话持有,再继续推进;完成即 relay_session_end {done_task:"${t.id}"}。`;
   } else {
     firstAction = '待办区与进行中区均空:与人类确认下一步,在 TASKS 待办区定义新任务(必须带「验收:」行)后再 relay_claim。';
   }
@@ -433,6 +465,16 @@ export const relayClaim = async (args = {}) => {
   if (!task || !model) {
     return fail('`task` 与 `model` 均必填:task 形如 "T004",model 为你的模型标识(认领即署名)。');
   }
+  // 占位符拒收(认知审计):简报里的示例参数被原样照抄会静默成功,署名被污染
+  if (/[<>]/.test(model) || /你的模型|your model/i.test(model)) {
+    return fail(`model="${model}" 是简报里的占位示例,不能直接使用。`, ['', '修复: 把 model 替换为你的真实模型标识(如 "claude"、"gpt-5.2"、"glm-4.7")再认领。']);
+  }
+  // 仓库级写锁:TASKS 的读改写必须独占,否则并发 claim 互相吞更新(H-C)
+  const claimLock = await acquireRepoLock(root, `claim:${model}`);
+  if (!claimLock.ok) {
+    return fail(`另一会话(**${claimLock.holder}**)正在本仓库出场/认领,请稍后重试(锁持有约 ${Math.round(claimLock.ageMs / 1000)}s;超 2 分钟自动可接管)。`);
+  }
+  try {
   const lines = await readLines(join(root, 'TASKS.md'));
   if (lines == null) {
     return fail('未找到 TASKS.md:该仓库尚未接入接力协议。', ['', '修复: 先 relay_init(0→1)或 relay_onboard(老项目)。']);
@@ -480,6 +522,9 @@ export const relayClaim = async (args = {}) => {
     ].join('\n') }],
     isError: false,
   };
+  } finally {
+    await releaseRepoLock(root);
+  }
 };
 
 // ============================================================
@@ -545,6 +590,17 @@ export const relaySessionEnd = async (args = {}) => {
   }
   const redLights = await redLightCheck(root, next);
 
+  // 2.6 仓库级写锁(H-C):TASKS/LOG 的读改写从此处到提交完成必须独占——
+  // 两个会话并发出场时,败者的更新曾基于旧快照覆写胜者(实测丢更新);持锁超 2 分钟视为崩溃残留可接管
+  const exitLock = await acquireRepoLock(root, `session-end:${model}`);
+  if (!exitLock.ok) {
+    out.push('## 并发出场:被拒 — 未提交', '',
+      `另一会话(**${exitLock.holder}**)正在本仓库出场/认领(锁已持有约 ${Math.round(exitLock.ageMs / 1000)}s)。`, '',
+      '修复:等待对方出场完成后重跑 relay_session_end;若确认对方已崩溃,锁超过 2 分钟会自动可接管。');
+    return { content: [{ type: 'text', text: out.join('\n') }], isError: true };
+  }
+
+  try {
   // 受保护路径检测:取本会话改动(在更新 TASKS/LOG 之前的工作区状态)
   const isRepo = isGitRepo(root);
   let statusLines = [];
@@ -562,32 +618,46 @@ export const relaySessionEnd = async (args = {}) => {
   if (tLines == null) { tLines = await baseTemplateLines('TASKS.md'); changes.push('TASKS.md 不存在,已按模板重建'); }
   const date = stamp().slice(0, 10);
 
+  let alreadyDone = false;
   if (doneTask) {
     const idx = findTaskIdx(tLines, doneTask);
     if (idx < 0) {
       changes.push(`警告: TASKS.md 未找到任务行 ${doneTask},未能标 [x](请核对任务号)`);
     } else {
       const p = parseTaskLine(tLines[idx]);
-      const range = taskBlockRange(tLines, idx);
-      // 完成戳不记 sha:单提交内"盖戳+提交"自指无解(amend 会再换 sha,记录值变悬挂对象)。
-      // 考古路径:完成动作的提交消息含「T### 完成」,git log --grep 反查即得。
-      const doneLines = [`- [x] ${p.id} ${p.title}  (${date})`];
-      if (blocked) doneLines.push(`  阻塞: ${blocked}`);
-      doneLines.push(...tLines.slice(idx + 1, range.end)); // 保留「验收:」等续行
-      tLines.splice(idx, range.end - idx);
-      insertIntoSection(tLines, '已完成', doneLines);
-      changes.push(`TASKS.md: ${doneTask} → \`[x]\` (${date}),挪入「已完成」区${blocked ? '〔附阻塞说明〕' : ''}`);
+      if (p.status === 'x') {
+        // 幂等(B5):重跑同一出场不重复盖戳
+        alreadyDone = true;
+        changes.push(`${doneTask} 已是完成态,跳过重复盖戳`);
+      } else {
+        const range = taskBlockRange(tLines, idx);
+        // 完成戳不记 sha:单提交内"盖戳+提交"自指无解(amend 会再换 sha,记录值变悬挂对象)。
+        // 考古路径:完成动作的提交消息含「T### 完成」,git log --grep 反查即得。
+        const doneLines = [`- [x] ${p.id} ${p.title}  (${date})`];
+        if (blocked) doneLines.push(`  阻塞: ${blocked}`);
+        doneLines.push(...tLines.slice(idx + 1, range.end)); // 保留「验收:」等续行
+        tLines.splice(idx, range.end - idx);
+        insertIntoSection(tLines, '已完成', doneLines);
+        changes.push(`TASKS.md: ${doneTask} → \`[x]\` (${date}),挪入「已完成」区${blocked ? '〔附阻塞说明〕' : ''}`);
+      }
     }
   } else if (blocked) {
     changes.push('警告: 提供了 blocked 但无 done_task,阻塞说明改写入 LOG(留给下一个)');
   }
 
   if (next) {
-    const id = nextTaskId(tLines);
-    const nextLines = [`- [ ] ${id} ${String(next.title).trim()}`, `  验收: ${String(next.acceptance).trim()}`];
-    if (next.notes && String(next.notes).trim()) nextLines.push(`  备注: ${String(next.notes).trim()}`);
-    insertIntoSection(tLines, '待办', nextLines);
-    changes.push(`TASKS.md: 待办区顶部插入 \`${id} ${String(next.title).trim()}\`(含验收行)`);
+    // 幂等(B5):待办区已有同标题任务 → 不重复插入
+    const dup = tLines.findIndex((l) => { const m = l.match(TASK_LINE_RE); return m && m[1] === ' ' && m[3].trim() === String(next.title).trim(); });
+    if (dup >= 0) {
+      const existId = tLines[dup].match(TASK_LINE_RE)[2];
+      changes.push(`待办区已存在同标题任务 ${existId}(跳过重复插入)`);
+    } else {
+      const id = nextTaskId(tLines);
+      const nextLines = [`- [ ] ${id} ${String(next.title).trim()}`, `  验收: ${String(next.acceptance).trim()}`];
+      if (next.notes && String(next.notes).trim()) nextLines.push(`  备注: ${String(next.notes).trim()}`);
+      insertIntoSection(tLines, '待办', nextLines);
+      changes.push(`TASKS.md: 待办区顶部插入 \`${id} ${String(next.title).trim()}\`(含验收行)`);
+    }
   }
   await writeFile(tasksPath, tidy(tLines));
 
@@ -610,10 +680,17 @@ export const relaySessionEnd = async (args = {}) => {
   if (blocked && !doneTask) entry.push(`- 留给下一个: 当前受阻:${blocked}`);
   let titleIdx = lLines.findIndex((l) => /^# /.test(l));
   if (titleIdx < 0) { lLines.unshift('# 会话日志(最新在上)'); titleIdx = 0; }
-  if (lLines[titleIdx + 1] === '') lLines.splice(titleIdx + 2, 0, ...entry, '');
-  else lLines.splice(titleIdx + 1, 0, '', ...entry, '');
-  await writeFile(logPath, tidy(lLines));
-  changes.push(`LOG.md: 顶部新增条目「${entry[0]}」`);
+  // 幂等(B5):同一会话重复出场(同 model + 同「T### 完成」)不重复记日志;
+  // 查重键扫全表——最新条目可能是其他会话的
+  const dupLog = alreadyDone && parseLogEntries(lLines.join('\n')).some((e) => e.model === model && e.task === taskField);
+  if (!dupLog) {
+    if (lLines[titleIdx + 1] === '') lLines.splice(titleIdx + 2, 0, ...entry, '');
+    else lLines.splice(titleIdx + 1, 0, '', ...entry, '');
+    await writeFile(logPath, tidy(lLines));
+    changes.push(`LOG.md: 顶部新增条目「${entry[0]}」`);
+  } else {
+    changes.push('LOG.md: 最新条目即本次出场(幂等跳过,不重复记录)');
+  }
 
   // 5/6. 提交分支:护栏 → 不提交;否则 add -A + commit;失败 → 降级
   // 提交消息携带「T### 完成」token:TASKS 完成行不记 sha(自指无解),考古靠 git log --grep
@@ -707,6 +784,9 @@ export const relaySessionEnd = async (args = {}) => {
   }
   out.push('', `- 出场时间: ${stamp()}(ISO ${nowIso()})`);
   return { content: [{ type: 'text', text: out.join('\n') }], isError: false };
+  } finally {
+    await releaseRepoLock(root);
+  }
 };
 
 // 取刚插入的下一任务号(待办区顶部第一条 [ ] 行)

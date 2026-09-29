@@ -170,7 +170,7 @@ const writeTemplatedFile = async ({ tdir, rel, target, root, vars, force, execut
 const bullet = (items) => (items.length ? items.map((f) => `- \`${f}\``) : ['- (无)']);
 
 // .gitignore 基线(H3):密钥/私钥/认领锁/杂物不得进 git;已存在则只补缺失行,绝不删改用户条目
-const GITIGNORE_BASELINE = ['.env', '.env.*', '*.key', '*.pem', 'node_modules/', '.DS_Store', '.relay/claims/', 'coverage/', '*.log'];
+const GITIGNORE_BASELINE = ['.env', '.env.*', '*.key', '*.pem', 'node_modules/', '.DS_Store', '.relay/claims/', '.relay/relay.lock', 'coverage/', '*.log'];
 const ensureGitignore = async (root) => {
   const p = join(root, '.gitignore');
   const cur = await readFileSafe(p, null);

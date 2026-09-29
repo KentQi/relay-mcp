@@ -38,7 +38,7 @@ relay 的答案:仓库内核心五件(START / SPEC / DECISIONS / TASKS / LOG)+ `
 
 preset 可选:`node`(默认,交付即 `npm test` 全绿)/ `minimal`(仅接力层,不建代码骨架);自定义 preset = 在 `templates/presets/` 下放一个目录即可。
 
-辅助工具:`relay_sync`(重投影入口文件,报告漂移;AGENTS.md 的 `user-rules` 保留区原样携带)、`relay_claim`(并行认领,原子锁 `.relay/claims/T###.lock`,TTL 4 小时,到期可接管)、`relay_verify`(随时机检)、`relay_rules`(规则 ID 表)。
+辅助工具:`relay_sync`(重投影入口文件,报告漂移;AGENTS.md 的 `user-rules` 保留区原样携带)、`relay_claim`(并行认领,原子锁 `.relay/claims/T###.lock`,TTL 4 小时,到期可接管)+ 仓库级出场锁 `.relay/relay.lock`(TASKS/LOG 写串行化,双进程并发实测零丢失)与幂等出场(重复调用不重复记账)、`relay_verify`(随时机检)、`relay_rules`(规则 ID 表)。
 
 安全机制一览:密钥守卫(工作区出现 `.env*`/`*secret*`/`*credential*`/`*.key`/`*.pem`/`id_rsa` → 不自动提交,转人工批准;init/onboard 自动补 `.gitignore` 基线);受保护路径(`verify`/`.relay/**`/`tests/**`/测试文件改动不自动提交——注意该护栏只看未提交 diff,模型中途自行 commit 可绕过,最终防线在 CI 与人工抽查)。`verify` 脚本可移植:换机后 `export RELAY_HOME=/path/to/relay-mcp` 即可。
 

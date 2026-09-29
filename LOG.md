@@ -1,5 +1,10 @@
 # 会话日志(最新在上)
 
+## 2026-09-29 15:36 | model=zcode-glm | task=T010 完成
+- 摘要: T010 一致性加固:仓库级出场锁 .relay/relay.lock(TASKS/LOG 写全面串行化,双进程并发回归零丢失);幂等出场(重复调用不重复盖戳/记日志/插 next);TTL 接管改 unlink+wx 原子竞争;简报带出负结果与交接提示、崩溃恢复优先;认领占位 model 拒收;gitignore 基线与护栏豁免 relay.lock;START 措辞修正(曾触发 R4——宪法连模板措辞都管)
+- 负结果: R4 时变词检查对模板措辞同样执法:START.md 写「进行中」三字即红——入口/引导文件措辞必须 timeless,连区名都得避开(改称已被认领的任务)
+- 留给下一个: 审计范围另含 5 视角报告中的中低危残留(模板占位符注入/symlink/root 校验/manifest 版本路径)
+
 ## 2026-09-29 15:14 | model=zcode-glm | task=T009 完成
 - 摘要: 第三方审计 P0 修复:①验收门路径安检——test: 路径不得以 - 开头(击穿 CLI 选项注入/预载攻击)、须在项目目录内、仅限 js/ts 测试文件,红灯核验同规格;②密钥安检从 session_end 抽到 util 共享,init/onboard/restructure 三个自动提交点全覆盖;③CI 加 permissions: contents: read 最小权限;④CONTRIBUTING 死链修复(npm run verify、CONTRACT.md 位置);⑤SECURITY 声明同步;⑥冒烟新增 7 条安检回归(89/89)
 - 负结果: BSD sed 在 filter-branch 地址语法会报错(已知);冒烟回归设计时注意:嵌套的 -- 开头文件会被 node 当普通路径(非选项注入),真注入向量是整段参数以 - 开头且攻击者可修宪绕 R2

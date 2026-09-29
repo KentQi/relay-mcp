@@ -276,6 +276,50 @@ try {
   const commitsAfter = gitSafe(tmpB, 'rev-list', '--count', 'HEAD').stdout.trim();
   ok(!roSec.isError && roSec.text.includes('密钥'), 'H-B: onboard 发现密钥→拒绝自动入库(不置错,转人工)', roSec.text.slice(0, 200));
   ok(commitsBefore === commitsAfter, `H-B: 未产生新提交(${commitsBefore} → ${commitsAfter})`);
+
+  // ---------- 场景 D: 并发写串行 + 幂等(T010,真双进程) ----------
+  console.log('\n== 场景 D: 并发与幂等(T010) ==');
+  const tmpC = mkdtempSync(path.join(tmpdir(), 'relay-c-'));
+  const runCli = (cliArgs) => new Promise((resolveP) => {
+    const p = spawn('node', [path.join(RELAY, 'src/cli.mjs'), ...cliArgs], { encoding: 'utf8' });
+    let out = '';
+    p.stdout.on('data', (d) => { out += d; });
+    p.stderr.on('data', (d) => { out += d; });
+    p.on('close', (code) => resolveP({ code, out }));
+  });
+  const jc = (o) => ['--json', JSON.stringify(o)];
+  await tool('relay_init', { root: tmpC, name: '并发演示' });
+  // D1: 并发 claim 不同任务 → 仓库锁串行化,两条认领都存活
+  const [c1, c2] = await Promise.all([
+    runCli(['relay_claim', '--root', tmpC, ...jc({ task: 'T003', model: 'model-A' })]),
+    runCli(['relay_claim', '--root', tmpC, ...jc({ task: 'T004', model: 'model-B' })]),
+  ]);
+  ok(c1.code === 0 && c2.code === 0, 'D1: 并发 claim 不同任务双双成功', `${c1.code}/${c2.code} ${c1.out.slice(0, 150)}`);
+  const tkC = readFileSync(path.join(tmpC, 'TASKS.md'), 'utf8');
+  ok(/\[~\] T003 .*model-A/.test(tkC) && /\[~\] T004 .*model-B/.test(tkC), 'D1: 两条认领都写入 TASKS(无丢失更新)');
+  // D2: 并发 session_end 不同任务 → 排队串行,双完成、双日志
+  const [e1, e2] = await Promise.all([
+    runCli(['relay_session_end', '--root', tmpC, ...jc({ model: 'model-A', summary: '甲会话完成T003', done_task: 'T003' })]),
+    runCli(['relay_session_end', '--root', tmpC, ...jc({ model: 'model-B', summary: '乙会话完成T004', done_task: 'T004' })]),
+  ]);
+  ok(e1.code === 0 && e2.code === 0, 'D2: 并发出场双双成功(排队串行)', `${e1.code}/${e2.code}`);
+  const tkC2 = readFileSync(path.join(tmpC, 'TASKS.md'), 'utf8');
+  ok(/\[x\] T003/.test(tkC2) && /\[x\] T004/.test(tkC2), 'D2: 两个完成戳都落账(无回退吞没)');
+  const lgC = readFileSync(path.join(tmpC, 'LOG.md'), 'utf8');
+  ok(lgC.includes('甲会话完成T003') && lgC.includes('乙会话完成T004'), 'D2: 两条 LOG 条目都在(无吞没)');
+  // D3: 幂等——同一出场重跑不重复记账
+  const re1 = await runCli(['relay_session_end', '--root', tmpC, ...jc({ model: 'model-B', summary: '重跑出场', done_task: 'T004', next: { title: '幂等探针任务', acceptance: 'npm test 通过' } })]);
+  const re2 = await runCli(['relay_session_end', '--root', tmpC, ...jc({ model: 'model-B', summary: '重跑出场', done_task: 'T004', next: { title: '幂等探针任务', acceptance: 'npm test 通过' } })]);
+  ok(re1.code === 0 && re2.code === 0, 'D3: 重复出场不报错(幂等)', `${re1.code}/${re2.code}`);
+  const tkC3 = readFileSync(path.join(tmpC, 'TASKS.md'), 'utf8');
+  const lgC2 = readFileSync(path.join(tmpC, 'LOG.md'), 'utf8');
+  ok((tkC3.match(/幂等探针任务/g) || []).length === 1, 'D3: next 不重复插入', String((tkC3.match(/幂等探针任务/g) || []).length));
+  ok((lgC2.match(/model=model-B \| task=T004 完成/g) || []).length === 1, 'D3: LOG 不重复记录(同会话同任务)', String((lgC2.match(/model=model-B \| task=T004 完成/g) || []).length));
+  // D4: 占位 model 拒收
+  const ph = await tool('relay_claim', { root: tmpC, task: 'T003', model: '<你的模型标识>' });
+  ok(ph.isError && ph.text.includes('占位'), 'D4: 占位 model 被拒收(防署名污染)');
+  rmSync(tmpC, { recursive: true, force: true });
+
   console.log('\n== CLI ==');
   const cli = spawnSync2('node', [path.join(RELAY, 'src/cli.mjs'), 'relay_rules']);
   ok(cli.status === 0 && cli.stdout.includes('R9'), 'cli relay_rules 可用');
@@ -284,6 +328,7 @@ try {
   console.log(`\n========== 冒烟结果: ${pass} 通过 / ${fail} 失败 ==========`);
   proc.kill();
   rmSync(tmpA, { recursive: true, force: true }); rmSync(tmpB, { recursive: true, force: true });
+  if (typeof tmpC !== 'undefined') rmSync(tmpC, { recursive: true, force: true });
   process.exit(fail ? 1 : 0);
 }
 function require0(p) { return JSON.parse(readFileSync(p, 'utf8')); }

@@ -159,6 +159,8 @@ export const startServer = async ({ onInit, onMethod }) => {
 
 ## 安全与降级(全体遵守)
 
+- 仓库级写锁:`.relay/relay.lock`(O_EXCL,持锁超 2 分钟视为崩溃残留可接管)序列化一切 TASKS/LOG 读改写;出场/认领/重构/重投影四个写入口均先取锁。
+
 - 非破坏:onboard 对已存在文件一律 `backupFile` 后再写,永不删除用户文件;init 若 START.md 已存在且无 force → 拒绝并提示用 relay_onboard
 - git 不存在或 commit 失败(无身份配置等)→ 降级:文件照常更新,报告"提交跳过+原因",isError 不置位
 - 所有工具输出:简洁 markdown,中文标签;路径用相对 root 的写法

@@ -5,6 +5,16 @@
 
 ## [Unreleased]
 
+### Added
+- 仓库级写锁 `.relay/relay.lock`:TASKS/LOG 的读改写跨 session_end / claim / restructure / sync 全面串行化,并发双进程回归断言零丢失
+- 维护会话语义:`relay_session_end` 传 `maintenance:true` 记 `task=维护`,不计入 R7 发散窗口
+- 入场简报带出最新一条 LOG 的负结果与交接提示;存在进行中任务时崩溃恢复优先(含 TTL 接管指引)
+
+### Fixed
+- 幂等出场:同一出场重跑不再重复盖戳/记日志/插入 next
+- 认领锁 TTL 接管改为 unlink+wx 原子竞争(并发接管不再双成功)
+- 认领 model 占位符(`<你的模型标识>`)拒收,防署名污染
+
 ## [1.0.0] - 2026-09-29
 
 首个公开发布版本。

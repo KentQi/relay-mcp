@@ -1,6 +1,6 @@
 // relay-mcp — src/util.mjs (W2)
 // 零依赖公共助手:fs / git / 时间戳。仅使用 node: 内置模块。
-import { readFile, writeFile, mkdir, rename, stat } from 'node:fs/promises';
+import { readFile, writeFile, mkdir, rename, stat, unlink, open as fsOpen2 } from 'node:fs/promises';
 import { realpathSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -145,4 +145,43 @@ export const findSensitiveChanges = (statusLines) => {
     }
   }
   return [...hits.entries()].map(([path, why]) => ({ path, why })).sort((a, b) => a.path.localeCompare(b.path));
+};
+
+// —— 仓库级写锁(H-C):序列化一切 TASKS/LOG 的读改写(session_end / claim / restructure / sync)——
+// 单任务认领锁不覆盖 TASKS.md 本体;两个会话并发读改写会互相吞更新(实测复现过)。
+// O_EXCL 原子创建;持锁超 STALE_REPO_LOCK_MS 视为崩溃残留,unlink+wx 原子接管。
+export const REPO_LOCK_REL = '.relay/relay.lock';
+export const STALE_REPO_LOCK_MS = 120_000;
+
+export const acquireRepoLock = async (root, holder, { waitMs = 15_000 } = {}) => {
+  await ensureDir(path.join(root, '.relay'));
+  const p = path.join(root, REPO_LOCK_REL);
+  const deadline = Date.now() + waitMs;
+  for (;;) {
+    try {
+      const h = await fsOpen2(p, 'wx');
+      await h.writeFile(`${holder}\n${new Date().toISOString()}\n`, 'utf8');
+      await h.close();
+      return { ok: true };
+    } catch (e) {
+      if (!e || e.code !== 'EEXIST') throw e;
+      let ageMs = Infinity;
+      let lockHolder = '?';
+      try {
+        const st = await stat(p);
+        ageMs = Date.now() - st.mtimeMs;
+        lockHolder = String(await readFile(p, 'utf8')).split('\n')[0].trim() || '?';
+      } catch { /* 锁刚好消失 → 立即重试抢位 */ }
+      if (ageMs > STALE_REPO_LOCK_MS) {
+        try { await unlink(p); } catch { /* 别的等待者已接管 */ }
+        continue;
+      }
+      if (Date.now() >= deadline) return { ok: false, holder: lockHolder, ageMs };
+      await new Promise((r) => setTimeout(r, 200));
+    }
+  }
+};
+
+export const releaseRepoLock = async (root) => {
+  try { await unlink(path.join(root, REPO_LOCK_REL)); } catch { /* 锁不在场 */ }
 };
