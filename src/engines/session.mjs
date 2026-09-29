@@ -596,8 +596,11 @@ export const relaySessionEnd = async (args = {}) => {
   const logPath = join(root, 'LOG.md');
   let lLines = await readLines(logPath);
   if (lLines == null) { lLines = await baseTemplateLines('LOG.md'); changes.push('LOG.md 不存在,已按模板重建'); }
-  // 注意:未完成时的 task 字段不得包含「完成」子串,否则会干扰 R7/R9 的子串判定
-  const taskField = doneTask ? `${doneTask} 完成` : '无';
+  // 注意:未完成时的 task 字段不得包含「完成」子串,否则会干扰 R7/R9 的判定
+  // 维护会话(onboard/开源化/引擎迁移等基础设施工作)不对应 TASKS 任务:
+  // task=维护 且不计入 R7 发散窗口(否则探测类会话挂 task=无 会被误判为停滞)
+  const maintenance = args.maintenance === true;
+  const taskField = doneTask ? `${doneTask} 完成` : (maintenance ? '维护' : '无');
   const summaryFlat = summary.split('\n').map((s) => s.trim()).filter(Boolean).join('; ');
   const entry = [
     `## ${stamp()} | model=${model} | task=${taskField}`,

@@ -252,12 +252,18 @@ const checkR7 = async (root) => {
   if (t == null) return skip('R7', 'LOG.md 不存在', '先 relay_init/onboard 建立 LOG.md;出场会写入首条日志');
   const entries = parseLogEntries(t);
   if (!entries.length) return skip('R7', 'LOG.md 无条目', '首个会话出场后自动产生条目');
-  const recent = entries.slice(0, 3);
+  // 维护条目(onboard/开源化/引擎迁移等,task=维护)不计入发散窗口——它们本来就不对应任务
+  const relevant = entries.filter((e) => !/^维护/.test(String(e.task || '').trim()));
+  const maintenanceCount = entries.length - relevant.length;
+  if (!relevant.length) {
+    return pass('R7', `最近 ${maintenanceCount} 条均为维护会话,不计入发散窗口`);
+  }
+  const recent = relevant.slice(0, 3);
   const noDone = recent.filter((e) => !isDoneTaskField(e.task));
   if (recent.length === 3 && noDone.length === 3) {
-    return bad('R7', 'ERROR', `发散报警:最近 3 条会话 task 均非「T### 完成」(${recent.map((e) => e.task).join(' / ')})`, '停机,升级人类仲裁:对照 SPEC 验收标准裁剪/拆小任务粒度,仲裁前不得继续认领新任务');
+    return bad('R7', 'ERROR', `发散报警:最近 3 条任务会话 task 均非「T### 完成」(${recent.map((e) => e.task).join(' / ')})`, '停机,升级人类仲裁:对照 SPEC 验收标准裁剪/拆小任务粒度,仲裁前不得继续认领新任务');
   }
-  return pass('R7', `最近 ${recent.length} 条中 ${recent.length - noDone.length} 条为「T### 完成」,无发散`);
+  return pass('R7', `最近 ${recent.length} 条任务会话中 ${recent.length - noDone.length} 条为「T### 完成」${maintenanceCount ? `(另排除 ${maintenanceCount} 条维护条目)` : ''},无发散`);
 };
 
 // —— R8 风格归一化(full only;不强加工具链)——

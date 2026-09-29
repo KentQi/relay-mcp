@@ -14,6 +14,9 @@
 (空——认领后由 relay_claim 移入;认领锁在 .relay/claims/,TTL 4 小时,崩溃会话的认领到期自动可接管)
 
 ## 待办
+- [ ] T008 发布 v1.0.0 tag 与 Release(重打到含 R7 修复的 HEAD)
+  验收: git tag v1.0.0 指向当前 HEAD 并推送;GitHub Releases 出现 v1.0.0;CI 三矩阵全绿
+  备注: 此前 tag 打在 R7 误报的提交上,需删除重建
 - [ ] T007 发布 v1.0.0 tag(CHANGELOG 已声明,打点后推 tag 并建 Release)
   验收: git tag -a v1.0.0 清洗后的 HEAD 并推送;GitHub 出现 Releases/v1.0.0
   备注: 审计 P0 项;零 fork 窗口内与历史清洗同批完成

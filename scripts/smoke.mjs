@@ -223,6 +223,16 @@ try {
   const rv4 = await tool('relay_verify', { root: tmpA });
   ok(rv4.isError && rv4.text.includes('R7'), 'M1: 三连「未完成」正确触发 R7 发散报警');
   ok(!rv4.text.includes('声明 T009'), 'M1: R9 不再误判「未完成」为完成');
+  // 维护条目不计入发散窗口:同窗口的三条 task=维护 → R7 恢复 PASS
+  const maintLog = savedLog.split('\n');
+  const tiM = maintLog.findIndex((l) => l.startsWith('# '));
+  maintLog.splice(tiM + 1, 0, '',
+    '## 2026-09-28 10:00 | model=x | task=维护', '- 摘要: 基础设施',
+    '## 2026-09-28 11:00 | model=x | task=维护', '- 摘要: 基础设施',
+    '## 2026-09-28 12:00 | model=x | task=维护', '- 摘要: 基础设施', '');
+  writeFileSync(logP, maintLog.join('\n'));
+  const rv7 = await tool('relay_verify', { root: tmpA });
+  ok(!rv7.isError && !rv7.text.includes('| R7 | ERROR'), '维护会话不计入 R7 发散窗口');
   writeFileSync(logP, savedLog);
 
   // ---------- CLI 逃生口 ----------
