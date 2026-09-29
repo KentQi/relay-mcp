@@ -1,5 +1,8 @@
 # 会话日志(最新在上)
 
+## 2026-09-29 14:06 | model=zcode-glm | task=无
+- 摘要: 引擎迁移 <引擎目录> → <引擎目录>(惯例:活跃开发的自托管引擎放 dev 目录);同步 verify 兜底路径与 manifest.relayHome;ZCode 注册路径已同步
+
 ## 2026-09-29 12:32 | model=zcode-glm | task=无
 - 摘要: 统一开源作者身份:kent <kirroyu@126.com>(LICENSE/package.json author+license 字段/SECURITY 与 CoC 联系邮箱/README 版权行);GitHub 句柄 KentQi 仅保留在仓库链接与 badge
 - 留给下一个: 零 fork 窗口期内一次性完成;重写后旧 commit sha 全部变化
