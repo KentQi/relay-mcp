@@ -1,0 +1,22 @@
+# relay-mcp 自身的 CI:结构检查(用自身引擎跑自身)+ 端到端冒烟
+# 版本矩阵对齐真实开发环境——单一旧版本会掩盖 node --test 之类的跨版本行为差异(三轮审计 N1 教训)
+name: ci
+on:
+  push:
+  pull_request:
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        node-version: [22, 24, 26]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node-version }}
+      - name: relay verify (structure, self-hosted engine)
+        run: node src/cli.mjs relay_verify --root .
+      - name: smoke tests (end-to-end, 81 assertions)
+        run: npm test

@@ -1,5 +1,9 @@
 # 会话日志(最新在上)
 
+## 2026-09-29 12:07 | model=zcode-glm | task=T003 完成
+- 摘要: 挂自身 CI:双步验证(自身引擎结构检查 + npm test 冒烟),node 22/24/26 三版本矩阵,对应 TASKS T003 的本地部分
+- 留给下一个: 已本地预演两步全绿;badge 待 CI 绿后补进 README
+
 ## 2026-09-29 11:44 | model=zcode-glm | task=无
 - 摘要: 开源化:MIT LICENSE、CONTRIBUTING/CODE_OF_CONDUCT/SECURITY/CHANGELOG、.github 模板、双语 README;设计稿与契约归档 docs-design/;白名单修宪纳入社区文件
 - 负结果: 第一次 verify 被 R2 拦截(新增顶层文件未修宪)——修宪后通过,协议照预期工作
