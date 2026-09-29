@@ -13,7 +13,7 @@
 import { basename, dirname, join, relative, resolve } from 'node:path';
 import { access, chmod, readdir, writeFile } from 'node:fs/promises';
 import {
-  backupFile, ensureDir, gitRun, isGitRepo, nowIso,
+  backupFile, ensureDir, gitIdentityArgs, gitRun, isGitRepo, nowIso,
   readFileSafe, stamp, templatesDir, writeFileIfAbsent,
 } from '../util.mjs';
 import { generateEntryFiles } from './sync.mjs';
@@ -115,7 +115,8 @@ const safeGit = async (root, ...args) => {
   catch (e) { return { ok: false, stdout: '', stderr: (e && e.message) || String(e) }; }
 };
 
-// 统一的提交流:可选 git init → add -A → commit;任何失败降级为说明行,绝不抛错
+// 统一的提交流:可选 git init → add -A → commit;任何失败降级为说明行,绝不抛错。
+// 无身份环境(CI 容器)自动注入仅本条命令生效的 -c 兜底身份,见 util.gitIdentityArgs。
 const gitCommitFlow = async (root, needInit, message) => {
   const lines = [];
   if (needInit) {
@@ -131,9 +132,14 @@ const gitCommitFlow = async (root, needInit, message) => {
     lines.push(`提交跳过:git add 失败(${firstLine(add.stderr)})`);
     return lines;
   }
-  const c = await safeGit(root, 'commit', '-m', message);
-  if (c.ok) lines.push(`已提交:${message}`);
-  else lines.push(`提交跳过:${firstLine(c.stderr)}(文件已全部写入,不受影响;可稍后手工提交)`);
+  const fallback = await gitIdentityArgs(root);
+  // 注入参数必须在子命令之前:git -c k=v commit -m …(git commit -c 是"复用消息",另一回事)
+  const c = await safeGit(root, ...fallback, 'commit', '-m', message);
+  if (c.ok) {
+    lines.push(fallback.length ? `已提交(引擎注入了临时提交身份 relay-bot@localhost,未写入全局配置):${message}` : `已提交:${message}`);
+  } else {
+    lines.push(`提交跳过:${firstLine(c.stderr)}(文件已全部写入,不受影响;可稍后手工提交)`);
+  }
   return lines;
 };
 

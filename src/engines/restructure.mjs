@@ -13,7 +13,7 @@
 import { readdir, stat, writeFile } from 'node:fs/promises';
 import { basename, dirname, extname, join, resolve } from 'node:path';
 import {
-  backupFile, ensureDir, gitRun, isGitRepo, nowIso,
+  backupFile, ensureDir, gitIdentityArgs, gitRun, isGitRepo, nowIso,
   readFileSafe, stamp,
 } from '../util.mjs';
 
@@ -224,7 +224,7 @@ export const relayRestructure = async (args = {}) => {
     await insertLog(root, done.length, taskId);
 
     const cm = await gitRun(root, 'add', '-A');
-    const cc = cm.ok ? await gitRun(root, 'commit', '-m', `relay: restructure — 标准化目录(${done.length} 项移动)`) : cm;
+    const cc = cm.ok ? await gitRun(root, ...(await gitIdentityArgs(root)), 'commit', '-m', `relay: restructure — 标准化目录(${done.length} 项移动)`) : cm;
     const gitLine = cc.ok
       ? `已提交:${firstLine(cc.stdout) || 'relay: restructure'}`
       : `提交跳过:${firstLine(cc.stderr)}(文件已移动,可稍后手动提交)`;

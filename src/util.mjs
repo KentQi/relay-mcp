@@ -98,6 +98,19 @@ export const ensureDir = async (p) => {
   await mkdir(p, { recursive: true });
 };
 
+// 身份兜底探测 + 仅本条命令生效的配置注入参数。
+// CI 容器常无 user.name/email:Linux git 直接拒绝提交(macOS 用 hostname 兜底)——
+// 曾导致"本地绿 CI 红"。用户已配置任一身份 → 返回 [];否则返回前置注入参数
+// (形式为 `git <注入> commit …`;注意必须放在子命令之前——`git commit -c` 是"复用消息",
+// 与配置注入完全是两回事),不写全局配置。
+export const gitIdentityArgs = async (root) => {
+  for (const k of ['user.name', 'user.email']) {
+    const r = await gitRun(root, 'config', k);
+    if (r.ok && r.stdout.trim()) return [];
+  }
+  return ['-c', 'user.name=relay-bot', '-c', 'user.email=relay-bot@localhost'];
+};
+
 // 'YYYY-MM-DD HH:mm' 本地时间
 export const stamp = () => {
   const d = new Date();

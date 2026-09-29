@@ -1,5 +1,9 @@
 # 会话日志(最新在上)
 
+## 2026-09-29 12:14 | model=zcode-glm | task=T004 完成
+- 摘要: 修复 CI 首跑红:Linux runner 无 git 身份致提交被拒。新增 gitIdentityArgs 兜底(仅命令级 -c 注入,不写全局),统一三个提交点;并修注入参数位置(git -c 在子命令前,commit -c 是复用消息)
+- 留给下一个: 首跑失败日志:git commit fatal(无身份);本地 macOS 因 hostname 自动兜底而全绿——环境差异只能靠真机 CI 抓
+
 ## 2026-09-29 12:07 | model=zcode-glm | task=T003 完成
 - 摘要: 挂自身 CI:双步验证(自身引擎结构检查 + npm test 冒烟),node 22/24/26 三版本矩阵,对应 TASKS T003 的本地部分
 - 留给下一个: 已本地预演两步全绿;badge 待 CI 绿后补进 README

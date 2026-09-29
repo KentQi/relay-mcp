@@ -7,7 +7,7 @@
 // 受保护路径(verify/.relay//tests//*.test.*/*.spec.*):文件照常更新,但不自动 commit(需人类批准,isError 不置位)。
 //   注意:护栏只看未提交 diff——模型中途自行 git commit 即可绕过,该边界写明在 README。
 // 疑似密钥文件(.env*/*secret*/*credential*/*.key/*.pem/id_rsa)在场:同护栏处理,不自动提交(H3)。
-import { readFileSafe, isGitRepo, gitRun, stamp, nowIso, templatesDir, ensureDir } from '../util.mjs';
+import { readFileSafe, isGitRepo, gitIdentityArgs, gitRun, stamp, nowIso, templatesDir, ensureDir } from '../util.mjs';
 import { writeFile, open as fsOpen, stat as fsStat, unlink as fsUnlink } from 'node:fs/promises';
 import { join } from 'node:path';
 import { execFile } from 'node:child_process';
@@ -648,7 +648,7 @@ export const relaySessionEnd = async (args = {}) => {
     if (!addR.ok) {
       degradeReason = `git add 失败: ${(addR.stderr || addR.stdout || '').split('\n').find(Boolean) || '未知原因'}`;
     } else {
-      const cR = await gitRun(root, 'commit', '-m', commitMsg);
+      const cR = await gitRun(root, ...(await gitIdentityArgs(root)), 'commit', '-m', commitMsg);
       if (!cR.ok) {
         degradeReason = `git commit 失败: ${(cR.stderr || cR.stdout || '').split('\n').find(Boolean) || '未知原因'}`;
       } else {
