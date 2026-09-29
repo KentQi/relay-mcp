@@ -1,0 +1,32 @@
+# relay CI — 结构检查 + 项目测试两道防线(模型可绕开 session_end,CI 绕不开)
+# 前置:仓库 Settings → Secrets and variables → Actions → Variables 添加 RELAY_REPO,
+# 指向 relay-mcp 引擎的 git 地址(如 https://example.com/your-org/relay-mcp.git)
+name: relay
+on:
+  push:
+  pull_request:
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    strategy:
+      # 版本矩阵对齐真实开发环境(单一旧版本会掩盖 node --test 之类的跨版本行为差异)
+      matrix:
+        node-version: [22, 24]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node-version }}
+      - name: Clone relay engine
+        run: git clone --depth 1 "${RELAY_REPO}" /opt/relay-mcp
+        env:
+          RELAY_REPO: ${{ vars.RELAY_REPO }}
+      - name: relay verify (structure)
+        run: node /opt/relay-mcp/src/cli.mjs relay_verify --root "$GITHUB_WORKSPACE"
+      - name: project tests (acceptance gate's last line of defense)
+        run: |
+          if [ -f package.json ] && grep -q '"test"' package.json; then
+            npm install --no-audit --no-fund && npm test
+          else
+            echo "(no package.json test script, skip)"
+          fi
