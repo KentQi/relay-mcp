@@ -1,0 +1,44 @@
+{
+  "version": 1,
+  "projectName": "relay-mcp",
+  "entryFiles": [
+    "AGENTS.md",
+    "CLAUDE.md",
+    "GEMINI.md"
+  ],
+  "allowedTopLevel": [
+    "src",
+    "docs",
+    "scripts",
+    "tests",
+    ".relay",
+    ".github",
+    "README.md",
+    "SPEC.md",
+    "DECISIONS.md",
+    "TASKS.md",
+    "LOG.md",
+    "START.md",
+    "verify",
+    "package.json",
+    ".gitignore",
+    ".editorconfig",
+    "AGENTS.md",
+    "CLAUDE.md",
+    "GEMINI.md",
+    "CONTRACT.md",
+    "mcp-design.txt",
+    "templates"
+  ],
+  "docsPhases": [
+    "01-sow",
+    "02-prd",
+    "03-ard",
+    "04-test",
+    "05-delivery",
+    "archive",
+    "templates"
+  ],
+  "onboardedAt": "2026-09-29T03:38:22.077Z",
+  "relayHome": "<relay-mcp 安装目录>"
+}
