@@ -1,10 +1,8 @@
 # 会话日志(最新在上)
 
-## 2026-09-29 14:05 | model=claude | task=T002 完成
-- 摘要: 初始化仓库并完成用户表迁移(示例条目,首个真实会话后可删)
-- 留给下一个: T003 实现登录接口,验收见 TASKS.md
-
----
+## 2026-09-29 11:40 | model=zcode-glm | task=无
+- 摘要: 自举:relay-mcp 接入自身接力协议(git init + onboard + 真实 SPEC/TASKS);CI 模板修为 node 22/24 双版本矩阵(审计残留风险);SPEC 落真实意图与 AC1-AC4,任务队列落真实 backlog T001-T003
+- 负结果: node --test <目录参数> 在部分 Node 版本(v24.15/v26.0)按模块路径解析而非法扫描,导致 MODULE_NOT_FOUND——一律用无参 node --test(三轮审计 N1,勿回退)
 
 <!--
 新条目由 relay_session_end 自动追加在标题行之后(最新在上);手动补记同格式:
