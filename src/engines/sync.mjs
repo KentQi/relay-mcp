@@ -98,10 +98,11 @@ const diffSummary = (oldText, newText) => {
 export const generateEntryFiles = async (root, ctx = {}) => {
   const mode = ctx.mode || 'init';
   const force = ctx.force === true;
+  const takeover = ctx.takeover === true;
   const vars = buildVars(root, ctx);
-  const files = Array.isArray(ctx.entryFiles) && ctx.entryFiles.length
-    ? ctx.entryFiles : [...DEFAULT_ENTRY_FILES];
-  const result = { created: [], kept: [], rewritten: [], notes: [] };
+  // P5:空数组是合法取值(「本仓不投影任何入口文件」),不再被当成「未配置」回落默认三份
+  const files = Array.isArray(ctx.entryFiles) ? ctx.entryFiles : [...DEFAULT_ENTRY_FILES];
+  const result = { created: [], kept: [], rewritten: [], drift: [], notes: [] };
 
   for (const name of files) {
     if (typeof name !== 'string' || !name) continue;
@@ -159,13 +160,19 @@ export const generateEntryFiles = async (root, ctx = {}) => {
       } else {
         result.kept.push({ file: name, reason: '已存在,未接管(仅在缺失时生成)' });
       }
-    } else { // sync:manifest.entryFiles 即执法范围,强制对齐模板投影(用户保留区原样携带);重写前必先备份
+    } else if (!hasMarker && !takeover) {
+      // P5 默认路径:已存在但无 relay 标记 = 项目自有文件,relay 不接管。
+      // 改写它会把老规范(如 2000+ 行 CLAUDE.md)冲成 2 行指针,而用户从未要求过投影 ——
+      // 契约「非破坏:永不删除用户文件」在此被提升为「不主动改写」。
+      result.kept.push({ file: name, reason: '已存在且无 relay 标记,未接管(非破坏)' });
+      result.drift.push({ file: name, diff: diffSummary(current, projection) });
+    } else { // sync:带标记 → 强制对齐模板投影(用户保留区原样携带);重写前必先备份
       const backup = await backupFile(target);
       await writeFile(target, projection, 'utf8');
       result.rewritten.push({
         file: name,
         backup,
-        note: `${hasMarker ? '带 relay 标记但与模板投影漂移' : '缺少 relay 标记'}${extractUserBlock(current) ? '(用户保留区已携带)' : ''}`,
+        note: `${hasMarker ? '带 relay 标记但与模板投影漂移' : 'manifest.entryFilesTakeover=true,强制接管(无标记)'}${extractUserBlock(current) ? '(用户保留区已携带)' : ''}`,
         diff: diffSummary(current, projection),
       });
     }
@@ -190,8 +197,9 @@ export const relaySync = async (args = {}) => {
     catch (e) {
       return err(`.relay/manifest.json 解析失败:${firstLine(e && e.message)}。请人工修复,或重新 relay_init / relay_onboard。`);
     }
-    const entryFiles = Array.isArray(manifest.entryFiles) && manifest.entryFiles.length
-      ? manifest.entryFiles : [...DEFAULT_ENTRY_FILES];
+    // P5:manifest.entryFiles 原样取用;空数组 = 「不投影任何入口文件」,不再回落默认三份
+    const entryFiles = Array.isArray(manifest.entryFiles) ? manifest.entryFiles : [...DEFAULT_ENTRY_FILES];
+    const takeover = manifest.entryFilesTakeover === true;
 
     // 仓库级写锁:入口重投影期间独占(与 session_end / claim 同一把)
     const sLock = await acquireRepoLock(root, 'sync');
@@ -201,6 +209,7 @@ export const relaySync = async (args = {}) => {
     const res = await generateEntryFiles(root, {
       mode: 'sync',
       entryFiles,
+      takeover,
       projectName: typeof manifest.projectName === 'string' && manifest.projectName
         ? manifest.projectName : undefined,
       relayHome: typeof manifest.relayHome === 'string' && manifest.relayHome
@@ -214,12 +223,16 @@ export const relaySync = async (args = {}) => {
     for (const n of res.notes) rows.push(`| — | 跳过:${n} |`);
 
     const lines = [
-      `## relay:sync — 入口文件对账(${entryFiles.length} 个)`,
+      `## relay:sync — 入口文件对账(${entryFiles.length} 个${entryFiles.length === 0 ? ',manifest.entryFiles 为空数组:本次不投影任何入口文件' : ''})`,
       '',
       '| 文件 | 结果 |',
       '|---|---|',
       ...rows,
     ];
+    if (res.drift.length) {
+      lines.push('', '### 未接管(已存在、无 relay 标记)—— relay 未改写这些文件', '',
+        ...res.drift.map((d) => `- ${d.file}:与模板投影有出入,relay 未改写。如需接管:先加 \`<!-- relay:generated v1 -->\` 或在 manifest 置 \`"entryFilesTakeover": true\`,再跑 relay_sync`));
+    }
     if (res.rewritten.length) {
       lines.push('', '### 漂移摘要');
       for (const r of res.rewritten) {
@@ -227,7 +240,10 @@ export const relaySync = async (args = {}) => {
         if (r.diff) lines.push(...r.diff.split('\n').map((l) => `  ${l}`));
       }
     } else if (!res.created.length) {
-      lines.push('', '全部入口文件与模板再生内容一致,无漂移。');
+      // P5:存在「未接管但与模板有出入」的项时,不得谎报「全部一致,无漂移」
+      lines.push('', res.drift.length
+        ? '未新建任何入口文件;其余入口文件要么已被 relay 投影,要么按非破坏原则保持原样(见上方「未接管」小节)。'
+        : '全部入口文件与模板再生内容一致,无漂移。');
     } else {
       lines.push('', '存在缺失文件,已按模板重建。');
     }

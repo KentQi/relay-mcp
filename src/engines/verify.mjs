@@ -3,6 +3,7 @@
 // TASKS 任务行与 LOG 条目标题的正则与契约逐字符一致,绝不改动;
 // 每条非 PASS 结果都附一条以「修复:」开头的可执行指令。
 import { readFileSafe, isGitRepo, gitRun } from '../util.mjs';
+import { readManifestConfig, underRoots, matchesIgnore, DEFAULT_CODE_ROOTS, DEFAULT_DOCS_ROOTS } from '../config.mjs';
 import { readdir } from 'node:fs/promises';
 import { join } from 'node:path';
 
@@ -111,7 +112,7 @@ const checkR2 = async (root, manifest) => {
 };
 
 // —— R3 docs 命名 + frontmatter(宽松模式 = manifest 无 strictDocs 标记)——
-const listDocsMd = async (docsDir) => {
+const listDocsMd = async (docsDir, ignore = []) => {
   const out = [];
   const walk = async (dir, prefix) => {
     let entries;
@@ -119,10 +120,12 @@ const listDocsMd = async (docsDir) => {
     for (const e of entries) {
       const rel = prefix ? `${prefix}/${e.name}` : e.name;
       if (e.isDirectory()) {
-        if (e.name === 'templates' || e.name === 'archive') continue; // 契约豁免
+        if (e.name === 'templates' || e.name === 'archive') continue; // 契约豁免(不可配置)
+        if (matchesIgnore(ignore, rel, true)) continue;               // manifest.docsIgnore(P3)
         await walk(join(dir, e.name), rel);
       } else if (e.isFile() && e.name.endsWith('.md')) {
         if (rel === 'README.md') continue; // docs/README.md 是索引,豁免
+        if (matchesIgnore(ignore, rel, false)) continue;              // manifest.docsIgnore(P3)
         out.push(rel);
       }
     }
@@ -145,16 +148,19 @@ const frontmatterOk = (text) => {
   return false;
 };
 
-const checkR3 = async (root, manifest) => {
+const checkR3 = async (root, manifest, cfg) => {
   let docsExists = true;
   try { await readdir(join(root, 'docs')); } catch { docsExists = false; }
   if (!docsExists) {
     return skip('R3', 'docs/ 不存在,跳过', '如需文档一致性检查,先建立 docs/ 五件套(relay_init/onboard 自动装骨架)');
   }
   const strict = manifest && manifest.strictDocs === true; // 宽松模式 = 无 strictDocs 标记
-  const files = await listDocsMd(join(root, 'docs'));
+  const ignore = (cfg && cfg.docsIgnore) || [];
+  const all = await listDocsMd(join(root, 'docs'));              // 全量,用于如实报出剪掉了多少
+  const files = ignore.length ? await listDocsMd(join(root, 'docs'), ignore) : all;
+  const ignoredCount = all.length - files.length;
   if (!files.length) {
-    return skip('R3', 'docs/ 无待检 .md(templates/archive/README 已豁免)', '按五件套阶段(01-sow~05-delivery)建文档后本检查生效');
+    return skip('R3', `docs/ 无待检 .md(templates/archive/README 已豁免${ignoredCount ? `;manifest.docsIgnore 另剪 ${ignoredCount} 个` : ''})`, '按五件套阶段(01-sow~05-delivery)建文档后本检查生效');
   }
   const offenders = [];
   for (const f of files) {
@@ -174,7 +180,7 @@ const checkR3 = async (root, manifest) => {
       : '在文件头补 YAML frontmatter(--- / title: … / status: 草稿|现行 / ---)';
     return bad('R3', 'ERROR', `docs 不合规(${strict ? '严格:命名+frontmatter' : '宽松:仅 frontmatter'}): ${shown}`, fix);
   }
-  return pass('R3', `docs ${strict ? '严格模式' : '宽松模式'}:${files.length} 个 .md 全部合规`);
+  return pass('R3', `docs ${strict ? '严格模式' : '宽松模式'}:${files.length} 个 .md 全部合规${ignoredCount ? `(manifest.docsIgnore 剪掉 ${ignoredCount} 个)` : ''}`);
 };
 
 // —— R4 入口/START 无时变词 ——
@@ -214,31 +220,34 @@ const stripUserRulesBlock = (text) => {
 };
 
 // —— R5 提交原子性(full only)——
-const checkR5 = async (root) => {
+const checkR5 = async (root, cfg) => {
   if (!isGitRepo(root)) return skip('R5', '非 git 仓库,跳过', '初始化 git 后本检查自动生效');
   const r = await gitRun(root, '-c', 'core.quotePath=false', 'log', '-1', '--name-only', '--pretty=format:');
   if (!r.ok) return skip('R5', '仓库尚无提交,跳过', '产生首个提交后本检查自动生效');
   const files = r.stdout.split('\n').map((s) => s.trim()).filter(Boolean);
-  const code = files.filter((f) => /^(src|lib|app)\//.test(f));
+  const roots = (cfg && cfg.codeRoots) || DEFAULT_CODE_ROOTS;
+  const code = files.filter((f) => underRoots(roots, f)); // P4:原 /^(src|lib|app)\// 的配置化形态
   const touchProtocol = files.includes('TASKS.md') || files.includes('LOG.md');
   if (code.length && !touchProtocol) {
-    return bad('R5', 'WARN', `最近一次提交触碰 ${code.slice(0, 3).join(', ')} 等代码,但未同步 TASKS.md/LOG.md(原子性缺口)`, '补一次提交把 TASKS.md/LOG.md 纳入(git commit --amend,或立即做出场提交);代码与任务状态必须同commit演进');
+    return bad('R5', 'WARN', `最近一次提交触碰 ${code.slice(0, 3).join(', ')} 等代码(按 manifest.codeRoots: ${roots.join(', ') || '无'}),但未同步 TASKS.md/LOG.md(原子性缺口)`, '补一次提交把 TASKS.md/LOG.md 纳入(git commit --amend,或立即做出场提交);代码与任务状态必须同commit演进');
   }
-  return pass('R5', '最近一次提交原子性合规');
+  return pass('R5', `最近一次提交原子性合规(代码前缀:${roots.join(', ') || '无'})`);
 };
 
 // —— R6 文档 staleness(full only)——
-const checkR6 = async (root) => {
+const checkR6 = async (root, cfg) => {
   if (!isGitRepo(root)) return skip('R6', '非 git 仓库,跳过', '初始化 git 后本检查自动生效');
   const r = await gitRun(root, '-c', 'core.quotePath=false', 'log', '-20', '--name-only', '--pretty=format:');
   if (!r.ok) return skip('R6', '仓库尚无提交,跳过', '产生首个提交后本检查自动生效');
   const files = new Set(r.stdout.split('\n').map((s) => s.trim()).filter(Boolean));
-  const srcChanged = [...files].some((f) => f.startsWith('src/'));
-  const docsChanged = [...files].some((f) => f.startsWith('docs/'));
+  const croots = (cfg && cfg.codeRoots) || DEFAULT_CODE_ROOTS;
+  const droots = (cfg && cfg.docsRoots) || DEFAULT_DOCS_ROOTS;
+  const srcChanged = [...files].some((f) => underRoots(croots, f)); // P4:原 f.startsWith('src/')
+  const docsChanged = [...files].some((f) => underRoots(droots, f));
   if (srcChanged && !docsChanged) {
-    return bad('R6', 'WARN', '最近 20 次提交 src/ 有改动而 docs/ 零改动(文档滞后)', '在 docs/ 对应阶段补记本次 src 变更(需求→01-sow,设计→03-ard,验收→04-test)');
+    return bad('R6', 'WARN', `最近 20 次提交代码有改动(按 manifest.codeRoots: ${croots.join(', ') || '无'})而文档前缀 ${droots.join(', ') || '无'} 零改动(文档滞后)`, '在 docs/ 对应阶段补记本次代码变更(需求→01-sow,设计→03-ard,验收→04-test)');
   }
-  return pass('R6', `src/docs 同期性合规(近 20 提交:${srcChanged ? 'src 有改动' : 'src 无改动'}${docsChanged ? ',docs 有改动' : ',docs 无改动'})`);
+  return pass('R6', `src/docs 同期性合规(近 20 提交:${srcChanged ? '代码有改动' : '代码无改动'}${docsChanged ? ',docs 有改动' : ',docs 无改动'};代码前缀:${croots.join(', ') || '无'})`);
 };
 
 // —— R7 发散报警 ——
@@ -322,14 +331,15 @@ const checkR9 = async (root) => {
 // —— 检查编排:fast(默认)跳过 R5/R6/R8 ——
 export const runChecks = async (root, { full = false } = {}) => {
   const manifest = await readManifest(root);
+  const cfg = await readManifestConfig(root); // P3/P4:新增策略项的默认值在此固化
   const fastSkip = (id, name) => skip(id, `fast 模式跳过 ${name}`, '出场(relay_session_end)会全量执行;需要立即全量:relay_verify {full:true}');
   return [
     await checkR1(root, manifest),
     await checkR2(root, manifest),
-    await checkR3(root, manifest),
+    await checkR3(root, manifest, cfg),
     await checkR4(root, manifest),
-    full ? await checkR5(root) : fastSkip('R5', '(R5 提交原子性)'),
-    full ? await checkR6(root) : fastSkip('R6', '(R6 文档 staleness)'),
+    full ? await checkR5(root, cfg) : fastSkip('R5', '(R5 提交原子性)'),
+    full ? await checkR6(root, cfg) : fastSkip('R6', '(R6 文档 staleness)'),
     await checkR7(root),
     full ? await checkR8(root) : fastSkip('R8', '(R8 风格归一化)'),
     await checkR9(root),

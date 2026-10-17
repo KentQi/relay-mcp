@@ -74,7 +74,10 @@ try {
   ok(giA.includes('.relay/claims/') && giA.includes('.env') && giA.includes('*.pem'), 'H3: gitignore 基线(密钥/认领锁/私钥)');
   const stTxt = readFileSync(path.join(tmpA, 'START.md'), 'utf8');
   ok(!stTxt.includes('./verify.sh'), 'H2: START 不再引用不存在的 verify.sh');
-  const vrun = spawnSync('./verify', [], { cwd: tmpA, encoding: 'utf8' });
+  // Windows 无 shebang 执行语义(MinGW spawnSync('./sh-script') 报 EFTYPE),经 shell 拉起等价验证
+  const vrun = process.platform === 'win32'
+    ? spawnSync('sh', ['./verify'], { cwd: tmpA, encoding: 'utf8' })
+    : spawnSync('./verify', [], { cwd: tmpA, encoding: 'utf8' });
   ok(vrun.status === 0, 'H2: ./verify 引导命令一键可用', (vrun.stderr || vrun.stdout || '').slice(0, 200));
   const gl = gitSafe(tmpA, 'log', '--oneline');
   ok(gl.status === 0 && gl.stdout.includes('relay: init'), 'git 初始提交存在');

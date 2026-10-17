@@ -10,9 +10,10 @@
 import { acquireRepoLock, readFileSafe, isGitRepo, gitIdentityArgs, gitRun, findSensitiveChanges, releaseRepoLock, stamp, nowIso, templatesDir, ensureDir } from '../util.mjs';
 import { writeFile, open as fsOpen, stat as fsStat, unlink as fsUnlink } from 'node:fs/promises';
 import { join, resolve, sep } from 'node:path';
-import { execFile } from 'node:child_process';
+import { execFile, exec } from 'node:child_process';
 import { promisify } from 'node:util';
 import { runChecks, formatChecks, TASK_LINE_RE, LOG_TITLE_RE, parseLogEntries } from './verify.mjs';
+import { readManifestConfig, DEFAULT_COMMIT_TEMPLATE } from '../config.mjs';
 
 const execFileAsync = promisify(execFile);
 
@@ -92,14 +93,20 @@ const PROTECTED_RULES = [
   ['*.test.*', (p) => (p.split('/').pop() || '').includes('.test.')],
   ['*.spec.*', (p) => (p.split('/').pop() || '').includes('.spec.')],
 ];
-const findProtectedChanges = (statusLines) => {
+// P2:manifest.protectedPaths 追加在 PROTECTED_RULES 之后(合并,非替换)——
+// 内置 5 条护栏任何时候都生效,manifest 只能加严不能放松。
+const findProtectedChanges = (statusLines, extra = []) => {
+  const rules = [
+    ...PROTECTED_RULES.map(([name, f]) => [name, f]),
+    ...extra.map(({ pattern, re }) => [`manifest.protectedPaths(${pattern})`, (p) => re.test(p)]),
+  ];
   const hits = new Map();
   for (const line of statusLines || []) {
     if (line.length < 4) continue;
     for (const raw of line.slice(3).split(' -> ')) {
       let p = raw.trim();
       if (p.length >= 2 && p.startsWith('"') && p.endsWith('"')) p = p.slice(1, -1);
-      const rule = PROTECTED_RULES.find(([, f]) => f(p));
+      const rule = rules.find(([, f]) => f(p));
       if (rule) hits.set(p, rule[0]);
     }
   }
@@ -120,6 +127,21 @@ const runCmd = async (cmd, args, cwd, timeoutMs = 180000) => {
     return { ok: false, out: `${e?.stdout || ''}\n${e?.stderr || e?.message || '执行失败'}`.trim() };
   }
 };
+// —— 白名单命令执行器(P1):仅当命令串「逐字符」命中 manifest.acceptance.commands 才走到这里 ——
+// runCmd 用 execFile(无 shell,不解析元字符);这里显式开 shell 是执行复合命令串的必要妥协,
+// 边界写在 manifest 里:命令由仓库属主逐条签字,与「执行验收行里的自由文本」有本质区别。
+const execAsync = promisify(exec);
+const runWhitelistedCmd = async (cmdStr, cwd, timeoutMs = 180000) => {
+  try {
+    const { stdout, stderr } = await execAsync(cmdStr, { cwd, timeout: timeoutMs, maxBuffer: 4 * 1024 * 1024 });
+    return { ok: true, out: `${stdout || ''}\n${stderr || ''}`.trim() };
+  } catch (e) {
+    if (e && e.code === 'ENOENT') return { ok: null, out: `未找到可执行文件 ${cmdStr}` };
+    if (e && (e.killed || e.signal === 'SIGTERM')) return { ok: false, out: `超时(${timeoutMs / 1000}s)被终止` };
+    return { ok: false, out: `${e?.stdout || ''}\n${e?.stderr || e?.message || '执行失败'}`.trim() };
+  }
+};
+
 const tailOf = (s, n = 500) => {
   const t = String(s || '').trim();
   return t.length > n ? `…${t.slice(-n)}` : t;
@@ -136,13 +158,27 @@ const inspectTestPath = (root, p) => {
   const abs = resolve(root, raw);
   const rootAbs = resolve(root);
   if (abs !== rootAbs && !abs.startsWith(rootAbs + sep)) return { bad: `路径必须位于项目目录内: ${raw}` };
-  if (!/\.(m|c)?[jt]sx?$/i.test(raw)) return { bad: `只接受 js/ts 测试文件,其他类型不予执行: ${raw}` };
-  return { abs, raw };
+  // 非测试文件后缀 → 不再直接判死,交白名单裁决(白名单缺席时行为与补丁前逐字符一致)
+  if (!/\.(m|c)?[jt]sx?$/i.test(raw)) return { abs, raw, isPath: false };
+  return { abs, raw, isPath: true };
+};
+
+// 白名单裁决(P1):命令串必须在 manifest.acceptance.commands 里「原样」登记才可执行。
+// 未登记的一律拒绝 —— 这比补丁前更宽松?不,更窄:补丁前只会拒绝,现在多了一条放行通道,
+// 而放行通道的钥匙在仓库属主手里,不在验收行里。
+const classifyAcceptance = (raw, cfg) => {
+  const cmds = (cfg && cfg.acceptanceCommands) || [];
+  if (cmds.includes(raw)) return { cmd: raw };
+  return {
+    bad: cmds.length
+      ? `${raw} 既不是 js/ts 测试文件,也不在 manifest.acceptance.commands 白名单内(裁判只执行签过字的命令);白名单: ${cmds.join(' / ')}`
+      : `只接受 js/ts 测试文件,其他类型不予执行: ${raw}`,
+  };
 };
 
 // —— 验收执行门(H1):完成声明必须有可执行的绿灯背书 ——
 // 返回 { lines: string[](已执行并通过), fails: string[](任何一条即拒绝出场), executed: number, notes: string[] }
-const acceptanceGate = async (root, doneTask) => {
+const acceptanceGate = async (root, doneTask, cfg) => {
   const lines = [];
   const fails = [];
   const notes = [];
@@ -165,8 +201,17 @@ const acceptanceGate = async (root, doneTask) => {
   // a) test: 验收——先过安检(H-A),再查存在;js 系用 node --test 实跑,完成时必须绿(红灯协议的"绿"端执法)
   if (doneTask && testPath) {
     const chk = inspectTestPath(root, testPath);
-    if (chk.bad) {
-      fails.push(`验收 test: 安检未通过——${chk.bad}(裁判只执行真正的测试文件)`);
+    const verdict = chk.bad ? { bad: chk.bad }
+      : chk.isPath ? { isPath: true }
+        : classifyAcceptance(chk.raw, cfg); // P1 分支
+    if (verdict.cmd) {
+      executed += 1;
+      const r = await runWhitelistedCmd(verdict.cmd, root); // 超时沿用 180s
+      if (r.ok === null) notes.push(`验收 test:${testPath} 命中白名单,但无法执行(${r.out})——人工确认`);
+      else if (!r.ok) fails.push(`\`${verdict.cmd}\` 失败(验收 test: 不绿):\n${tailOf(r.out)}`);
+      else lines.push(`- 验收 \`test:\`:\`${verdict.cmd}\`(manifest.acceptance.commands 白名单)通过`);
+    } else if (verdict.bad) {
+      fails.push(`验收 test: 安检未通过——${verdict.bad}(裁判只执行真正的测试文件)`);
     } else if (!(await existsFile(chk.abs))) {
       fails.push(`验收 \`${testPath}\` 的测试文件不存在——完成声明无法证实(红灯协议:完成时该测试必须存在且通过)`);
     } else if (/\.(m|c)?js$/i.test(chk.raw)) {
@@ -185,7 +230,8 @@ const acceptanceGate = async (root, doneTask) => {
   if (pkg) { try { hasTestScript = typeof JSON.parse(pkg)?.scripts?.test === 'string'; } catch { /* 非法 package.json 不影响本门 */ } }
   if (hasTestScript) {
     executed += 1;
-    const r = await runCmd('npm', ['test', '--silent'], root, 180000);
+    // 命令串由引擎自造(常量),不是验收行里的自由文本 —— 走 shell 安全,且 Windows 必须走 shell
+    const r = await runWhitelistedCmd('npm test --silent', root, 180000);
     if (r.ok === null) notes.push(`发现 scripts.test 但无法执行(${r.out})——人工跑测试后手动提交`);
     else if (!r.ok) fails.push(`\`npm test\` 失败(项目测试入口不绿):\n${tailOf(r.out)}`);
     else lines.push('- 项目测试入口:`npm test` 通过');
@@ -195,12 +241,20 @@ const acceptanceGate = async (root, doneTask) => {
 };
 
 // —— 红灯核验(出场时对 next.acceptance=test: 的提示,不阻断)——
-const redLightCheck = async (root, next) => {
+const redLightCheck = async (root, next, cfg) => {
   if (!next || !String(next.acceptance ?? '').trim().startsWith('test:')) return [];
   const p = String(next.acceptance).trim().slice(5).trim();
   const chk = inspectTestPath(root, p);
   if (chk.bad) {
     return [`- 红灯 \`${p}\`:安检未通过(${chk.bad})——请先修正 TASKS 中的验收行`];
+  }
+  if (!chk.isPath) {
+    const v = classifyAcceptance(chk.raw, cfg);
+    if (v.bad) return [`- 红灯 \`${p}\`:安检未通过(${v.bad})——请先修正 TASKS 中的验收行`];
+    const r = await runWhitelistedCmd(v.cmd, root);
+    if (r.ok === true) return [`- 红灯 \`${p}\`(\`${v.cmd}\`):当前是绿的——下一任务可能已被完成,请人工确认意图`];
+    if (r.ok === null) return [`- 红灯 \`${p}\`(\`${v.cmd}\`):无法执行(${r.out})——人工确认意图`];
+    return [`- 红灯 \`${p}\`(\`${v.cmd}\`):确认当前为失败状态(接班者以让它变绿为目标)`];
   }
   if (!(await existsFile(chk.abs))) {
     return [`- 红灯 \`${p}\`:测试文件尚不存在——接班者第一件事是编写该失败测试(先红后绿)`];
@@ -357,8 +411,8 @@ export const relaySessionStart = async (args = {}) => {
   let dirty = null;
   let recentCommits = [];
   if (isRepo) {
-    const st = await gitRun(root, '-c', 'core.quotePath=false', 'status', '--porcelain');
-    if (st.ok) dirty = st.stdout.split('\n').map((s) => s.trim()).filter(Boolean);
+    const st = await gitRun(root, '-c', 'core.quotePath=false', 'status', '--porcelain', '-uall');
+    if (st.ok) dirty = st.stdout.split('\n').map((s) => s.replace(/\r$/, '')).filter((s) => s.length >= 3);
     const lg = await gitRun(root, 'log', '--oneline', '-5');
     if (lg.ok) recentCommits = lg.stdout.split('\n').map((s) => s.trim()).filter(Boolean);
   }
@@ -557,6 +611,7 @@ export const relaySessionEnd = async (args = {}) => {
     : [];
 
   // 2. 绿闸:全量检查;有 ERROR → 不更新任何文件、不提交
+  const cfg = await readManifestConfig(root); // P1/P2/P6 的配置面在此一次性读入
   const results = await runChecks(root, { full: true });
   const errors = results.filter((c) => c.result === 'ERROR');
   const warns = results.filter((c) => c.result === 'WARN');
@@ -578,7 +633,7 @@ export const relaySessionEnd = async (args = {}) => {
   }
 
   // 2.5 验收执行门(H1):完成声明必须有可执行的绿灯背书;不绿 → 不改任何文件、不提交
-  const acc = await acceptanceGate(root, doneTask || null);
+  const acc = await acceptanceGate(root, doneTask || null, cfg);
   if (acc.fails.length) {
     out.push('## 验收执行门:未通过 — 未提交', '',
       `完成声明 \`${doneTask || '(本次会话)'}\` 缺少可执行验收的绿灯背书。按出场协议:**未更新任何文件,未提交**。`, '',
@@ -588,7 +643,7 @@ export const relaySessionEnd = async (args = {}) => {
     if (acc.lines.length) out.push('', '已通过的验收:', ...acc.lines);
     return { content: [{ type: 'text', text: out.join('\n') }], isError: true };
   }
-  const redLights = await redLightCheck(root, next);
+  const redLights = await redLightCheck(root, next, cfg);
 
   // 2.6 仓库级写锁(H-C):TASKS/LOG 的读改写从此处到提交完成必须独占——
   // 两个会话并发出场时,败者的更新曾基于旧快照覆写胜者(实测丢更新);持锁超 2 分钟视为崩溃残留可接管
@@ -605,10 +660,11 @@ export const relaySessionEnd = async (args = {}) => {
   const isRepo = isGitRepo(root);
   let statusLines = [];
   if (isRepo) {
-    const st = await gitRun(root, '-c', 'core.quotePath=false', 'status', '--porcelain');
-    if (st.ok) statusLines = st.stdout.split('\n').map((s) => s.trim()).filter(Boolean);
+    const st = await gitRun(root, '-c', 'core.quotePath=false', 'status', '--porcelain', '-uall');
+    // 只剥行尾换行:porcelain 的 XY 状态位是定宽字段,trim 吃掉前导空格会让下游 slice(3) 截错路径
+    if (st.ok) statusLines = st.stdout.split('\n').map((s) => s.replace(/\r$/, '')).filter((s) => s.length >= 3);
   }
-  const protectedHits = findProtectedChanges(statusLines);
+  const protectedHits = findProtectedChanges(statusLines, (cfg && cfg.protectedPaths) || []);
   const sensitiveHits = findSensitiveChanges(statusLines);
 
   // 3. 更新 TASKS.md
@@ -696,16 +752,48 @@ export const relaySessionEnd = async (args = {}) => {
   // 提交消息携带「T### 完成」token:TASKS 完成行不记 sha(自指无解),考古靠 git log --grep
   const firstLine = summary.split('\n')[0].trim();
   const head = doneTask ? `${doneTask} 完成 · ` : '';
-  const commitMsg = `relay: session end — ${head}${firstLine}`.slice(0, 80);
+  // P6 模板变量:{{task}} = 任务前缀(含「 · 」分隔符,与补丁前 head 逐字符一致),
+  // {{taskId}} = 纯任务号(供 [[{{taskId}}] {{summary}}] 这类干净模板使用),{{summary}} = 摘要首行。
+  const tpl = (cfg && cfg.commitMessageTemplate) || DEFAULT_COMMIT_TEMPLATE;
+  const commitMsg = tpl
+    .replaceAll('{{task}}', head)
+    .replaceAll('{{taskId}}', doneTask)
+    .replaceAll('{{summary}}', firstLine)
+    .slice(0, 80);
   let commitSection = null;
   let guardSection = null;
   let degradeReason = null;
   let commitSha = '';
 
-  if (protectedHits.length || sensitiveHits.length) {
+  // P6 冲突守卫优先于一切护栏:护栏章节附带的「git add -A && git commit」人工指令,
+  //   在有未解决冲突时会把冲突态写进历史 —— 冲突必须先说、且只说冲突。
+  let conflictGuard = null;
+  if (isRepo) {
+    const conf = await gitRun(root, '-c', 'core.quotePath=false', 'diff', '--name-only', '--diff-filter=U');
+    const conflicted = (conf.ok ? conf.stdout : '').split('\n').map((s) => s.trim()).filter(Boolean);
+    if (conflicted.length) {
+      conflictGuard = [
+        '## 护栏:存在未解决的合并冲突,未自动提交', '',
+        'git 检出未合并路径(U = unmerged)。把冲突态自动提交会让历史不可复现,必须人工先解决:', '',
+        ...conflicted.map((p) => `- \`${p}\``), '',
+        '处理建议:人工解决冲突并 git add 对应路径后重新出场;或自行 git merge --abort / git rebase --abort 回退。', '',
+        `TASKS.md / LOG.md 已照常更新。解决冲突后人工提交:`, '',
+        '```sh',
+        `git add -A && git commit -m "${commitMsg}"`,
+        '```',
+      ];
+    }
+  }
+
+  if (conflictGuard) {
+    guardSection = conflictGuard;
+    if (protectedHits.length || sensitiveHits.length) {
+      guardSection.push('', `(另有 ${protectedHits.length} 个受保护路径改动、${sensitiveHits.length} 个疑似敏感文件在场,解决冲突后一并按护栏流程人工过目)`);
+    }
+  } else if (protectedHits.length || sensitiveHits.length) {
     const parts = ['## 护栏:需人类批准,未自动提交', ''];
     if (protectedHits.length) {
-      parts.push('本会话改动了受保护路径(verify 脚本 / .relay/** / tests/** / *.test.* / *.spec.*):',
+      parts.push(`本会话改动了受保护路径(内置:verify 脚本 / .relay/** / tests/** / *.test.* / *.spec.*${(cfg.protectedPaths || []).length ? `;另加 manifest.protectedPaths ${(cfg.protectedPaths || []).map((x) => `\`${x.pattern}\``).join(' ')}` : ''}):`,
         ...protectedHits.map((h) => `- \`${h.path}\`(命中规则: ${h.why})`), '');
     }
     if (sensitiveHits.length) {
@@ -722,6 +810,8 @@ export const relaySessionEnd = async (args = {}) => {
     guardSection = parts;
   } else if (!isRepo) {
     degradeReason = '非 git 仓库';
+  } else if (cfg && cfg.autoCommit === false) {
+    degradeReason = 'manifest.autoCommit = false(只更新文件,不自动提交)';
   } else {
     const addR = await gitRun(root, 'add', '-A');
     if (!addR.ok) {

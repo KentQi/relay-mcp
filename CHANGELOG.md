@@ -15,6 +15,24 @@
 - 认领锁 TTL 接管改为 unlink+wx 原子竞争(并发接管不再双成功)
 - 认领 model 占位符(`<你的模型标识>`)拒收,防署名污染
 
+## [1.1.0] - 2026-10-17
+
+### Added (manifest 配置面, 全部缺省=v1.0.0 行为)
+- `codeRoots` / `docsRoots`: R5/R6 代码与文档前缀可配(默认 src/lib/app)
+- `docsIgnore`: R3 文档豁免 glob(内置 archive/templates 豁免不变)
+- `protectedPaths`: 受保护路径追加 glob(与内置规则合并, 只能加严)
+- `acceptance.commands`: 验收 `test:` 命令白名单(放行 pytest 等非 js/ts)
+- `commitMessageTemplate`: 提交信息模板({{task}}/{{taskId}}/{{summary}})
+- `autoCommit: false`: session_end 只更新文件不提交
+
+### Changed
+- sync 对「已存在但无 relay 标记」的入口文件默认 kept(不重写); `entryFilesTakeover: true` 恢复旧行为
+
+### Fixed
+- `git status --porcelain` 被误 trim/slice 导致受保护规则对已跟踪文件漏判(护栏失效)
+- Windows 下 `execFile('npm')` ENOENT 导致 npm test 绿闸空转
+- status 未加 `-uall` 导致未跟踪目录折叠、glob 护栏漏判
+
 ## [1.0.0] - 2026-09-29
 
 首个公开发布版本。
