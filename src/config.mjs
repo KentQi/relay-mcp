@@ -25,7 +25,7 @@ export const globToRegExp = (glob) => {
       if (g[i + 1] === '*') {
         i += 1;
         if (g[i + 1] === '/') { i += 1; out += '(?:.*/)?'; }   // 'a/**' 命中 'a' 本身与 'a/x/y'
-        else out += '.*';
+        else out += '.*';   // 末尾 '**'(后随非 '/')→ 宽松前缀:命中 'a' 起始的任何路径名含 'aXYZ'(语义即「a 及其下所有」,从宽)
       } else out += '[^/]*';
     } else if (c === '?') out += '[^/]';
     else out += c.replace(/[.+^${}()|[\]\\]/g, '\\$&');
@@ -66,7 +66,8 @@ export const readManifestConfig = async (root) => {
       typeof (m && m.commitMessageTemplate) === 'string' && m.commitMessageTemplate.trim()
         ? m.commitMessageTemplate
         : DEFAULT_COMMIT_TEMPLATE,
-    // autoCommit 默认 true = 补丁前的「自动提交」行为;显式 false 才降级为「只更新文件不提交」
+    // autoCommit 默认 true = 补丁前的「自动提交」行为;只有 JSON 布尔 false 关闭(missing/undefined/其他一律 true)。
+    // 改这行语义前先 grep 全部提交分支:session.mjs 出场绿闸/护栏跳过/autoCommit, restructure.mjs, bootstrap.mjs
     autoCommit: !(m && m.autoCommit === false),
     // entryFilesTakeover 默认 false = sync 不接管「已存在但无 relay 标记」的入口文件(非破坏)
     entryFilesTakeover: !!(m && m.entryFilesTakeover === true),

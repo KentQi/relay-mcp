@@ -128,8 +128,9 @@ const gitCommitFlow = async (root, needInit, message) => {
     lines.push('已初始化 git 仓库');
   }
   // 密钥安检(H-B):与 session_end 同一条规则——工作区有疑似密钥/私钥文件,拒绝自动入库,转人工
-  const stSec = await safeGit(root, '-c', 'core.quotePath=false', 'status', '--porcelain');
-  const sens = stSec.ok ? findSensitiveChanges(stSec.stdout.split('\n')) : [];
+  const stSec = await safeGit(root, '-c', 'core.quotePath=false', 'status', '--porcelain', '-uall');
+  // porcelain 的 XY 状态位是定宽字段:只剥行尾换行不 trim(吃前导空格会让下游截错路径);-uall 防未跟踪目录折叠漏检密钥
+  const sens = stSec.ok ? findSensitiveChanges(stSec.stdout.split('\n').map((s) => s.replace(/\r$/, '')).filter((s) => s.length >= 3)) : [];
   if (sens.length) {
     lines.push(`提交跳过:发现疑似密钥/敏感文件,拒绝卷入 git 历史(需人工处理后再提交):${sens.slice(0, 3).map((s) => s.path).join(', ')}${sens.length > 3 ? ` 等 ${sens.length} 项` : ''}`);
     return lines;

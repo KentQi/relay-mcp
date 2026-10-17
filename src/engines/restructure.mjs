@@ -195,7 +195,7 @@ export const relayRestructure = async (args = {}) => {
       return ok([head, '', '结构已达标,无可移动项;人工清单:', ...manualRows].join('\n'));
     }
     if (!isGitRepo(root)) return err('非 git 仓库:拒绝执行(无历史可保、无法回滚)。先 `git init` 并提交当前状态。');
-    const st = await gitRun(root, 'status', '--porcelain');
+    const st = await gitRun(root, 'status', '--porcelain', '-uall');
     if (!st.ok) return err(`无法读取 git 状态:${firstLine(st.stderr)}`);
     if (st.stdout.trim()) return err(['工作区不干净,拒绝执行:', ...st.stdout.trim().split('\n').slice(0, 5).map((l) => `- ${l}`), '先提交或暂存(git stash)再来。'].join('\n'));
 
@@ -228,8 +228,8 @@ export const relayRestructure = async (args = {}) => {
     await insertLog(root, done.length, taskId);
 
     // 密钥安检(H-B):移动/提交不搬运疑似密钥文件,转人工(与 session_end 同一条规则)
-    const stSec = await gitRun(root, '-c', 'core.quotePath=false', 'status', '--porcelain');
-    const sens = stSec.ok ? findSensitiveChanges(stSec.stdout.split('\n')) : [];
+    const stSec = await gitRun(root, '-c', 'core.quotePath=false', 'status', '--porcelain', '-uall');
+    const sens = stSec.ok ? findSensitiveChanges(stSec.stdout.split('\n').map((s) => s.replace(/\r$/, '')).filter((s) => s.length >= 3)) : [];
     if (sens.length) {
       return err(`提交跳过:发现疑似密钥/敏感文件,拒绝卷入 git 历史(需人工处理):${sens.slice(0, 3).map((s) => s.path).join(', ')}。移动与协议记录已完成,提交请人工执行`);
     }

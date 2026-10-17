@@ -121,6 +121,12 @@ try {
     const d = await end(dir, { summary: '默认值应拒绝非白名单命令', done_task: 'T901' });
     ok(d.isError && d.text.includes('只接受 js/ts 测试文件'), 'P1 默认:非 js/ts 验收行仍被安检拒绝(与 v1.0.0 同文案)', d.text.slice(0, 200));
 
+    // dash 安检:验收命令以 - 开头 → 与 js/ts 路径安检同规拒收(防 CLI 选项注入)
+    writeMf(dir, { acceptance: { commands: ['-x evil'] } });
+    addTask(dir, 'T915', 'dash 安检', 'test:-x evil');
+    const r15 = await end(dir, { summary: 'dash 应被拒', done_task: 'T915' });
+    ok(r15.isError && r15.text.includes('不得以'), 'P1 加固:白名单内 dash 命令仍被安检拒收(inspectTestPath 或 classifyAcceptance 任一分支拦截)', r15.text.slice(0, 250));
+
     // 新配置生效:登记进白名单 → 实跑
     writeMf(dir, { acceptance: { commands: ['npm run guard', 'npm run guardfail', 'npm run guardboom'] } });
     const g = await end(dir, { summary: '白名单命中应放行', done_task: 'T901' });

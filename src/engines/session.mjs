@@ -167,6 +167,7 @@ const inspectTestPath = (root, p) => {
 // 未登记的一律拒绝 —— 这比补丁前更宽松?不,更窄:补丁前只会拒绝,现在多了一条放行通道,
 // 而放行通道的钥匙在仓库属主手里,不在验收行里。
 const classifyAcceptance = (raw, cfg) => {
+  if (String(raw).startsWith('-')) return { bad: `验收命令不得以 - 开头(防 CLI 选项注入),与 js/ts 路径安检同规: ${raw}` };
   const cmds = (cfg && cfg.acceptanceCommands) || [];
   if (cmds.includes(raw)) return { cmd: raw };
   return {
@@ -230,8 +231,11 @@ const acceptanceGate = async (root, doneTask, cfg) => {
   if (pkg) { try { hasTestScript = typeof JSON.parse(pkg)?.scripts?.test === 'string'; } catch { /* 非法 package.json 不影响本门 */ } }
   if (hasTestScript) {
     executed += 1;
-    // 命令串由引擎自造(常量),不是验收行里的自由文本 —— 走 shell 安全,且 Windows 必须走 shell
-    const r = await runWhitelistedCmd('npm test --silent', root, 180000);
+    // 命令串由引擎自造(常量),不是验收行里的自由文本。Windows 下 execFile 拉不起 npm.cmd(ENOENT)必须走 shell;
+    // POSIX 保留 execFile(不经 shell),防 ~/.bashrc 的 alias npm=... 劫持语义
+    const r = process.platform === 'win32'
+      ? await runWhitelistedCmd('npm test --silent', root, 180000)
+      : await runCmd('npm', ['test', '--silent'], root, 180000);
     if (r.ok === null) notes.push(`发现 scripts.test 但无法执行(${r.out})——人工跑测试后手动提交`);
     else if (!r.ok) fails.push(`\`npm test\` 失败(项目测试入口不绿):\n${tailOf(r.out)}`);
     else lines.push('- 项目测试入口:`npm test` 通过');
@@ -760,6 +764,13 @@ export const relaySessionEnd = async (args = {}) => {
     .replaceAll('{{taskId}}', doneTask)
     .replaceAll('{{summary}}', firstLine)
     .slice(0, 80);
+  // 人工建议命令串专用:码点安全截断 + POSIX 双引号内元字符转义(防 summary 自由文本注入);
+  // 自动提交不走此串(gitRun 以 argv 传参,无 shell 解析)
+  const commitMsgSh = Array.from(commitMsg).slice(0, 80).join('')
+    .replace(/\\/g, '\\\\')
+    .replace(/"/g, '\"')
+    .replace(/\$/g, '\\$')
+    .replace(/`/g, '\`');
   let commitSection = null;
   let guardSection = null;
   let degradeReason = null;
@@ -779,7 +790,7 @@ export const relaySessionEnd = async (args = {}) => {
         '处理建议:人工解决冲突并 git add 对应路径后重新出场;或自行 git merge --abort / git rebase --abort 回退。', '',
         `TASKS.md / LOG.md 已照常更新。解决冲突后人工提交:`, '',
         '```sh',
-        `git add -A && git commit -m "${commitMsg}"`,
+        `git add -A && git commit -m "${commitMsgSh}"`,
         '```',
       ];
     }
@@ -805,7 +816,7 @@ export const relaySessionEnd = async (args = {}) => {
     parts.push(`TASKS.md / LOG.md 已照常更新${doneTask ? '(认领锁保留,待人工批准提交后由下一会话接管或到期自动释放)' : ''}。需人类批准后手动提交:`,
       '',
       '```sh',
-      `git add -A && git commit -m "${commitMsg}"`,
+      `git add -A && git commit -m "${commitMsgSh}"`,
       '```');
     guardSection = parts;
   } else if (!isRepo) {
@@ -855,7 +866,7 @@ export const relaySessionEnd = async (args = {}) => {
       '- 文件已全部更新;可稍后手动提交:',
       '',
       '```sh',
-      `git add -A && git commit -m "${commitMsg}"`,
+      `git add -A && git commit -m "${commitMsgSh}"`,
       '```');
   }
   out.push('', '## 下一棒');
