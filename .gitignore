@@ -1,0 +1,10 @@
+.env
+.env.*
+*.key
+*.pem
+node_modules/
+.DS_Store
+.relay/claims/
+coverage/
+*.log
+.relay/relay.lock

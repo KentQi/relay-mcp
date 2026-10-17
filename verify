@@ -1,0 +1,5 @@
+#!/bin/sh
+# relay-mcp 自身仓库的 verify:引擎就在本仓库,直接委托 src/cli.mjs(无外部依赖、无本机路径)。
+# 注意:被接入项目用的是 templates/verify.sh(RELAY_HOME 委托版);本文件是引擎仓库的自托管版。
+ROOT="$(cd "$(dirname "$0")" && pwd)"
+exec node "$ROOT/src/cli.mjs" relay_verify --root "$ROOT"
