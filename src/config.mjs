@@ -4,13 +4,53 @@
 //   引擎走 DEFAULT_* 分支,行为与补丁前完全相同。
 // 配置面全部落在 .relay/manifest.json(仓库属主任意文本即代码),不接受环境变量——
 //   护栏若可被环境绕过,就不是护栏。
-import { readFileSafe } from './util.mjs';
+import { readFileSafe, assertNotSymlinkFile, writeFileAtomic } from './util.mjs';
 import { join } from 'node:path';
 
 // —— 默认值(= v1.0.0 原值,勿随手改)——
 export const DEFAULT_CODE_ROOTS = ['src', 'lib', 'app'];      // verify.mjs R5 的 /^(src|lib|app)\//
 export const DEFAULT_DOCS_ROOTS = ['docs'];                    // verify.mjs R6 的 startsWith('docs/')
 export const DEFAULT_COMMIT_TEMPLATE = 'relay: session end — {{task}}{{summary}}';
+// worktree 配置真值表(解析在 worktree.mjs readWorktreeConfig,本文件只放默认值):
+//   enabled    只认 JSON 布尔 true;字符串 "true"、数字 1、其它真值一律视为 false(静默关闭);
+//   cacheDir   只允许 controlRoot 内相对路径(绝对路径 / .. / 盘符 / 控制字符 / .git 前缀非法);
+//   ttlHours   非有限数或负数 → 回退 24(不报错);
+//   autoCleanup 只有显式 JSON 布尔 false 才关闭,缺省 true(拼错字段会被忽略并保持默认)。
+// 说人话:配置拼错不会报错,只会静默失效;要改这里先同步 README/CONTRACT 的配置章节。
+export const DEFAULT_WORKTREE_CONFIG = Object.freeze({
+  enabled: false, cacheDir: '.relay/worktrees', ttlHours: 24, autoCleanup: true,
+});
+
+// —— .gitignore 基线(H3 + worktree 生命周期)——
+// 密钥/私钥/认领锁/注册表/缓存目录不得入库。三个入口共用同一份基线:
+//   init/onboard(bootstrap.mjs)、relay_sync(升级/修复入口)、relay_restructure(执行提交前)。
+// 只追加缺失行,绝不删改用户条目;幂等。返回 { status:'created'|'appended'|'unchanged', added:string[] }。
+export const GITIGNORE_BASELINE = Object.freeze([
+  '.env', '.env.*', '*.key', '*.pem', 'node_modules/', '.DS_Store',
+  '.relay/claims/', '.relay/relay.lock',
+  '.relay/worktrees/', '.relay/worktrees.json', '.relay/worktrees.lock',
+  'coverage/', '*.log',
+]);
+
+export const ensureGitignoreBaseline = async (root, extraLines = []) => {
+  const extra = (Array.isArray(extraLines) ? extraLines : [])
+    .filter((s) => typeof s === 'string' && s.trim())
+    .map((s) => s.trim().replace(/\\/g, '/'));
+  const baseline = [...new Set([...GITIGNORE_BASELINE, ...extra])];
+  const p = join(root, '.gitignore');
+  // .gitignore 与 TASKS/LOG 同属会被自动写入的协议文件:符号链接可把基线写穿到仓库外。
+  await assertNotSymlinkFile(p, '.gitignore');
+  const cur = await readFileSafe(p, null);
+  if (cur === null) {
+    await writeFileAtomic(p, `${baseline.join('\n')}\n`, { label: '.gitignore' });
+    return { status: 'created', added: baseline };
+  }
+  const have = new Set(cur.split('\n').map((s) => s.trim()).filter(Boolean));
+  const missing = baseline.filter((b) => !have.has(b));
+  if (!missing.length) return { status: 'unchanged', added: [] };
+  await writeFileAtomic(p, `${cur.replace(/\s*$/, '')}\n${missing.join('\n')}\n`, { label: '.gitignore' });
+  return { status: 'appended', added: missing };
+};
 
 // —— glob → RegExp(.gitignore 语义的一个够用子集)——
 //   **  跨 '/' 匹配任意长度(独占一段时等价于「可省略该段」)

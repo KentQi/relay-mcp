@@ -8,6 +8,9 @@
 任务行下一行可写验收(完成判定,二选一):
   验收: <一条可执行命令>
   验收: test:<失败测试文件路径>   ← 红灯协议:交班者留下失败测试,接班者让它变绿
+启用 worktree 时,relay_claim 返回 controlRoot(协议控制面)与 executionRoot(代码执行面);
+executionRoot 是独立检出(node_modules 等依赖需单独安装)。任务分支完成不等于已合并:
+出场绿闸双提交(任务分支代码 + controlRoot 的 TASKS/LOG),分支由人工 merge,过期缓存清理保留分支。
 下方为示例条目,首个真实会话后替换为真实任务。
 -->
 

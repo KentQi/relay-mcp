@@ -16,6 +16,7 @@ import {
   acquireRepoLock, backupFile, ensureDir, findSensitiveChanges, gitIdentityArgs, gitRun, isGitRepo, nowIso,
   readFileSafe, releaseRepoLock, stamp,
 } from '../util.mjs';
+import { ensureGitignoreBaseline } from '../config.mjs';
 
 const ok = (text) => ({ content: [{ type: 'text', text }], isError: false });
 const err = (text) => ({ content: [{ type: 'text', text }], isError: true });
@@ -226,6 +227,14 @@ export const relayRestructure = async (args = {}) => {
     const taskId = await insertTask(root, done.length);
     await appendDecisions(root, done);
     await insertLog(root, done.length, taskId);
+    // 升级/修复入口:目录标准化提交前幂等补齐 .gitignore 运行时基线(worktree 缓存/注册表等),
+    // 避免移动目录后首次 enable worktree 被误提交或护栏误报。
+    const gi = await ensureGitignoreBaseline(root);
+    const giLine = gi.status === 'created'
+      ? '.gitignore 已按基线新建'
+      : gi.status === 'appended'
+        ? `.gitignore 已幂等补 ${gi.added.length} 条基线`
+        : '.gitignore 基线已齐全';
 
     // 密钥安检(H-B):移动/提交不搬运疑似密钥文件,转人工(与 session_end 同一条规则)
     const stSec = await gitRun(root, '-c', 'core.quotePath=false', 'status', '--porcelain', '-uall');
@@ -247,12 +256,13 @@ export const relayRestructure = async (args = {}) => {
       `- manifest:白名单已修宪(原文件备份:${bak ? basename(bak) : '无(原缺失)'})`,
       `- DECISIONS:追加"目录标准化"决策;LOG:记录本次移动`,
       `- TASKS:插入 **${taskId} 修复目录重构后的引用路径**(验收:全部测试通过)`,
+      `- .gitignore:${giLine}`,
       `- git:${gitLine}`,
       '',
       '### 下一棒', `1. \`relay_session_start\` 进场 → 认领 ${taskId},逐个修复 import/脚本引用`, '2. `relay_verify` 全绿 + 测试通过后 `relay_session_end` 出场',
     ].join('\n'));
     } finally {
-      await releaseRepoLock(root);
+      await releaseRepoLock(root, rLock.token);
     }
   } catch (e) {
     return err(`relay_restructure 执行失败:${firstLine(e && e.message) || String(e)}`);

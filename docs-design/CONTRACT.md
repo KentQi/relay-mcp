@@ -10,6 +10,35 @@
 - 每个文件写完必须 `node --check <file>` 通过
 - 模板在**运行时**从 `templates/` 读取(用 `templatesDir()` 解析),绝不硬编码模板内容
 
+## 2026-10-29 生命周期补充契约
+
+以下为现行增量,覆盖本文历史 memo 中的对应字段:
+
+- 第 10 个工具 `relay_worktree_cleanup {root, confirm:boolean?, ttl_hours:number?}`:默认 dry-run;仅清理已登记、过期、非活跃、干净、未 locked、realpath 位于受管缓存且分支仍存在的 worktree。删除只走非强制 `git worktree remove`,分支保留;错误逐项报告。
+- `relay_claim` 新增 `worktree:boolean?`,单次覆盖 `manifest.worktree.enabled`;新 init 默认 true,既有 manifest 缺省 false。返回 controlRoot、executionRoot、`relay/T###` 分支和真实 baseSha。
+- 引擎新增 `src/engines/worktree.mjs`,管理双根解析、原子注册表、任务目录复用和安全清理;新 init/onboard 的 `.gitignore` 基线包含注册表与缓存,旧项目由 `relay_sync`(以及 claim 启用 worktree 时)幂等补齐。controlRoot 唯一维护 TASKS/LOG、认领锁和注册表,executionRoot 负责代码、验收和任务分支提交。
+- 任务分支代码提交成功才更新 controlRoot 的完成状态;提交失败不改 TASKS/LOG、保留认领锁。完成不等于合并,不自动 merge/rebase/push 或删除分支。
+- R1 无条件要求 AGENTS.md 存在且首行带 relay 标记;`entryFiles: []` 不再豁免,其他适配入口仍按配置生成。
+- 认领锁和仓库锁含唯一 token,释放需匹配 owner;TTL 接管后旧句柄不得删除新锁。session_end 仅允许原持有者完成 `[~]` 任务;锁丢失但 TASKS 活跃时按 TASKS 时间戳判定同一 TTL,时间戳无效则拒绝自动接管。
+- worktree 生命周期与既有两套冒烟统一由 `npm test` 执行,CI 三版本矩阵继续使用同一入口。
+
+## 2026-10-29 升级兼容与双提交补充契约(Fix3)
+
+以下为修复轮补充的现行语义,覆盖上文同名字段的早期表述:
+
+- **出场双提交**:绿闸(verify 全量 + 验收执行门)通过后,executionRoot 提交任务分支代码(`relay/T###`,SHA₁);成功后 controlRoot **只** `git add -- TASKS.md LOG.md` 并提交(SHA₂,提交信息含 `T### 完成`)。输出两个 SHA;代码提交或控制面提交任一失败 → isError、TASKS/LOG 不改完成状态、保留认领锁,修复后重跑补交。`autoCommit:false` 明确"控制面未提交"。executionRoot 内出现 TASKS/LOG 改动时拒绝/排除,协议文件只由 controlRoot 写。
+- **双根 verify / 成对证据**:受管 worktree 中 controlRoot 跑全量 R1–R9,executionRoot 跑代码向检查(R1/R2/R3/R4/R8;跳过 R7/R9 以免读任务分支里的旧协议副本);两侧 ERROR 合并阻断。managed 完成额外校验四项成对证据:任务分支代码提交、controlRoot 完成提交(消息含 `T### 完成`)、controlRoot 的 TASKS/LOG 已提交干净、LOG 记录 branch+代码 SHA;任一缺失 → isError、不落完成状态、可重跑补交。R5/R6 仍按 controlRoot 历史计算(任务分支提交不进入其窗口),跨分支评估留待后续。
+- **根错配 fail-closed(严格)**:任务在 registry 中仍有未完成记录时,从 controlRoot 完成出场**一律 isError**「根错配」并提示在 executionRoot 出场;不再有"干净空树可单根完成"的兼容例外。注册表缺失/损坏/记录丢失时,用 `git worktree list` 反查 `relay/<task>` 是否仍被某 worktree checkout,并检查受管缓存路径 `.relay/worktrees/<task>` / 残留记录路径是否存在——命中同样拒绝(给出重建登记或 executionRoot 出场的修复指令);分支单独存在不视为痕迹。managed 出场 HEAD==baseSha 且无改动 → 拒绝伪 SHA。未登记 linked worktree 的完成出场 fail-closed,维护出场仅告警。
+- **未合并分支可见性与人工合并**:任务分支验收通过 ≠ 已合并;relay 不自动 merge/rebase/push、不删分支。claim/session_start/cleanup 输出未合并 `relay/T###` 清单;人工流程 `git log <控制面分支>..relay/T###` → `git merge --no-ff relay/T###` → 可选 `git branch -d`。
+- **清理保护(ignored)**:清理前用 `git status --porcelain --ignored=matching -uall` 检查;含未跟踪或 ignored 本地内容(`.env`、`node_modules`、构建产物)的 worktree 默认保留并给出理由,不自动删除;删除只走非强制 `git worktree remove`,分支保留。
+- **executionRoot 依赖隔离**:任务 worktree 是独立 checkout,`node_modules`/`.env` 不共享;R8 与测试前需在 executionRoot 内单独安装依赖,claim/session_start 输出包含该提示。
+- **旧项目升级路径**:先 `relay_sync`(重投影入口 + 幂等补 `.gitignore` 运行时基线 + 无标记 AGENTS.md 的可执行迁移指引);`relay_onboard` 以既有 manifest 为基合并,只协调 version/projectName/entryFiles/allowedTopLevel/docsPhases/onboardedAt/relayHome,保留 worktree/autoCommit/acceptance/protectedPaths/entryFilesTakeover 等自定义配置并在报告中列出;claim 启用 worktree 时同样幂等补 .gitignore 基线。`relay_restructure` 提交前也补一次基线。
+- **AGENTS.md 迁移**:R1 无条件要求 AGENTS.md 存在且首行带 `<!-- relay:generated`。缺失 → `relay_sync` 重建;已存在无标记 → `relay_onboard`(备份 + 原正文包进 user-rules)、manifest `entryFilesTakeover:true` 后 `relay_sync`、或手工加标记;verify/sync 输出给出上述可执行选项,不再让修复指令空转。
+- **worktree 配置真值表**:`enabled` 只认 JSON 布尔 `true`(字符串 `"true"`/数字 1 静默按 false);`cacheDir` 只允许 controlRoot 内相对路径(绝对路径、`..`、盘符、控制字符、`.git` 前缀非法,在任何目录创建之前校验);`ttlHours` 非有限数/负数回退 24;`autoCleanup` 仅显式布尔 false 关闭;未知/拼错字段静默忽略;单次 `worktree:true/false` 覆盖配置。无可用 HEAD/git 时 claim 降级为单根并 WARN,不硬失败。
+- **registry 恢复**:`.relay/worktrees.json` 损坏 → 完成出场/claim fail-closed,提示备份或删除该运行时注册表(不猜测受管状态);注册表缺失且目录是 linked worktree → 完成出场拒绝,可回到 controlRoot 重新 `relay_claim {worktree:true}` 重建登记;cleanup 对未登记目录只报告不删,注册表损坏时输出恢复指引。
+- **锁心跳与崩溃恢复(两把锁语义不同)**:仓库写锁 `.relay/relay.lock` 持锁期间约 20s 心跳续租 + 写前 fencing 校验,长 cleanup/出场不会被 120s stale 规则误判,写入前发现被接管则拒绝;任务认领锁 `.relay/claims/T###.lock` **刻意关闭心跳**,保留 240min TTL 崩溃恢复语义(agent 崩溃后到期可被其他模型接管,不因 server 进程存活而永久占用)。锁协议为 JSON v2(兼容旧文本),model 等字段的换行/控制字符由输入净化拒收,防注入不依赖心跳。
+- **尚未提供**:claim 无 abort/release,无按任务查询 status 的独立工具,无 sessionId;可用恢复 = 认领锁 240min TTL 到期接管(可传 ttl_minutes)/ relay_session_end 出场释放 / relay_worktree_cleanup。并发会话必须使用不同 model 标识,同名 model 无法区分持有者。
+
 ## 目录与文件归属( exclusive,谁的东西谁写,别人不碰)
 
 ```

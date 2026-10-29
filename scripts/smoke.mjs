@@ -52,7 +52,7 @@ try {
   ok(init.result?.serverInfo?.name === 'relay-mcp', 'initialize 握手');
   const tools = await call('tools/list');
   const names = (tools.result?.tools ?? []).map(t => t.name);
-  ok(names.length === 9, 'tools/list = 9 个工具', `got ${names.length}`);
+  ok(names.length === 10 && names.includes('relay_worktree_cleanup'), 'tools/list = 10 个工具(含 worktree 清理)', `got ${names.length}`);
 
   // ---------- 场景 A: 0→1 ----------
   console.log('\n== 场景 A: relay_init (0→1) ==');
@@ -85,7 +85,9 @@ try {
   console.log('\n== A2: session_start / claim ==');
   const rs = await tool('relay_session_start', { root: tmpA });
   ok(!rs.isError && (rs.text.includes('接力简报') || rs.text.includes('简报')), 'session_start 出简报', rs.text.slice(0, 300));
-  const rc = await tool('relay_claim', { root: tmpA, task: 'T004', model: 'smoke-model' });
+  // Fix2b 严格根错配:A2/A3 测试的是「单根 claim → 单根 session_end」原生契约,
+  // 显式 worktree:false 保持原测试意图(不再依赖已移除的「空 worktree 单根完成」兼容例外)。
+  const rc = await tool('relay_claim', { root: tmpA, task: 'T004', model: 'smoke-model', worktree: false });
   ok(!rc.isError, 'relay_claim T004');
   ok(readFileSync(path.join(tmpA, 'TASKS.md'), 'utf8').includes('smoke-model'), '认领者写入 TASKS');
   const lockP = path.join(tmpA, '.relay/claims/T004.lock');
@@ -294,8 +296,8 @@ try {
   await tool('relay_init', { root: tmpC, name: '并发演示' });
   // D1: 并发 claim 不同任务 → 仓库锁串行化,两条认领都存活
   const [c1, c2] = await Promise.all([
-    runCli(['relay_claim', '--root', tmpC, ...jc({ task: 'T003', model: 'model-A' })]),
-    runCli(['relay_claim', '--root', tmpC, ...jc({ task: 'T004', model: 'model-B' })]),
+    runCli(['relay_claim', '--root', tmpC, ...jc({ task: 'T003', model: 'model-A', worktree: false })]),
+    runCli(['relay_claim', '--root', tmpC, ...jc({ task: 'T004', model: 'model-B', worktree: false })]),
   ]);
   ok(c1.code === 0 && c2.code === 0, 'D1: 并发 claim 不同任务双双成功', `${c1.code}/${c2.code} ${c1.out.slice(0, 150)}`);
   const tkC = readFileSync(path.join(tmpC, 'TASKS.md'), 'utf8');

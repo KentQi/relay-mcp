@@ -51,10 +51,9 @@ const checkR1 = async (root, manifest) => {
   if (!manifest) {
     return bad('R1', 'ERROR', '未找到 .relay/manifest.json,无法确定入口文件清单', '先运行 relay_init(0→1 新项目)或 relay_onboard(老项目接入)生成 manifest');
   }
-  const files = Array.isArray(manifest.entryFiles) ? manifest.entryFiles.filter((f) => typeof f === 'string') : [];
-  if (!files.length) {
-    return skip('R1', 'manifest.entryFiles 为空,无入口要求', '如需单源投影,在 manifest.entryFiles 登记入口文件后运行 relay_sync');
-  }
+  // AGENTS.md 是项目规范入口,任何配置都不能把它从必需清单中移除;其余入口只是适配指针。
+  const configured = Array.isArray(manifest.entryFiles) ? manifest.entryFiles.filter((f) => typeof f === 'string') : [];
+  const files = [...new Set(['AGENTS.md', ...configured])];
   const missing = [];
   const unmarked = [];
   for (const f of files) {
@@ -328,6 +327,22 @@ const checkR9 = async (root) => {
   return pass('R9', `LOG/TASKS 一致(${id} 已标 [x])`);
 };
 
+// —— 双根:任务树结构检查(R1/R2/R3/R4/R8)——
+// managed 场景下真正待提交的代码在 executionRoot,结构检查必须覆盖它;
+// 协议面检查(R5/R6/R7/R9)属于 controlRoot,这里刻意不跑——worktree 里的
+// TASKS/LOG 只是 baseSha 快照,跑 R7/R9 会得到陈旧甚至相反的结论。
+export const runTaskTreeChecks = async (executionRoot, controlRoot = executionRoot) => {
+  const manifest = await readManifest(controlRoot); // 白名单/入口清单以 controlRoot 为准(修宪只认协议面)
+  const cfg = await readManifestConfig(controlRoot);
+  return [
+    await checkR1(executionRoot, manifest),
+    await checkR2(executionRoot, manifest),
+    await checkR3(executionRoot, manifest, cfg),
+    await checkR4(executionRoot, manifest),
+    await checkR8(executionRoot),
+  ];
+};
+
 // —— 检查编排:fast(默认)跳过 R5/R6/R8 ——
 export const runChecks = async (root, { full = false } = {}) => {
   const manifest = await readManifest(root);
@@ -347,12 +362,12 @@ export const runChecks = async (root, { full = false } = {}) => {
 };
 
 // —— 结构化结果 → markdown 表格 ——
-export const formatChecks = (results, { root = '', full = false } = {}) => {
+export const formatChecks = (results, { root = '', full = false, mode = '' } = {}) => {
   const cell = (s) => String(s ?? '').replace(/\|/g, '\\|').replace(/\n+/g, ' ');
   const counts = { PASS: 0, WARN: 0, ERROR: 0, SKIP: 0 };
   for (const r of results) counts[r.result] = (counts[r.result] || 0) + 1;
   const lines = [
-    `### relay verify — ${root || '.'}(模式: ${full ? 'full 全量' : 'fast 快检'})`,
+    `### relay verify — ${root || '.'}(模式: ${mode || (full ? 'full 全量' : 'fast 快检')})`,
     '',
     '| ID | 结果 | 详情 |',
     '|---|---|---|',
@@ -368,10 +383,42 @@ export const formatChecks = (results, { root = '', full = false } = {}) => {
 };
 
 // —— MCP 工具入口 ——
+// 双根感知:root 落在任务 worktree 内时,同时检查 controlRoot(协议面全量)与
+// executionRoot(任务树结构),避免「在 worktree 里 verify 出绿、出场绿闸却查 controlRoot」的分裂结论。
 export const relayVerify = async (args = {}) => {
-  const root = args.root || process.cwd();
+  const inputRoot = args.root || process.cwd();
   const full = args.full === true;
-  const results = await runChecks(root, { full });
-  const hasError = results.some((r) => r.result === 'ERROR');
-  return { content: [{ type: 'text', text: formatChecks(results, { root, full }) }], isError: hasError };
+  let roots;
+  try {
+    const { resolveRelayRoots } = await import('./worktree.mjs'); // 动态导入避免 verify↔worktree 循环
+    roots = await resolveRelayRoots(inputRoot);
+  } catch {
+    roots = { controlRoot: inputRoot, executionRoot: inputRoot, managed: false, linkedWorktree: false, registryState: 'not-applicable' };
+  }
+  if (roots.controlRoot === roots.executionRoot) {
+    const results = await runChecks(roots.controlRoot, { full });
+    const hasError = results.some((r) => r.result === 'ERROR');
+    return { content: [{ type: 'text', text: formatChecks(results, { root: roots.controlRoot, full }) }], isError: hasError };
+  }
+  const controlResults = await runChecks(roots.controlRoot, { full });
+  const taskResults = await runTaskTreeChecks(roots.executionRoot, roots.controlRoot);
+  const hasError = [...controlResults, ...taskResults].some((r) => r.result === 'ERROR');
+  const lines = [
+    '# relay verify — 双根模式',
+    '',
+    `- controlRoot(协议面全量检查): ${roots.controlRoot}`,
+    `- executionRoot(任务树结构检查 R1/R2/R3/R4/R8): ${roots.executionRoot}`,
+    `- 状态: ${roots.managed ? '受管任务 worktree(registry 已登记)' : `linked worktree 未登记(registryState=${roots.registryState})`}`,
+    '',
+    formatChecks(controlResults, { root: roots.controlRoot, full, mode: 'controlRoot 全量' }),
+    '',
+    formatChecks(taskResults, { root: roots.executionRoot, full: false, mode: 'executionRoot 任务树(R5/R6/R7/R9 只在 controlRoot 跑)' }),
+  ];
+  if (roots.linkedWorktree && !roots.managed) {
+    lines.push('', `> ⚠ 该 worktree 未被 relay 注册(registryState=${roots.registryState});session_end 的完成出场会 fail-closed 拒绝。`);
+    lines.push(roots.registryState === 'corrupt'
+      ? '> 修复或删除 `.relay/worktrees.json`(建议先备份)后重试。'
+      : '> 若确为 relay 任务树,运行 relay_claim { root: controlRoot, task: "T###", worktree: true } 重建登记。');
+  }
+  return { content: [{ type: 'text', text: lines.join('\n') }], isError: hasError };
 };

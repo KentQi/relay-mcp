@@ -10,6 +10,7 @@
 import { basename, dirname, join, relative, resolve } from 'node:path';
 import { access, writeFile } from 'node:fs/promises';
 import { acquireRepoLock, backupFile, readFileSafe, releaseRepoLock, stamp, templatesDir } from '../util.mjs';
+import { ensureGitignoreBaseline } from '../config.mjs';
 
 const MARKER_PREFIX = '<!-- relay:generated';
 const MARKER = '<!-- relay:generated v1 -->';
@@ -197,15 +198,19 @@ export const relaySync = async (args = {}) => {
     catch (e) {
       return err(`.relay/manifest.json 解析失败:${firstLine(e && e.message)}。请人工修复,或重新 relay_init / relay_onboard。`);
     }
-    // P5:manifest.entryFiles 原样取用;空数组 = 「不投影任何入口文件」,不再回落默认三份
-    const entryFiles = Array.isArray(manifest.entryFiles) ? manifest.entryFiles : [...DEFAULT_ENTRY_FILES];
+    // AGENTS.md 永远必需;entryFiles 只控制其他适配入口,空数组不再表示「不投影任何入口」。
+    const configured = Array.isArray(manifest.entryFiles) ? manifest.entryFiles : DEFAULT_ENTRY_FILES;
+    const entryFiles = [...new Set(['AGENTS.md', ...configured])];
     const takeover = manifest.entryFilesTakeover === true;
 
     // 仓库级写锁:入口重投影期间独占(与 session_end / claim 同一把)
     const sLock = await acquireRepoLock(root, 'sync');
     if (!sLock.ok) return err(`另一会话(**${sLock.holder}**)正在本仓库出场/认领,请稍后重试。`);
-    let res;
     try {
+    // 升级/修复入口的职责之一:旧项目(升级前接入)补齐 .gitignore 运行时基线,
+    // 否则嵌套任务目录会被 controlRoot 的 git add -A 当成分离仓库(gitlink)或在护栏处误报。
+    // 幂等:只追加缺失行,绝不删改用户条目。Fix2 起 claim 也会做同样的事作为双保险。
+    const gi = await ensureGitignoreBaseline(root);
     const res = await generateEntryFiles(root, {
       mode: 'sync',
       entryFiles,
@@ -223,15 +228,35 @@ export const relaySync = async (args = {}) => {
     for (const n of res.notes) rows.push(`| — | 跳过:${n} |`);
 
     const lines = [
-      `## relay:sync — 入口文件对账(${entryFiles.length} 个${entryFiles.length === 0 ? ',manifest.entryFiles 为空数组:本次不投影任何入口文件' : ''})`,
+      `## relay:sync — 入口文件对账(${entryFiles.length} 个)`,
       '',
       '| 文件 | 结果 |',
       '|---|---|',
       ...rows,
     ];
+    if (gi.status === 'created') {
+      lines.push('', '- `.gitignore` 已按基线新建(含 `.relay/worktrees/`、`.relay/worktrees.json`、`.relay/worktrees.lock` 等运行时忽略项)');
+    } else if (gi.status === 'appended') {
+      lines.push('', `- \`.gitignore\` 已幂等补 ${gi.added.length} 条基线:${gi.added.slice(0, 6).join(', ')}${gi.added.length > 6 ? '…' : ''}`);
+    }
+    if (gi.status !== 'unchanged') {
+      lines.push('  - 旧项目升级提示:worktree 配置缺省关闭,需要时在 `.relay/manifest.json` 的 `worktree.enabled` 显式开启(**只认 JSON 布尔 true**);claim 时也会再补一次基线。');
+    }
     if (res.drift.length) {
       lines.push('', '### 未接管(已存在、无 relay 标记)—— relay 未改写这些文件', '',
         ...res.drift.map((d) => `- ${d.file}:与模板投影有出入,relay 未改写。如需接管:先加 \`<!-- relay:generated v1 -->\` 或在 manifest 置 \`"entryFilesTakeover": true\`,再跑 relay_sync`));
+    }
+    // AGENTS.md 是 R1 必需入口:未接管时 R1 一定 ERROR,必须给出可执行迁移步骤,
+    // 否则「verify→按修复跑 relay_sync→verify 仍 ERROR」会空转(审计 P2-04)。
+    if (res.drift.some((d) => d.file === 'AGENTS.md')) {
+      lines.push('', '### AGENTS.md 迁移(必须处理:R1 会拦,出场绿闸会阻断)',
+        '`AGENTS.md` 已存在但首行没有 relay 标记,relay 按非破坏原则未改写它。三选一(推荐 A):',
+        '',
+        `- **A(推荐,原文不丢)**:运行 \`relay_onboard {root:"${root}"}\` —— 仅接管入口文件:\`AGENTS.md\` 先备份为 \`*.relay-bak-*\`,原正文整体包进 \`user-rules\` 保留区,后续 \`relay_sync\` 原样携带;其余既有文件与 manifest 配置不动;`,
+        '- **B(快,原文只留备份)**:在 `.relay/manifest.json` 置 `"entryFilesTakeover": true` 后重跑 `relay_sync` —— 原文件备份后按模板重投影;',
+        '- **C(手工)**:在 `AGENTS.md` 首行加入 `<!-- relay:generated v1 -->`,并用 `<!-- relay:user-rules-start ... -->` / `<!-- relay:user-rules-end -->` 包住自定义正文,再跑 `relay_sync`。',
+        '',
+        '处理完运行 `relay_verify`(或直接在出场时看绿闸)复核 R1。');
     }
     if (res.rewritten.length) {
       lines.push('', '### 漂移摘要');
@@ -251,7 +276,7 @@ export const relaySync = async (args = {}) => {
     lines.push('', '下一步:可运行 relay_verify 复核 R1(入口文件标记)。');
     return ok(lines.join('\n'));
     } finally {
-      await releaseRepoLock(root);
+      await releaseRepoLock(root, sLock.token);
     }
   } catch (e) {
     return err(`relay_sync 执行失败:${firstLine(e && e.message) || String(e)}`);

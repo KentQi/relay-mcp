@@ -258,13 +258,17 @@ try {
     // 造一个 2000+ 行、无 relay 标记的老 CLAUDE.md
     writeFileSync(path.join(dir, 'CLAUDE.md'), '# 老团队规范\n' + Array.from({ length: 1200 }, (_, i) => `第 ${i} 行老规范,不许改。`).join('\n') + '\n');
 
-    // 默认值:entryFiles 为空数组 → 不生成任何入口文件,且**不再回落默认三份**
+    // AGENTS.md 是硬约束:entryFiles 为空数组也只能关闭其他适配入口,不能关闭项目规范入口
     writeMf(dir, { entryFiles: [] });
     rmSync(path.join(dir, 'AGENTS.md'), { force: true });
     rmSync(path.join(dir, 'GEMINI.md'), { force: true });
+    const v0 = await tool('relay_verify', { root: dir });
+    ok(v0.isError && /\| R1 \| ERROR \|/.test(v0.text) && v0.text.includes('AGENTS.md'), 'P5 硬约束:entryFiles=[] 且缺 AGENTS.md → R1 ERROR', v0.text.slice(0, 300));
     const s0 = await tool('relay_sync', { root: dir });
-    ok(!s0.isError && s0.text.includes('本次不投影任何入口文件'), 'P5 生效:entryFiles=[] → 不生成任何入口文件(不再回落默认三份)', s0.text.slice(0, 300));
-    ok(!existsSync(path.join(dir, 'AGENTS.md')) && !existsSync(path.join(dir, 'GEMINI.md')), 'P5 生效:确认 AGENTS.md / GEMINI.md 未被凭空生成');
+    ok(!s0.isError && existsSync(path.join(dir, 'AGENTS.md')), 'P5 硬约束:entryFiles=[] 仍重建 AGENTS.md', s0.text.slice(0, 300));
+    ok(!existsSync(path.join(dir, 'GEMINI.md')), 'P5 硬约束:entryFiles=[] 不生成其他适配入口');
+    const v1 = await tool('relay_verify', { root: dir });
+    ok(!v1.isError && /\| R1 \| PASS \|/.test(v1.text), 'P5 硬约束:sync 恢复 AGENTS.md 后 R1 通过', v1.text.slice(0, 300));
 
     // 老 CLAUDE.md 一个字节都没被动
     const claudeBefore = readFileSync(path.join(dir, 'CLAUDE.md'), 'utf8');
