@@ -328,15 +328,20 @@ try {
     ok(before === after, 'P6 生效:autoCommit=false 确实没有产生提交', `${before} → ${after}`);
     writeMf(dir, { autoCommit: true });
 
-    // 冲突守卫:制造真实未解决冲突 → 拒绝自动提交
+    // 冲突守卫:制造真实未解决冲突 → 拒绝自动提交。
+    // 显式给 merge 注入 committer 身份:CI runner 没有全局 user.name/email 时,
+    // 旧版 git 可能让 merge 在写冲突前就失败,导致这条用例静默假红。
+    // 保留 merge/status 的完整输出,失败时一次性打印,避免再靠猜。
     git(dir, 'checkout', '-q', '-b', 'feat-a');
     writeFileSync(path.join(dir, 'conflict.txt'), 'a\n');
     git(dir, 'add', '-A'); git(dir, '-c', 'user.name=p', '-c', 'user.email=p@x', 'commit', '-m', 'feat: a', '--quiet');
     git(dir, 'checkout', '-q', '-b', 'feat-b', 'HEAD~1');
     writeFileSync(path.join(dir, 'conflict.txt'), 'b\n');
     git(dir, 'add', '-A'); git(dir, '-c', 'user.name=p', '-c', 'user.email=p@x', 'commit', '-m', 'feat: b', '--quiet');
-    git(dir, 'merge', 'feat-a');
-    const isConflicted = git(dir, 'diff', '--name-only', '--diff-filter=U').stdout.includes('conflict.txt');
+    const conflictMerge = git(dir, '-c', 'user.name=p', '-c', 'user.email=p@x', 'merge', 'feat-a');
+    const conflictStatus = git(dir, 'status', '--porcelain=v1', '-uall');
+    const unmerged = git(dir, 'diff', '--name-only', '--diff-filter=U');
+    const isConflicted = unmerged.stdout.includes('conflict.txt');
     if (isConflicted) {
       const cBefore = git(dir, 'rev-list', '--count', 'HEAD').stdout.trim();
       const c = await end(dir, { summary: '冲突在场', maintenance: true });
@@ -345,7 +350,13 @@ try {
       ok(cBefore === cAfter, 'P6 生效:冲突态没有被自动提交进历史', `${cBefore} → ${cAfter}`);
       ok(c.text.includes('conflict.txt'), 'P6 生效:冲突文件名逐个点名', c.text.slice(0, 500));
     } else {
-      ok(false, 'P6 冲突守卫:测试夹具未能制造未解决冲突');
+      ok(false, 'P6 冲突守卫:测试夹具未能制造未解决冲突', JSON.stringify({
+        mergeStatus: conflictMerge.status,
+        mergeStdout: conflictMerge.stdout,
+        mergeStderr: conflictMerge.stderr,
+        status: conflictStatus.stdout,
+        unmerged: unmerged.stdout,
+      }));
     }
     rmSync(dir, { recursive: true, force: true });
   }
