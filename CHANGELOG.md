@@ -15,6 +15,7 @@
 - 入场简报带出最新一条 LOG 的负结果与交接提示;存在进行中任务时崩溃恢复优先(含 TTL 接管指引)
 
 ### Changed
+- README 重写为简洁版:合并重复的 harness 接入章节,统一安装入口,突出双提交/双根、配置、安全边界与 10 个工具速查
 - AGENTS.md 成为不可绕过的必需项目规范入口,`entryFiles: []` 不再豁免;CLAUDE.md/GEMINI.md 为可选适配入口
 - 四套冒烟(主冒烟 / 补丁 / worktree / 升级兼容)统一接入 `npm test` 与 CI
 - 文档/契约同步最终语义:出场双提交(executionRoot 任务分支代码 + controlRoot 仅 TASKS/LOG,两个 SHA)、R5/R6 双根证据、未合并 `relay/T###` 分支列表与人工 `git merge --no-ff` 流程、ignored 文件清理保护、executionRoot 独立装依赖、旧项目先 `relay_sync`、AGENTS.md 无标记迁移、registry 恢复、abort/release/status/sessionId 尚未提供、同名 model 禁止并发

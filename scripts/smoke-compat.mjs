@@ -175,7 +175,7 @@ try {
     const readme = read(path.join(RELAY, 'README.md'));
     for (const [needle, label] of [
       ['出场 = 双提交', 'README 含出场双提交'],
-      ['未合并 ≠ 未完成', 'README 含未合并语义与人工 merge'],
+      ['验收通过 ≠ 已合并', 'README 含未合并语义与人工 merge'],
       ['git merge --no-ff relay/T###', 'README 含人工合并命令'],
       ['ignored 本地内容', 'README 含 ignored 清理保护'],
       ['只认 JSON 布尔 `true`', 'README 含 enabled 只认布尔 true'],
