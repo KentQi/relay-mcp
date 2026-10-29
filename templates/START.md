@@ -13,7 +13,7 @@
 
 读 `TASKS.md`:待办区第一个未认领的 `T###` 就是你的任务;已被认领的任务(行尾带模型名+时间戳)不要碰——除非其认领已超 TTL 4 小时,可接管。并行协作先 `relay_claim` 认领。
 
-启用 worktree 的项目按认领结果进入 executionRoot 修改代码与执行测试;controlRoot 只保存协议控制状态。任务分支验收通过后是否合并由人工决定。
+启用 worktree 的项目:按 claim 结果进入 **executionRoot** 改代码/跑测试(独立检出,`node_modules`/`.env` 需单独准备);controlRoot 只保存协议状态。出场绿闸**双提交**(executionRoot 任务分支代码 + controlRoot 仅 TASKS/LOG,返回两个 SHA);任务仍有 registry 未完成记录时从 controlRoot 完成会被根错配**一律拒绝**(无空树例外),须在 executionRoot 出场;认领锁不心跳,240min TTL 到期后可接管。任务分支验收通过 ≠ 已合并,由人工 `git merge --no-ff relay/T###` 整合。旧项目升级先跑 `relay_sync`(重投影入口 + 幂等补 .gitignore 基线);`manifest.worktree.enabled` 只认 JSON 布尔 `true`。
 
 - 意图与验收标准(做到什么算完)→ `SPEC.md`
 - 已定的技术选择(勿重复论证)→ `DECISIONS.md`

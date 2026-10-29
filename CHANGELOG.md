@@ -15,9 +15,14 @@
 
 ### Changed
 - AGENTS.md 成为不可绕过的必需项目规范入口,`entryFiles: []` 不再豁免;CLAUDE.md/GEMINI.md 为可选适配入口
-- 三套冒烟统一接入 `npm test` 与 CI(182 项断言)
+- 四套冒烟(主冒烟 / 补丁 / worktree / 升级兼容)统一接入 `npm test` 与 CI
+- 文档/契约同步最终语义:出场双提交(executionRoot 任务分支代码 + controlRoot 仅 TASKS/LOG,两个 SHA)、R5/R6 双根证据、未合并 `relay/T###` 分支列表与人工 `git merge --no-ff` 流程、ignored 文件清理保护、executionRoot 独立装依赖、旧项目先 `relay_sync`、AGENTS.md 无标记迁移、registry 恢复、abort/release/status/sessionId 尚未提供、同名 model 禁止并发
+- `relay_claim`/`relay_session_end`/`relay_worktree_cleanup`/`relay_sync` 的 MCP 描述与 `relay_rules`/`relay://protocol` 同步上述语义;`manifest.worktree` 配置真值表(仅布尔 true、未知字段静默忽略、ttlHours 回退、cacheDir 相对路径)写入 README/CONTRACT
 
 ### Fixed
+- `relay_onboard` 合并既有 manifest(worktree/autoCommit/acceptance/protectedPaths/entryFilesTakeover 等保留,只协调 version/projectName/entryFiles/allowedTopLevel/docsPhases/onboardedAt/relayHome),升级重跑不再静默关闭 worktree/护栏配置
+- `relay_sync` 作为升级/修复入口幂等补 `.gitignore` 运行时基线(worktree 缓存/注册表/密钥),并对"已存在无 relay 标记的 AGENTS.md"输出可执行迁移步骤(onboard 接管 / `entryFilesTakeover:true` / 手工加标记),R1 修复指令不再空转;`relay_restructure` 提交前同样补基线
+- 新增 `scripts/smoke-compat.mjs` 覆盖 onboard 保配置、sync 迁移与 .gitignore 基线、contract/README 关键文案断言,并接入 `npm test`
 - 认领锁 TTL 到期可由其他模型接管;session_end 拒绝非持有者完成他人任务
 - 仓库锁与认领锁使用唯一 token,旧锁持有者延迟释放不会删除新持有者的锁;锁丢失时依据 TASKS 时间戳执行同一 TTL
 - 幂等出场:同一出场重跑不再重复盖戳/记日志/插入 next

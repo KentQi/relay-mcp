@@ -49,8 +49,12 @@ export const TOOLS = [
       'Adopt the relay relay protocol on an EXISTING project (1→10 / 10→100). Non-destructive merge: ' +
       'scans the repo, backs up any file it must touch (renamed <file>.relay-bak-<timestamp>, never ' +
       'deletes user files), unions allowedTopLevel with entries already present, records actual docs/ ' +
-      'layout, installs core relay files + verify.sh + entry files, then runs one verify pass and ' +
-      'reports what changed. Prefer this over relay_init whenever the directory is not empty.',
+      'layout, installs core relay files + verify.sh + entry files + .gitignore baseline, then reports ' +
+      'what changed. Existing manifest configuration is PRESERVED: onboard only reconciles ' +
+      'version/projectName/entryFiles/allowedTopLevel/docsPhases/onboardedAt/relayHome and keeps ' +
+      'worktree / autoCommit / acceptance / protectedPaths / entryFilesTakeover and any other custom ' +
+      'keys untouched, so re-running it on an upgraded project never silently disables features. ' +
+      'Prefer this over relay_init whenever the directory is not empty.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -61,10 +65,12 @@ export const TOOLS = [
   {
     name: 'relay_sync',
     description:
-      'Regenerate AGENTS.md (always required) and the optional adapter entry files in manifest.entryFiles from ' +
-      'the single source of truth, and report drift (which entry files differed from the projection). ' +
-      'Single-source projection keeps CI at zero diff: call this after editing canonical spec content ' +
-      'or when an entry file was hand-edited and must be re-projected.',
+      'Upgrade/repair entry point: regenerate AGENTS.md (always required) and the optional adapter entry ' +
+      'files in manifest.entryFiles from the single source of truth, report drift, and idempotently append ' +
+      'the .gitignore runtime baseline (`.relay/worktrees/`, `.relay/worktrees.json`, secrets, …) that older ' +
+      'projects are missing. When an unmarked AGENTS.md blocks R1, the output contains the executable ' +
+      'migration steps (relay_onboard takeover / entryFilesTakeover=true / manual marker). Run it after ' +
+      'upgrading a project and after editing canonical spec content.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -91,19 +97,22 @@ export const TOOLS = [
     name: 'relay_session_end',
     description:
       'MUST be the last call of every work session (step 6 of the six-step protocol). Green gate: runs ' +
-      'FULL verify first; only if all checks pass does it update TASKS.md (marks done_task complete ' +
-      'with date) and LOG.md (prepends the session entry), then `git add -A && git commit`. In a managed ' +
-      'worktree, done_task must match the executionRoot branch: commit code there first, then update ' +
-      'controlRoot TASKS/LOG; the branch stays accepted but unmerged. If ' +
-      'verify is not green → isError + fix list + explicitly NOT committed. Handoff quality is the ' +
-      'contract: fill `next` (title + acceptance a stranger can verify) and negative_results (things ' +
-      'that do NOT work, so the next model does not retry them). Protected paths (verify script, ' +
-      '.relay/**, tests) are never auto-committed — they need human approval.',
+      'FULL verify first (controlRoot protocol checks plus executionRoot code checks when in a managed ' +
+      'task worktree); only if all checks pass, and after the acceptance gate is green, does it write ' +
+      'TASKS/LOG and commit. Two commits are made in a managed worktree: (1) executionRoot code commit on ' +
+      'branch relay/T###, (2) controlRoot commit containing ONLY TASKS.md + LOG.md (message contains ' +
+      '"T### 完成"). Both SHAs are reported; the task branch stays accepted but unmerged. If the code ' +
+      'commit or the control-plane commit fails → isError, TASKS/LOG not marked done, claim lock kept, ' +
+      're-run after fixing to finish. If verify is not green → isError + fix list + explicitly NOT ' +
+      'committed. Handoff quality is the contract: fill `next` (title + acceptance a stranger can ' +
+      'verify) and negative_results (things that do NOT work, so the next model does not retry them). ' +
+      'Protected paths (verify script, .relay/**, tests) are never auto-committed — they need human ' +
+      'approval.',
     inputSchema: {
       type: 'object',
       properties: {
         root: { type: 'string', description: ROOT_DESC },
-        model: { type: 'string', description: 'Model/agent identifier, e.g. "claude", "gemini-2.5".' },
+        model: { type: 'string', description: 'Model/agent identifier. Must be unique per concurrent session: two sessions sharing one model id cannot prove ownership and will deadlock on claim locks, e.g. "claude-a" / "claude-b".' },
         summary: {
           type: 'string',
           description: 'One-paragraph summary of what this session actually did.',
@@ -185,14 +194,19 @@ export const TOOLS = [
       'Parallel mode: claim a task in TASKS.md before starting work when multiple agents share one ' +
       'queue. Marks the task in-progress with your model name and timestamp in the trailing ' +
       'annotation, e.g. "- [~] T003 … (claude, 2026-09-29 14:05)", so two models never grab the same ' +
-      'task. task is the ID like "T003".',
+      'task. task is the ID like "T003". When worktree is enabled, also creates/reuses the managed task ' +
+      'worktree `.relay/worktrees/T###` + branch `relay/T###` and returns controlRoot, executionRoot, ' +
+      'branch, baseSha; edit code/tests in executionRoot and run relay_session_end there (it resolves ' +
+      'controlRoot itself). Without a usable git HEAD (no git / unborn branch) worktree creation degrades ' +
+      'to a single-root claim with a WARN instead of failing. Use a unique model id per concurrent ' +
+      'session — two sessions with the same model id cannot prove claim ownership.',
     inputSchema: {
       type: 'object',
       properties: {
         root: { type: 'string', description: ROOT_DESC },
         task: { type: 'string', description: 'Task ID to claim, e.g. "T003".' },
         model: { type: 'string', description: 'Model/agent identifier claiming the task.' },
-        worktree: { type: 'boolean', description: 'Optional per-claim override. Default: manifest worktree.enabled (new init=true, legacy manifests=false).' },
+        worktree: { type: 'boolean', description: 'Optional per-claim override. Default: manifest worktree.enabled. Only JSON boolean true in the manifest enables it: the string "true", 1 and other truthy values are silently treated as false, unknown/misspelled keys are silently ignored, an invalid ttlHours falls back to 24 and cacheDir must be a controlRoot-relative path. New init=true; onboard/legacy manifests=false.' },
       },
       required: ['task', 'model'],
     },
@@ -201,8 +215,12 @@ export const TOOLS = [
     name: 'relay_worktree_cleanup',
     description:
       'Inspect or clean expired relay-managed task worktrees. Dry-run by default; confirm=true removes only ' +
-      'registered, inactive, clean, unlocked, expired paths inside the managed cache. Task branches are always ' +
-      'preserved. Never merges, rebases, pushes, or force-removes a worktree.',
+      'registered, inactive, clean, unlocked, expired paths inside the managed cache. "Clean" includes ' +
+      'untracked AND ignored content checks: a worktree containing ignored local files (.env, node_modules, ' +
+      'build output) is KEPT by default — never delete local secrets/deps automatically. Task branches are ' +
+      'always preserved and listed; merging them stays a human decision. Never merges, rebases, pushes, or ' +
+      'force-removes a worktree. There is no per-task status/abort/release subcommand: to recover, wait for ' +
+      'the claim TTL, finish via relay_session_end, or clean expired worktrees here.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -241,16 +259,31 @@ The tools enforce the loop; you cannot skip the gates.
 4. **Work(实现)** — Implement strictly to SPEC.md acceptance criteria and the task's
    \`验收:\` line; append significant decisions to DECISIONS.md as you make them.
    When claim returns a managed executionRoot, edit code and run tests there; controlRoot
-   remains the sole TASKS/LOG protocol surface.
+   remains the sole TASKS/LOG protocol surface. A task worktree is an independent
+   checkout: node_modules / .env are NOT shared with controlRoot — install/configure
+   dependencies inside executionRoot before running R8/tests.
    A \`test:<failing-test-path>\` acceptance means the previous session left a red test
    on purpose — your job is to make it green.
 5. **Verify(验证)** — Run \`relay_verify\` (full) until green; execute every \`修复:\`
-   instruction it gives. Never hand off a red repo.
+   instruction it gives. In a managed worktree the gate checks controlRoot (R1–R9) and the
+   task checkout (code rules), so R5/R6 commit evidence comes from both the control-plane
+   commit and the task-branch commit. Never hand off a red repo.
 6. **Exit(出场)** — Call \`relay_session_end\` LAST with model, summary, done_task,
-   negative_results and a concrete \`next\` handoff (title + acceptance). The green gate
-   updates controlRoot TASKS.md/LOG.md and commits executionRoot code. A task branch is
-   accepted, not merged; integration stays a human decision. Not green → nothing is
-   committed and you get a fix list instead.
+   negative_results and a concrete \`next\` handoff (title + acceptance). In a managed
+   worktree the green gate makes TWO commits: code on executionRoot branch \`relay/T###\`,
+   then controlRoot with ONLY TASKS.md/LOG.md updated; both SHAs are reported. In a managed
+   worktree, done_task MUST match the task registered for the executionRoot you call from;
+   a mismatched task id is rejected (no cross-task completion). The task
+   branch is accepted, not merged: merge it yourself with
+   \`git merge --no-ff relay/T###\` after reviewing \`git log controlRoot..relay/T###\`
+   (relay never merges/rebase/pushes or deletes task branches). Worktrees with ignored
+   local files are kept by cleanup. Not green / commit failed → isError, nothing is
+   marked done, claim lock kept, fix and re-run.
+
+Capabilities today: there is no abort/release tool for a claim, no per-task status
+tool and no sessionId. Recovery = wait for the claim TTL, finish via
+\`relay_session_end\`, or clean expired worktrees with \`relay_worktree_cleanup\`.
+Concurrent sessions MUST use distinct \`model\` ids (same id cannot prove ownership).
 
 Rules in short: state lives in files, not in your context. Trust nothing you did not
 read this session. The verify gate, not your judgment, decides when you may leave.
@@ -366,7 +399,7 @@ const RULES_TEXT = `# relay 规则表(R1–R9)
 
 | ID | 规则 | 机制 | 执法点 |
 |---|---|---|---|
-| R1 | AGENTS.md 必需且带 relay 标记 | AGENTS.md + manifest.entryFiles 其他入口逐个存在,首行含 \`<!-- relay:generated\`;entryFiles=[] 也不能豁免 AGENTS.md | relay_verify |
+| R1 | AGENTS.md 必需且带 relay 标记 | AGENTS.md + manifest.entryFiles 其他入口逐个存在,首行含 \`<!-- relay:generated\`;entryFiles=[] 也不能豁免。修复:缺失→\`relay_sync\`;已存在无标记→\`relay_onboard\`(原正文包进 user-rules)、manifest \`entryFilesTakeover:true\` 后 \`relay_sync\`、或手工加标记 | relay_verify |
 | R2 | 顶层结构白名单 | git ls-files 顶层条目 ⊆ manifest.allowedTopLevel;越界 → 修复:显式修宪(改 .relay/manifest.json) | relay_verify |
 | R3 | docs 命名+frontmatter | docs/**/*.md(templates/archive 除外)匹配 \`^[0-9]{2}-(sow\\|prd\\|ard\\|test\\|delivery)?-.*-v\\d+\\.\\d+\\.md$\`,或宽松模式(frontmatter 含 title+status;onboard 项目记录宽松位) | relay_verify |
 | R4 | 入口/START 无时变词 | AGENTS/CLAUDE/GEMINI/START 中 grep -E 'TODO\\|进行中\\|下周\\|待办:' 为空 | relay_verify |
@@ -379,9 +412,18 @@ const RULES_TEXT = `# relay 规则表(R1–R9)
 补充:
 
 - 检查输出:\`| ID | 结果 | 详情 |\` 表格 + 末尾汇总;fast 模式(full=false)跳过 R5/R6/R8。
-- **绿闸**:relay_session_end 默认全量 verify,全绿才允许 \`git add -A && git commit -m "relay: session end — <summary 首行>"\`;不绿 → isError + 修复清单 + 明确"未提交"。
+- **双根检查**:受管 worktree 中 controlRoot 跑全量 R1–R9(协议面),executionRoot 跑代码向检查 R1/R2/R3/R4/R8(跳过 R7/R9,避免读任务分支里的旧协议副本);两侧 ERROR 合并阻断。**成对证据**:managed 完成还须同时具备任务分支代码提交、controlRoot 完成提交(消息含 \`T### 完成\`)、controlRoot 的 TASKS/LOG 已提交干净、LOG 记录 branch+代码 SHA;任一缺失 → isError、不落完成状态、可重跑补交。R5/R6 仍按 controlRoot 历史计算(任务分支提交不进入其窗口),跨分支评估留待后续。
+- **绿闸与双提交**:relay_session_end 默认全量 verify,全绿且验收通过后 → 先在 executionRoot 提交代码(\`git add -A && git commit\`),成功后 controlRoot 只提交 \`TASKS.md\`+\`LOG.md\`(路径限定,提交信息含 \`T### 完成\`);输出两个 SHA(代码 SHA + 控制面 SHA)。controlRoot 提交失败 → isError + 保留认领锁,修复后重跑补交;\`autoCommit:false\` 时明确"控制面未提交"。
+- **根错配 fail-closed(严格)**:任务在 registry 仍有未完成记录时,从 controlRoot 完成出场**一律 isError**「根错配」,须在 executionRoot 出场(无"干净空树"例外);注册表缺失/损坏/记录丢失时用 \`git worktree list\` 反查 \`relay/<task>\` checkout 与受管缓存路径 \`.relay/worktrees/<task>\` 是否存在,命中同样拒绝;分支单独存在不算痕迹。managed 出场 HEAD==baseSha 且无改动 → 拒绝伪 SHA。未登记 linked worktree:完成出场 fail-closed,维护出场仅告警。
+- **未合并分支**:任务分支 \`relay/T###\` 验收通过 ≠ 已合并;claim/session_start/cleanup 会列出未合并分支,由人工 \`git merge --no-ff relay/T###\` 整合(relay 不自动 merge/rebase/push/删分支)。
 - **受保护路径**:\`verify\`(脚本)、\`.relay/**\`、\`*/tests/**\`、\`*.test.*\`、\`*.spec.*\` —— session_end 检测到本会话改动这些文件时不自动 commit,输出"涉及受保护路径(护栏),需人类批准后手动提交"并列出文件。
-- 降级:git 不存在或 commit 失败(无身份配置等)→ 文件照常更新,报告"提交跳过+原因",不置 isError。
+- 降级:git 不存在或 commit 失败(无身份配置等)→ 文件照常更新,报告"提交跳过+原因",不置 isError;claim 在无可用 HEAD/git 时降级单根认领并 WARN。
+- **worktree 配置真值表**:\`enabled\` 只认 JSON 布尔 \`true\`(字符串 \`"true"\`/数字 1 静默按 false);\`cacheDir\` 只允许 controlRoot 内相对路径(绝对路径/.. /盘符/控制字符/.git 前缀非法,在创建目录前校验);\`ttlHours\` 非数字回退 24;未知/拼错字段静默忽略;\`claim\` 的 \`worktree:true/false\` 可单次覆盖配置。
+- **清理保护**:含未跟踪或 ignored 本地内容(\`.env\`、\`node_modules\`、构建产物)的 worktree 默认保留,不自动删;删除只走非强制 \`git worktree remove\`,分支保留。
+- **升级与迁移**:旧项目升级先跑 \`relay_sync\`(重投影入口 + 幂等补 .gitignore 运行时基线 + AGENTS 迁移指引);\`relay_onboard\` 保留既有 manifest 配置(worktree/autoCommit/acceptance/protectedPaths/entryFilesTakeover 等不被重置);claim 也会幂等补 .gitignore 基线。
+- **registry fail-closed/恢复**:\`.relay/worktrees.json\` 损坏 → 完成出场/claim fail-closed 并提示备份或删除运行时注册表(不猜测受管状态);注册表缺失且目录是 linked worktree → 完成出场拒绝,可回 controlRoot 重新 \`relay_claim {worktree:true}\` 重建登记;cleanup 对未登记目录只报告不删。
+- **锁心跳与崩溃恢复(两把锁语义不同)**:仓库写锁 \`.relay/relay.lock\` 约 20s 心跳续租 + 写前 fencing(长 cleanup/出场不被 120s stale 误判,写入前发现被接管则拒绝);任务认领锁 \`.relay/claims/T###.lock\` **刻意关闭心跳**,保留 240min TTL 崩溃恢复(agent 崩溃后到期可被其他模型接管);锁为 JSON v2(兼容旧文本),model 换行/控制字符由输入净化拒收。
+- **尚未提供**:没有 claim 的 \`abort/release\`、没有按任务查询 \`status\` 的工具、没有 sessionId;可用恢复 = 认领锁 240min TTL 到期接管(可传 \`ttl_minutes\`)/ relay_session_end 出场释放 / relay_worktree_cleanup。并发会话必须用不同 model 标识(同名 model 无法区分持有者,会互锁)。
 `;
 
 /* ------------------------------ DISPATCH ------------------------------ */

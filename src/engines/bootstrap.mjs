@@ -16,6 +16,7 @@ import {
   backupFile, ensureDir, findSensitiveChanges, gitIdentityArgs, gitRun, isGitRepo, nowIso,
   readFileSafe, stamp, templatesDir, writeFileIfAbsent,
 } from '../util.mjs';
+import { ensureGitignoreBaseline } from '../config.mjs';
 import { generateEntryFiles } from './sync.mjs';
 
 const CORE_FILES = ['START.md', 'SPEC.md', 'DECISIONS.md', 'TASKS.md', 'LOG.md'];
@@ -170,20 +171,16 @@ const writeTemplatedFile = async ({ tdir, rel, target, root, vars, force, execut
 
 const bullet = (items) => (items.length ? items.map((f) => `- \`${f}\``) : ['- (无)']);
 
-// .gitignore 基线(H3):密钥/私钥/认领锁/杂物不得进 git;已存在则只补缺失行,绝不删改用户条目
-const GITIGNORE_BASELINE = ['.env', '.env.*', '*.key', '*.pem', 'node_modules/', '.DS_Store', '.relay/claims/', '.relay/relay.lock', '.relay/worktrees/', '.relay/worktrees.json', '.relay/worktrees.lock', 'coverage/', '*.log'];
+// .gitignore 基线(H3 + worktree):密钥/私钥/认领锁/注册表/缓存目录不得进 git。
+// 基线在 config.mjs 单点定义;init/onboard/sync/restructure 共用同一实现,只追加缺失行。
+// 返回报告行(未变化返回 null,保持原报告文案不变)。
 const ensureGitignore = async (root) => {
-  const p = join(root, '.gitignore');
-  const cur = await readFileSafe(p, null);
-  if (cur === null) {
-    await writeFile(p, `${GITIGNORE_BASELINE.join('\n')}\n`, 'utf8');
-    return '.gitignore(新建,密钥/杂物基线)';
+  const r = await ensureGitignoreBaseline(root);
+  if (r.status === 'created') return '.gitignore(新建,密钥/杂物基线)';
+  if (r.status === 'appended') {
+    return `.gitignore(补 ${r.added.length} 条基线:${r.added.slice(0, 4).join(', ')}${r.added.length > 4 ? '…' : ''})`;
   }
-  const have = new Set(cur.split('\n').map((s) => s.trim()).filter(Boolean));
-  const missing = GITIGNORE_BASELINE.filter((b) => !have.has(b));
-  if (!missing.length) return null;
-  await writeFile(p, `${cur.replace(/\s*$/, '')}\n${missing.join('\n')}\n`, 'utf8');
-  return `.gitignore(补 ${missing.length} 条基线:${missing.slice(0, 4).join(', ')}${missing.length > 4 ? '…' : ''})`;
+  return null;
 };
 
 // ---------------------------------------------------------------------------
@@ -401,23 +398,32 @@ export const relayOnboard = async (args = {}) => {
       }
     }
 
-    // 5) manifest:allowedTopLevel = 实际顶层 ∪ 默认;docsPhases = 实际 docs 布局或默认
+    // 5) manifest:allowedTopLevel = 实际顶层 ∪ 默认;docsPhases = 实际 docs 布局或默认。
+    //    P2-06:以既有 manifest 为基做合并,只覆盖 onboard 负责的元字段,其余配置
+    //    (worktree/autoCommit/acceptance/protectedPaths/entryFilesTakeover/codeRoots/docsIgnore/
+    //     commitMessageTemplate 等)原样保留 —— 升级重跑 onboard 不得静默关掉 worktree 或护栏配置。
     const giNote = await ensureGitignore(root);
     if (giNote) created.push(giNote);
-    const docsPhases = docs.exists && Array.isArray(docs.phases) && docs.phases.length
-      ? docs.phases : [...DEFAULT_DOCS_PHASES];
     const oldManifest = await readManifest(root);
+    const old = oldManifest && typeof oldManifest === 'object' && !Array.isArray(oldManifest) ? oldManifest : {};
+    const oldDocsPhases = Array.isArray(old.docsPhases) ? old.docsPhases.filter((s) => typeof s === 'string') : [];
+    const docsPhases = docs.exists && Array.isArray(docs.phases) && docs.phases.length
+      ? docs.phases : (oldDocsPhases.length ? oldDocsPhases : [...DEFAULT_DOCS_PHASES]);
     const entryFiles = [...DEFAULT_ENTRY_FILES];
-    const oldEntries = oldManifest && Array.isArray(oldManifest.entryFiles)
-      ? oldManifest.entryFiles : [];
+    const oldEntries = Array.isArray(old.entryFiles) ? old.entryFiles : [];
     for (const f of oldEntries) {
       if (typeof f === 'string' && f && !entryFiles.includes(f)) entryFiles.push(f);
     }
+    // allowedTopLevel 只增不减:实际顶层 ∪ 契约默认 ∪ 既有白名单(restructure 修宪结果不丢)
+    const oldAllowed = Array.isArray(old.allowedTopLevel) ? old.allowedTopLevel.filter((s) => typeof s === 'string') : [];
+    const ONBOARD_MANAGED_KEYS = ['version', 'projectName', 'entryFiles', 'allowedTopLevel', 'docsPhases', 'onboardedAt', 'relayHome'];
+    const preservedKeys = Object.keys(old).filter((k) => !ONBOARD_MANAGED_KEYS.includes(k)).sort();
     const manifest = {
+      ...old,
       version: 1,
       projectName: basename(root),
       entryFiles,
-      allowedTopLevel: mergeAllowed(top),
+      allowedTopLevel: mergeAllowed([...(top || []), ...oldAllowed]),
       docsPhases,
       onboardedAt: nowIso(),
       relayHome: dirname(tdir),
@@ -450,6 +456,13 @@ export const relayOnboard = async (args = {}) => {
       attention.push(`\`${r.file}\` 已被接管:原文件备份于 \`${relOf(root, r.backup)}\`,新文件 = relay 标记 + 「开工前先读 ./START.md」 + 原正文`);
     }
     if (manifestBackup) attention.push(`原 \`.relay/manifest.json\` 已备份(\`${relOf(root, manifestBackup)}\`)后重写为合并结果`);
+    if (preservedKeys.length) {
+      attention.push(`既有 manifest 配置已保留(${preservedKeys.length} 个键:${preservedKeys.join(', ')});onboard 只更新 version/projectName/entryFiles/allowedTopLevel/docsPhases/onboardedAt/relayHome`);
+    }
+    if (preservedKeys.includes('worktree')) {
+      const wt = old.worktree && typeof old.worktree === 'object' ? old.worktree : null;
+      attention.push(`worktree 配置保持不变(enabled=${wt && wt.enabled === true ? 'true' : 'false'};改配置请手工编辑 manifest,onboard 不会重置它)`);
+    }
     if (keptVerify) attention.push('`verify` 已存在,未覆盖;如需 relay 托管请人工核对(模板见 templates/verify.sh)');
     if (docs.exists) {
       if (docsPhases.length && JSON.stringify(docsPhases) !== JSON.stringify(DEFAULT_DOCS_PHASES)) {
