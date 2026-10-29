@@ -5,6 +5,8 @@
 
 ## [Unreleased]
 
+## [1.2.0] - 2026-10-29
+
 ### Added
 - 跨平台 MCP 安装器 `scripts/install-mcp.mjs`:自动探测当前 `node` 与仓库绝对路径,生成标准 `mcpServers` 配置;支持 `--print/--print-json/--target json|claude|gemini|codex|dsh|auto`、`--dry-run` 与启动握手预检,Windows/macOS/Linux 通用,不绑定单一 harness
 - 完整任务级 worktree 生命周期(方案 B):claim 创建/复用 `relay/T###` 与缓存目录,返回 controlRoot/executionRoot/branch/baseSha;新 init 默认启用,既有 manifest 缺省关闭,可按项目或单次认领覆盖
@@ -22,6 +24,7 @@
 - `relay_claim`/`relay_session_end`/`relay_worktree_cleanup`/`relay_sync` 的 MCP 描述与 `relay_rules`/`relay://protocol` 同步上述语义;`manifest.worktree` 配置真值表(仅布尔 true、未知字段静默忽略、ttlHours 回退、cacheDir 相对路径)写入 README/CONTRACT
 
 ### Fixed
+- worktree 冒烟 L2 用例改为换行无关插入:Windows `core.autocrlf=true` 时 `TASKS.md` 检出为 CRLF,原字符串替换不命中,活跃任务被误判为可清理(测试脚本缺陷,运行时无影响)
 - `relay_onboard` 合并既有 manifest(worktree/autoCommit/acceptance/protectedPaths/entryFilesTakeover 等保留,只协调 version/projectName/entryFiles/allowedTopLevel/docsPhases/onboardedAt/relayHome),升级重跑不再静默关闭 worktree/护栏配置
 - `relay_sync` 作为升级/修复入口幂等补 `.gitignore` 运行时基线(worktree 缓存/注册表/密钥),并对"已存在无 relay 标记的 AGENTS.md"输出可执行迁移步骤(onboard 接管 / `entryFilesTakeover:true` / 手工加标记),R1 修复指令不再空转;`relay_restructure` 提交前同样补基线
 - 新增 `scripts/smoke-compat.mjs` 覆盖 onboard 保配置、sync 迁移与 .gitignore 基线、contract/README 关键文案断言,并接入 `npm test`
