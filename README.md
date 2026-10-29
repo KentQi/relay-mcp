@@ -42,6 +42,27 @@ preset 可选:`node`(默认,交付即 `npm test` 全绿)/ `minimal`(仅接力层
 
 **AGENTS.md 是必需的项目规范入口**,`entryFiles: []` 不能绕过它;CLAUDE.md / GEMINI.md 只是可选适配入口。规则修改仍以上游 `templates/AGENTS.md.tpl` 为单源,项目自定义内容放在 AGENTS.md 的 `user-rules` 保留区。旧项目升级时若 `AGENTS.md` 已存在但无 relay 标记,R1 会报错且 `relay_sync` 按非破坏原则不改写它——按 sync 输出执行迁移(`relay_onboard` 接管 / `entryFilesTakeover: true` / 手工加标记),不要把 R1 修复指令反复空转。
 
+### 接入任意 MCP harness(跨平台)
+
+仓库自带零依赖安装器 `scripts/install-mcp.mjs`,Windows / macOS / Linux 通用,不绑定某一个 harness:
+
+```sh
+node scripts/install-mcp.mjs                         # 打印标准 mcpServers 配置 + 各 harness 命令（默认真实握手预检）
+node scripts/install-mcp.mjs --print-json            # 只输出 mcpServers JSON，便于管道/复制
+node scripts/install-mcp.mjs --target json --config ~/.cursor/mcp.json
+node scripts/install-mcp.mjs --target claude --scope user
+node scripts/install-mcp.mjs --target gemini --scope user
+node scripts/install-mcp.mjs --target codex
+node scripts/install-mcp.mjs --target dsh --dsh-profile desktop
+node scripts/install-mcp.mjs --target auto           # 只探测本机 harness 并给建议，不改配置
+```
+
+- 自动使用**当前 node 的绝对路径 + 本仓库绝对路径**生成配置,不写死任何机器路径;Windows 下为 `node.exe`。
+- `--dry-run` 只打印将写入/执行的命令;`--skip-preflight` 跳过启动握手(不推荐)。
+- 未内置适配的 harness:`--print-json` 得到 `{ "mcpServers": { "relay-mcp": { "command": "...", "args": [".../src/index.mjs"] } } }`,粘贴进其配置即可。
+- 所有工具都接受 `root` 参数;若 harness 不支持 `cwd`,调用时显式传目标项目路径。
+- DSH 适配器会生成配置型 bundle 并调用 `dsh plugin add`,同 `serverName` 的旧 bundle 自动清理;重启 DSH 后出现 `mcp__relay-mcp__*` 工具。
+
 ### 任务级 worktree 生命周期
 
 `relay_claim {root, task, model}` 在项目启用 worktree 时创建或复用 `.relay/worktrees/T###` 与 `relay/T###` 分支,并返回两个根目录:
@@ -189,9 +210,13 @@ Quick start:
 
 ```sh
 git clone https://github.com/KentQi/relay-mcp.git
-claude mcp add relay -- node $PWD/relay-mcp/src/index.mjs
+cd relay-mcp
+node scripts/install-mcp.mjs                  # cross-platform: prints generic JSON + per-harness commands
+node scripts/install-mcp.mjs --target claude --scope user   # or gemini / codex / json / dsh
 # then, in any model session: "按 START.md 干活" / "follow START.md"
 ```
+
+The installer detects the current `node` and repo absolute paths at runtime (no hard-coded machine paths), supports `--dry-run` and `--print-json` for any MCP harness not built in, and never modifies a harness config without an explicit `--target`.
 
 Design derivation & interface contract (Chinese): [docs-design/](docs-design/). Contributions: [CONTRIBUTING.md](CONTRIBUTING.md). Security: [SECURITY.md](SECURITY.md).
 
