@@ -7,6 +7,7 @@
   "author": "kent <kirroyu@126.com>",
   "license": "MIT",
   "scripts": {
-    "test": "node scripts/smoke.mjs && node scripts/smoke-patches.mjs && node scripts/smoke-worktrees.mjs && node scripts/smoke-compat.mjs"
+    "install:mcp": "node scripts/install-mcp.mjs",
+    "test": "node scripts/smoke.mjs && node scripts/smoke-patches.mjs && node scripts/smoke-worktrees.mjs && node scripts/smoke-compat.mjs && node scripts/smoke-install-mcp.mjs"
   }
 }

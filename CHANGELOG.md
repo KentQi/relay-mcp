@@ -6,6 +6,7 @@
 ## [Unreleased]
 
 ### Added
+- 跨平台 MCP 安装器 `scripts/install-mcp.mjs`:自动探测当前 `node` 与仓库绝对路径,生成标准 `mcpServers` 配置;支持 `--print/--print-json/--target json|claude|gemini|codex|dsh|auto`、`--dry-run` 与启动握手预检,Windows/macOS/Linux 通用,不绑定单一 harness
 - 完整任务级 worktree 生命周期(方案 B):claim 创建/复用 `relay/T###` 与缓存目录,返回 controlRoot/executionRoot/branch/baseSha;新 init 默认启用,既有 manifest 缺省关闭,可按项目或单次认领覆盖
 - 新增第 10 个工具 `relay_worktree_cleanup`:默认 dry-run,显式确认或主仓库 session_start 自动清理过期、非活跃、干净的受管目录;只走非强制 `git worktree remove`,保留分支,绝不自动 merge/rebase/push
 - session 双根协议:controlRoot 唯一维护 TASKS/LOG/认领锁/注册表,executionRoot 执行测试和代码提交;代码提交失败不盖完成章,完成不等于合并
