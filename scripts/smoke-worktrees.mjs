@@ -93,7 +93,7 @@ try {
     const escapeTarget = mkTmp('escape-target');
     const escaped = addWorktree(root, 'T009', escapeTarget);
     writeFileSync(path.join(root, 'TASKS.md'), readFileSync(path.join(root, 'TASKS.md'), 'utf8')
-      .replace('## 进行中\n', '## 进行中\n- [~] T005 长任务  (model-A, 2026-10-29 00:00)\n'));
+      .replace(/^## 进行中(\r?\n)/m, '## 进行中$1- [~] T005 长任务  (model-A, 2026-10-29 00:00)$1'));
     writeFileSync(path.join(root, dirty.path, 'untracked.txt'), 'do not delete\n');
     git(root, 'worktree', 'lock', path.resolve(root, locked.path));
     writeFileSync(path.join(root, '.relay', 'worktrees.json'), `${JSON.stringify({ version: 1, worktrees: [expired, fresh, active, dirty, locked, escaped] }, null, 2)}\n`);
