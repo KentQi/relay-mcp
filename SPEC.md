@@ -12,10 +12,13 @@
 
 ## 2. 验收标准(编号,供 TASKS 与交付报告引用)
 
-- AC1: `npm test`(端到端冒烟,当前 81 断言)在 Node 22 / 24 / 26 三个运行时全绿——本仓库自身交付的门。
+- AC1: `npm test`(三套端到端冒烟,当前 182 断言)在 Node 22 / 24 / 26 三个运行时全绿——本仓库自身交付的门。
 - AC2: 从未见过本项目的新模型,只说一句"按 START.md 干活"即可正确接力:进场简报 → 认领 → 小步实现 → 自验 → 出场盖戳,全程不绿不提交。
 - AC3: 每次引擎改动经 `relay_session_end` 出场:结构检查(R1-R9)+ 验收执行门(npm test)双绿才入库;引擎自举,吃自己的狗粮。
 - AC4: 疑似密钥与受保护路径(verify / .relay / tests)的改动永不自动入库,人工批准通道常在。
+- AC5: AGENTS.md 是必需的项目规范入口,`entryFiles: []` 不能豁免;CLAUDE.md/GEMINI.md 是可选适配入口。
+- AC6: 启用 worktree 后,claim 创建或复用 `relay/T###` 任务目录;controlRoot 唯一维护 TASKS/LOG,executionRoot 执行代码与验收;过期、非活跃、干净的受管目录可清理且分支保留,不自动 merge/rebase/push。
+- AC7: 任务 TTL 接管、完成权限与锁释放均验证持有者;提交失败不得将 controlRoot 的任务标为完成。
 
 ## 3. 边界约束
 

@@ -51,10 +51,9 @@ const checkR1 = async (root, manifest) => {
   if (!manifest) {
     return bad('R1', 'ERROR', '未找到 .relay/manifest.json,无法确定入口文件清单', '先运行 relay_init(0→1 新项目)或 relay_onboard(老项目接入)生成 manifest');
   }
-  const files = Array.isArray(manifest.entryFiles) ? manifest.entryFiles.filter((f) => typeof f === 'string') : [];
-  if (!files.length) {
-    return skip('R1', 'manifest.entryFiles 为空,无入口要求', '如需单源投影,在 manifest.entryFiles 登记入口文件后运行 relay_sync');
-  }
+  // AGENTS.md 是项目规范入口,任何配置都不能把它从必需清单中移除;其余入口只是适配指针。
+  const configured = Array.isArray(manifest.entryFiles) ? manifest.entryFiles.filter((f) => typeof f === 'string') : [];
+  const files = [...new Set(['AGENTS.md', ...configured])];
   const missing = [];
   const unmarked = [];
   for (const f of files) {

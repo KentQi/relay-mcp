@@ -252,7 +252,7 @@ export const relayRestructure = async (args = {}) => {
       '### 下一棒', `1. \`relay_session_start\` 进场 → 认领 ${taskId},逐个修复 import/脚本引用`, '2. `relay_verify` 全绿 + 测试通过后 `relay_session_end` 出场',
     ].join('\n'));
     } finally {
-      await releaseRepoLock(root);
+      await releaseRepoLock(root, rLock.token);
     }
   } catch (e) {
     return err(`relay_restructure 执行失败:${firstLine(e && e.message) || String(e)}`);

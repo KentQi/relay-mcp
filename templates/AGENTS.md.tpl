@@ -17,7 +17,7 @@
 ## 规则速查 R1-R9
 | ID | 一句话 |
 |---|---|
-| R1 | 本文件与 CLAUDE/GEMINI 入口齐全,且首行带 relay 生成标记 |
+| R1 | AGENTS.md 必需;其与已配置适配入口均须存在且首行带 relay 生成标记 |
 | R2 | 顶层目录白名单;越界须显式修 `.relay/manifest.json`(修宪) |
 | R3 | docs 文档命名(`NN-类型-主题-vX.Y.md`)与 frontmatter 合规 |
 | R4 | 入口文件与 START 保持常青,不得出现时变词汇 |

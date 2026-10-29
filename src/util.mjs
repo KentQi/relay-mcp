@@ -6,6 +6,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { execFile, execFileSync } from 'node:child_process';
 import { promisify } from 'node:util';
+import { randomUUID } from 'node:crypto';
 
 const execFileAsync = promisify(execFile);
 
@@ -157,23 +158,29 @@ export const acquireRepoLock = async (root, holder, { waitMs = 15_000 } = {}) =>
   await ensureDir(path.join(root, '.relay'));
   const p = path.join(root, REPO_LOCK_REL);
   const deadline = Date.now() + waitMs;
+  const token = randomUUID();
   for (;;) {
     try {
       const h = await fsOpen2(p, 'wx');
-      await h.writeFile(`${holder}\n${new Date().toISOString()}\n`, 'utf8');
+      await h.writeFile(`${holder}\n${new Date().toISOString()}\n${token}\n`, 'utf8');
       await h.close();
-      return { ok: true };
+      return { ok: true, token };
     } catch (e) {
       if (!e || e.code !== 'EEXIST') throw e;
       let ageMs = Infinity;
       let lockHolder = '?';
+      let observed = '';
       try {
         const st = await stat(p);
         ageMs = Date.now() - st.mtimeMs;
-        lockHolder = String(await readFile(p, 'utf8')).split('\n')[0].trim() || '?';
-      } catch { /* 锁刚好消失 → 立即重试抢位 */ }
+        observed = String(await readFile(p, 'utf8'));
+        lockHolder = observed.split('\n')[0].trim() || '?';
+      } catch { continue; /* 锁刚好消失 → 立即重试抢位 */ }
       if (ageMs > STALE_REPO_LOCK_MS) {
-        try { await unlink(p); } catch { /* 别的等待者已接管 */ }
+        // 删除前复核内容,避免把等待期间换上的新锁当成旧锁；释放另由 token 严格守门。
+        try {
+          if (String(await readFile(p, 'utf8')) === observed) await unlink(p);
+        } catch { /* 别的等待者已接管 */ }
         continue;
       }
       if (Date.now() >= deadline) return { ok: false, holder: lockHolder, ageMs };
@@ -182,6 +189,13 @@ export const acquireRepoLock = async (root, holder, { waitMs = 15_000 } = {}) =>
   }
 };
 
-export const releaseRepoLock = async (root) => {
-  try { await unlink(path.join(root, REPO_LOCK_REL)); } catch { /* 锁不在场 */ }
+export const releaseRepoLock = async (root, token) => {
+  if (!token) return false;
+  const p = path.join(root, REPO_LOCK_REL);
+  try {
+    const lines = String(await readFile(p, 'utf8')).split('\n');
+    if (lines[2] !== token) return false;
+    await unlink(p);
+    return true;
+  } catch { return false; /* 锁不在场或已换持有者 */ }
 };

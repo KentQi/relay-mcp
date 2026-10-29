@@ -1,5 +1,10 @@
 # 会话日志(最新在上)
 
+## 2026-10-29 11:56 | model=kimi-work | task=T012 完成
+- 摘要: 任务级 worktree 生命周期采用方案 B:claim 创建/复用 relay/T###,controlRoot 管理 TASKS/LOG,executionRoot 执行验收与代码提交;过期非活跃缓存经 Git 非强制删除并保留分支,不自动 merge/rebase/push;AGENTS.md 成为不可豁免的必需入口;修复 TTL 接管、非持有者完成与锁所有权;统一三套冒烟测试
+- 负结果: macOS 临时目录 /var 与 /private/var 指向同一位置,Git 根目录与清理校验统一使用 realpath,跨路径断言也必须比较规范化路径
+- 留给下一个: 功能分支与 PR 供人工审核;任务分支已验收不等于已合并,缓存清理不删除任务分支
+
 ## 2026-09-29 15:36 | model=zcode-glm | task=T010 完成
 - 摘要: T010 一致性加固:仓库级出场锁 .relay/relay.lock(TASKS/LOG 写全面串行化,双进程并发回归零丢失);幂等出场(重复调用不重复盖戳/记日志/插 next);TTL 接管改 unlink+wx 原子竞争;简报带出负结果与交接提示、崩溃恢复优先;认领占位 model 拒收;gitignore 基线与护栏豁免 relay.lock;START 措辞修正(曾触发 R4——宪法连模板措辞都管)
 - 负结果: R4 时变词检查对模板措辞同样执法:START.md 写「进行中」三字即红——入口/引导文件措辞必须 timeless,连区名都得避开(改称已被认领的任务)

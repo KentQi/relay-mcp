@@ -61,7 +61,7 @@ export const TOOLS = [
   {
     name: 'relay_sync',
     description:
-      'Regenerate entry files (AGENTS.md / CLAUDE.md / GEMINI.md — exactly manifest.entryFiles) from ' +
+      'Regenerate AGENTS.md (always required) and the optional adapter entry files in manifest.entryFiles from ' +
       'the single source of truth, and report drift (which entry files differed from the projection). ' +
       'Single-source projection keeps CI at zero diff: call this after editing canonical spec content ' +
       'or when an entry file was hand-edited and must be re-projected.',
@@ -92,7 +92,9 @@ export const TOOLS = [
     description:
       'MUST be the last call of every work session (step 6 of the six-step protocol). Green gate: runs ' +
       'FULL verify first; only if all checks pass does it update TASKS.md (marks done_task complete ' +
-      'with date+sha) and LOG.md (prepends the session entry), then `git add -A && git commit`. If ' +
+      'with date) and LOG.md (prepends the session entry), then `git add -A && git commit`. In a managed ' +
+      'worktree, done_task must match the executionRoot branch: commit code there first, then update ' +
+      'controlRoot TASKS/LOG; the branch stays accepted but unmerged. If ' +
       'verify is not green → isError + fix list + explicitly NOT committed. Handoff quality is the ' +
       'contract: fill `next` (title + acceptance a stranger can verify) and negative_results (things ' +
       'that do NOT work, so the next model does not retry them). Protected paths (verify script, ' +
@@ -190,8 +192,24 @@ export const TOOLS = [
         root: { type: 'string', description: ROOT_DESC },
         task: { type: 'string', description: 'Task ID to claim, e.g. "T003".' },
         model: { type: 'string', description: 'Model/agent identifier claiming the task.' },
+        worktree: { type: 'boolean', description: 'Optional per-claim override. Default: manifest worktree.enabled (new init=true, legacy manifests=false).' },
       },
       required: ['task', 'model'],
+    },
+  },
+  {
+    name: 'relay_worktree_cleanup',
+    description:
+      'Inspect or clean expired relay-managed task worktrees. Dry-run by default; confirm=true removes only ' +
+      'registered, inactive, clean, unlocked, expired paths inside the managed cache. Task branches are always ' +
+      'preserved. Never merges, rebases, pushes, or force-removes a worktree.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        root: { type: 'string', description: ROOT_DESC },
+        confirm: { type: 'boolean', description: 'false/omitted = dry-run; true = execute safe removals.' },
+        ttl_hours: { type: 'number', description: 'Optional expiration override in hours (default: manifest worktree.ttlHours, 24).' },
+      },
     },
   },
   {
@@ -222,14 +240,17 @@ The tools enforce the loop; you cannot skip the gates.
    \`relay_claim\` (marks the task with your model name + timestamp) before starting work.
 4. **Work(实现)** — Implement strictly to SPEC.md acceptance criteria and the task's
    \`验收:\` line; append significant decisions to DECISIONS.md as you make them.
+   When claim returns a managed executionRoot, edit code and run tests there; controlRoot
+   remains the sole TASKS/LOG protocol surface.
    A \`test:<failing-test-path>\` acceptance means the previous session left a red test
    on purpose — your job is to make it green.
 5. **Verify(验证)** — Run \`relay_verify\` (full) until green; execute every \`修复:\`
    instruction it gives. Never hand off a red repo.
 6. **Exit(出场)** — Call \`relay_session_end\` LAST with model, summary, done_task,
    negative_results and a concrete \`next\` handoff (title + acceptance). The green gate
-   updates TASKS.md/LOG.md and commits. Not green → nothing is committed and you get a
-   fix list instead.
+   updates controlRoot TASKS.md/LOG.md and commits executionRoot code. A task branch is
+   accepted, not merged; integration stays a human decision. Not green → nothing is
+   committed and you get a fix list instead.
 
 Rules in short: state lives in files, not in your context. Trust nothing you did not
 read this session. The verify gate, not your judgment, decides when you may leave.
@@ -345,7 +366,7 @@ const RULES_TEXT = `# relay 规则表(R1–R9)
 
 | ID | 规则 | 机制 | 执法点 |
 |---|---|---|---|
-| R1 | 入口文件齐全且带 relay 标记 | manifest.entryFiles 逐个存在 + 首行含 \`<!-- relay:generated\` | relay_verify |
+| R1 | AGENTS.md 必需且带 relay 标记 | AGENTS.md + manifest.entryFiles 其他入口逐个存在,首行含 \`<!-- relay:generated\`;entryFiles=[] 也不能豁免 AGENTS.md | relay_verify |
 | R2 | 顶层结构白名单 | git ls-files 顶层条目 ⊆ manifest.allowedTopLevel;越界 → 修复:显式修宪(改 .relay/manifest.json) | relay_verify |
 | R3 | docs 命名+frontmatter | docs/**/*.md(templates/archive 除外)匹配 \`^[0-9]{2}-(sow\\|prd\\|ard\\|test\\|delivery)?-.*-v\\d+\\.\\d+\\.md$\`,或宽松模式(frontmatter 含 title+status;onboard 项目记录宽松位) | relay_verify |
 | R4 | 入口/START 无时变词 | AGENTS/CLAUDE/GEMINI/START 中 grep -E 'TODO\\|进行中\\|下周\\|待办:' 为空 | relay_verify |
@@ -375,6 +396,7 @@ const ENGINE_OF = {
   relay_session_end: { module: './engines/session.mjs', fn: 'relaySessionEnd' },
   relay_claim: { module: './engines/session.mjs', fn: 'relayClaim' },
   relay_restructure: { module: './engines/restructure.mjs', fn: 'relayRestructure' },
+  relay_worktree_cleanup: { module: './engines/worktree.mjs', fn: 'relayWorktreeCleanup' },
 };
 
 const engineModuleCache = new Map();

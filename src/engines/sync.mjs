@@ -197,8 +197,9 @@ export const relaySync = async (args = {}) => {
     catch (e) {
       return err(`.relay/manifest.json 解析失败:${firstLine(e && e.message)}。请人工修复,或重新 relay_init / relay_onboard。`);
     }
-    // P5:manifest.entryFiles 原样取用;空数组 = 「不投影任何入口文件」,不再回落默认三份
-    const entryFiles = Array.isArray(manifest.entryFiles) ? manifest.entryFiles : [...DEFAULT_ENTRY_FILES];
+    // AGENTS.md 永远必需;entryFiles 只控制其他适配入口,空数组不再表示「不投影任何入口」。
+    const configured = Array.isArray(manifest.entryFiles) ? manifest.entryFiles : DEFAULT_ENTRY_FILES;
+    const entryFiles = [...new Set(['AGENTS.md', ...configured])];
     const takeover = manifest.entryFilesTakeover === true;
 
     // 仓库级写锁:入口重投影期间独占(与 session_end / claim 同一把)
@@ -251,7 +252,7 @@ export const relaySync = async (args = {}) => {
     lines.push('', '下一步:可运行 relay_verify 复核 R1(入口文件标记)。');
     return ok(lines.join('\n'));
     } finally {
-      await releaseRepoLock(root);
+      await releaseRepoLock(root, sLock.token);
     }
   } catch (e) {
     return err(`relay_sync 执行失败:${firstLine(e && e.message) || String(e)}`);

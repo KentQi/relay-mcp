@@ -8,3 +8,6 @@ node_modules/
 coverage/
 *.log
 .relay/relay.lock
+.relay/worktrees/
+.relay/worktrees.json
+.relay/worktrees.lock

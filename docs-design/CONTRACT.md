@@ -10,6 +10,18 @@
 - 每个文件写完必须 `node --check <file>` 通过
 - 模板在**运行时**从 `templates/` 读取(用 `templatesDir()` 解析),绝不硬编码模板内容
 
+## 2026-10-29 生命周期补充契约
+
+以下为现行增量,覆盖本文历史 memo 中的对应字段:
+
+- 第 10 个工具 `relay_worktree_cleanup {root, confirm:boolean?, ttl_hours:number?}`:默认 dry-run;仅清理已登记、过期、非活跃、干净、未 locked、realpath 位于受管缓存且分支仍存在的 worktree。删除只走非强制 `git worktree remove`,分支保留;错误逐项报告。
+- `relay_claim` 新增 `worktree:boolean?`,单次覆盖 `manifest.worktree.enabled`;新 init 默认 true,既有 manifest 缺省 false。返回 controlRoot、executionRoot、`relay/T###` 分支和真实 baseSha。
+- 引擎新增 `src/engines/worktree.mjs`,管理双根解析、原子注册表、任务目录复用和安全清理;注册表与缓存默认 Git 忽略。controlRoot 唯一维护 TASKS/LOG、认领锁和注册表,executionRoot 负责代码、验收和任务分支提交。
+- 任务分支代码提交成功才更新 controlRoot 的完成状态;提交失败不改 TASKS/LOG、保留认领锁。完成不等于合并,不自动 merge/rebase/push 或删除分支。
+- R1 无条件要求 AGENTS.md 存在且首行带 relay 标记;`entryFiles: []` 不再豁免,其他适配入口仍按配置生成。
+- 认领锁和仓库锁含唯一 token,释放需匹配 owner;TTL 接管后旧句柄不得删除新锁。session_end 仅允许原持有者完成 `[~]` 任务;锁丢失但 TASKS 活跃时按 TASKS 时间戳判定同一 TTL,时间戳无效则拒绝自动接管。
+- worktree 生命周期与既有两套冒烟统一由 `npm test` 执行,CI 三版本矩阵继续使用同一入口。
+
 ## 目录与文件归属( exclusive,谁的东西谁写,别人不碰)
 
 ```

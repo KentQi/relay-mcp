@@ -11,6 +11,9 @@ import { join } from 'node:path';
 export const DEFAULT_CODE_ROOTS = ['src', 'lib', 'app'];      // verify.mjs R5 的 /^(src|lib|app)\//
 export const DEFAULT_DOCS_ROOTS = ['docs'];                    // verify.mjs R6 的 startsWith('docs/')
 export const DEFAULT_COMMIT_TEMPLATE = 'relay: session end — {{task}}{{summary}}';
+export const DEFAULT_WORKTREE_CONFIG = Object.freeze({
+  enabled: false, cacheDir: '.relay/worktrees', ttlHours: 24, autoCleanup: true,
+});
 
 // —— glob → RegExp(.gitignore 语义的一个够用子集)——
 //   **  跨 '/' 匹配任意长度(独占一段时等价于「可省略该段」)

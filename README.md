@@ -4,7 +4,7 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Node](https://img.shields.io/badge/node-%E2%89%A518-brightgreen)](package.json)
 [![deps](https://img.shields.io/badge/dependencies-0-blue)](package.json)
-[![tests](https://img.shields.io/badge/self--hosted-81%20checks%20green-success)](#自举)
+[![tests](https://img.shields.io/badge/self--hosted-182%20checks%20green-success)](#自举)
 
 **[English](#english) | [中文](#中文)**
 
@@ -39,6 +39,38 @@ relay 的答案:仓库内核心五件(START / SPEC / DECISIONS / TASKS / LOG)+ `
 preset 可选:`node`(默认,交付即 `npm test` 全绿)/ `minimal`(仅接力层,不建代码骨架);自定义 preset = 在 `templates/presets/` 下放一个目录即可。
 
 辅助工具:`relay_sync`(重投影入口文件,报告漂移;AGENTS.md 的 `user-rules` 保留区原样携带)、`relay_claim`(并行认领,原子锁 `.relay/claims/T###.lock`,TTL 4 小时,到期可接管)+ 仓库级出场锁 `.relay/relay.lock`(TASKS/LOG 写串行化,双进程并发实测零丢失)与幂等出场(重复调用不重复记账)、`relay_verify`(随时机检)、`relay_rules`(规则 ID 表)。
+
+**AGENTS.md 是必需的项目规范入口**,`entryFiles: []` 不能绕过它;CLAUDE.md / GEMINI.md 只是可选适配入口。规则修改仍以上游 `templates/AGENTS.md.tpl` 为单源,项目自定义内容放在 AGENTS.md 的 `user-rules` 保留区。
+
+### 任务级 worktree 生命周期
+
+`relay_claim {root, task, model}` 在项目启用 worktree 时创建或复用 `.relay/worktrees/T###` 与 `relay/T###` 分支,并返回两个根目录:
+
+- **controlRoot**:主工作树,TASKS / LOG、认领锁和注册表的唯一控制面。
+- **executionRoot**:任务工作树,代码修改、测试和任务分支提交的执行面。
+
+新 `relay_init` 项目默认启用;既有项目缺少 `worktree` 配置时默认关闭,不会改变原认领行为。需要时在 `.relay/manifest.json` 显式配置:
+
+```json
+{
+  "worktree": {
+    "enabled": true,
+    "cacheDir": ".relay/worktrees",
+    "ttlHours": 24,
+    "autoCleanup": true
+  }
+}
+```
+
+`relay_claim` 的 `worktree: true/false` 可单次覆盖配置。session_end 先提交 executionRoot 的代码,再更新 controlRoot 的任务与日志;提交失败不标完成,认领现场保留。LOG 记录任务分支与完整 SHA。**已验收不等于已合并:relay 不自动 merge / rebase / push,也不删除任务分支。**
+
+`relay_worktree_cleanup {root}` 默认只预览;`confirm: true` 才清理。主仓库 session_start 可按 `autoCleanup` 自动清理,失败只报告、不阻断简报。只有已登记、超过 TTL、非活跃、干净、未 locked 且 realpath 仍在受管缓存中的 worktree 才会通过非强制 `git worktree remove` 删除;当前 executionRoot、活跃或 dirty 现场、路径越界与未登记目录均保留。分支保留,后续认领可复用原分支。
+
+CLI 同样可用:
+
+```sh
+node src/cli.mjs relay_worktree_cleanup --root /path/to/project --json confirm=true
+```
 
 安全机制一览:密钥守卫(工作区出现 `.env*`/`*secret*`/`*credential*`/`*.key`/`*.pem`/`id_rsa` → 不自动提交,转人工批准;init/onboard 自动补 `.gitignore` 基线);受保护路径(`verify`/`.relay/**`/`tests/**`/测试文件改动不自动提交——注意该护栏只看未提交 diff,模型中途自行 commit 可绕过,最终防线在 CI 与人工抽查)。`verify` 脚本可移植:换机后 `export RELAY_HOME=/path/to/relay-mcp` 即可。
 
@@ -78,27 +110,29 @@ args = ["~/path/to/relay-mcp/src/index.mjs"]
 
 ### 架构
 
-stdio JSON-RPC(MCP 子集):`src/index.mjs` 启动 → `rpc.mjs` 按行读取请求 → `contract.mjs` 定义 9 个工具并 dispatch → `engines/` 执行(bootstrap = init/onboard + preset,sync = 入口投影,verify = 检查器,session = 会话协议,restructure = 目录标准化)。全部脚手架模板在**运行时**从 `templates/` 读取(`templatesDir()`),绝不硬编码——规范的单源在模板,目标项目里的入口文件只是投影。目标仓库侧只落一组纯文本文件(核心五件 + 三入口 + `verify` + `.relay/manifest.json`),对 harness 零侵入;git 缺失或提交失败时自动降级(文件照常更新,报告原因)。
+stdio JSON-RPC(MCP 子集):`src/index.mjs` 启动 → `rpc.mjs` 按行读取请求 → `contract.mjs` 定义 10 个工具并 dispatch → `engines/` 执行(bootstrap = init/onboard + preset,sync = 入口投影,verify = 检查器,session = 会话协议,worktree = 任务目录与缓存生命周期,restructure = 目录标准化)。全部脚手架模板在**运行时**从 `templates/` 读取(`templatesDir()`),绝不硬编码——规范的单源在模板,目标项目里的入口文件只是投影。目标仓库侧只落一组纯文本文件(核心五件 + AGENTS.md 与按需适配入口 + `verify` + `.relay/manifest.json`),对 harness 零侵入;git 缺失或提交失败时自动降级(文件照常更新,报告原因)。
 
 ### 自举
 
-**本仓库自己运行 relay 协议**:`START.md` 是它的引导扇区,`TASKS.md` 是它的真实 backlog,每次引擎改动经 `relay_session_end` 出场——绿闸会实跑 `npm test`(81 项端到端断言)作为放行条件。想看协议长什么样,直接读本仓库根目录;想给本项目贡献代码,见 [CONTRIBUTING.md](CONTRIBUTING.md)。
+**本仓库自己运行 relay 协议**:`START.md` 是它的引导扇区,`TASKS.md` 是它的真实 backlog,每次引擎改动经 `relay_session_end` 出场——绿闸会实跑 `npm test`(182 项端到端断言)作为放行条件。想看协议长什么样,直接读本仓库根目录;想给本项目贡献代码,见 [CONTRIBUTING.md](CONTRIBUTING.md)。
 
 ### FAQ
 
 1. **老项目接入会被改坏吗?** 不会。`relay_onboard` 对已存在文件一律先备份为 `*.relay-bak-<时间戳>` 再写,永不删除用户文件;`relay_init` 遇到已存在的 START.md 会拒绝并建议改用 onboard。
 2. **不接 MCP、在 CI 里怎么跑?** 每个接入项目根有 `verify` 脚本,它只是委托本引擎:`./verify` 等价于 `node src/cli.mjs relay_verify --root .`;GitHub Actions 工作流模板(node 22/24 双矩阵)由 init/onboard 装好。
 3. **多个模型并行会打架吗?** 开工前 `relay_claim {task, model}` 认领:任务行标 `[~]` + 原子锁 `.relay/claims/T###.lock`(TTL 4 小时,崩溃会话到期自动可接管);R5 / R9 保证任务队列与会话日志同步,冲突面被压缩到单个任务内。
+4. **清理 worktree 会丢代码或合并分支吗?** 只清过期、非活跃、干净的已登记目录;任务分支保留,dirty 或活跃现场不动。relay 不自动合并、推送或删分支,人工决定是否整合。
 
 ---
 
 ## English
 
-relay-mcp is an MCP server that lets **any coding model (Claude / Codex / Gemini / Cursor / …) continue the work of any previous one** on the same repository. Handoff state lives in repo files (START / SPEC / DECISIONS / TASKS / LOG), entry files for every harness (AGENTS / CLAUDE / GEMINI) are **projected from a single source** so they never drift, and the exit gate refuses to commit until structure checks (R1–R9) **and the project's executable acceptance actually pass** (`test:` paths run via `node --test`; `npm test` when declared). Handoff runs on evidence, not on trust.
+relay-mcp is an MCP server that lets **any coding model (Claude / Codex / Gemini / Cursor / …) continue the work of any previous one** on the same repository. Handoff state lives in repo files (START / SPEC / DECISIONS / TASKS / LOG). AGENTS.md is the required project instruction entry; CLAUDE.md/GEMINI.md are optional adapters projected from the same source. The exit gate refuses to commit until structure checks (R1–R9) **and the project's executable acceptance actually pass** (`test:` paths run via `node --test`; `npm test` when declared). Handoff runs on evidence, not on trust.
 
 - Zero runtime dependencies (pure `node:` builtins), no build step, Node ≥ 18
-- 9 tools: `relay_init` (0→1 with preset code skeleton), `relay_onboard` (non-destructive adoption of existing projects), `relay_restructure` (normalize legacy layout via `git mv`), `relay_session_start` / `relay_session_end` (briefing / green-gate exit), `relay_verify` / `relay_sync` / `relay_claim` / `relay_rules`
-- Safety: secret guard (`.env*`, `*.key`, … never auto-committed), protected paths, claim locks with TTL
+- 10 tools: `relay_init` (0→1 with preset code skeleton), `relay_onboard` (non-destructive adoption of existing projects), `relay_restructure` (normalize legacy layout via `git mv`), `relay_session_start` / `relay_session_end` (briefing / green-gate exit), `relay_worktree_cleanup` (dry-run by default), `relay_verify` / `relay_sync` / `relay_claim` / `relay_rules`
+- Task lifecycle: `relay_claim` creates or reuses `relay/T###`; controlRoot owns TASKS/LOG while executionRoot owns code and tests. New projects opt in by default; existing manifests stay off unless explicitly enabled. Expired cleanup removes only registered, inactive, clean worktrees and preserves branches. Accepted is not merged: no automatic merge, rebase, push, or branch deletion.
+- Safety: secret guard (`.env*`, `*.key`, … never auto-committed), protected paths, owner-checked claim locks with TTL
 - **Self-hosted**: this repository runs its own protocol — read `START.md`, `TASKS.md`, `LOG.md` to see it in action
 
 Quick start:
