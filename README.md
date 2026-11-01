@@ -58,6 +58,8 @@ node scripts/install-mcp.mjs --target dsh --dsh-profile desktop
 
 任一条件不满足：不更新 TASKS/LOG、不提交、保留认领锁。
 
+**事实底账（R10）**：出场时由引擎写入一行 `- 事实(v1): 改动 N 文件(+x/-y) | 验收: 通过 | verify: PASS … | 分支: … @sha | 耗时: …s`，模型不得手写或改写。`relay_verify` 会核对它与 git 事实的文件数（`--no-renames`，只比文件数不比行数）：不一致默认 WARN，`manifest.facts.strict=true` 时升级为 ERROR；`manifest.facts.since` 之前的旧条目豁免，保证升级项目不被历史卡住。
+
 ### 任务级 worktree
 
 启用 worktree 的项目中，`relay_claim` 返回两个根目录：

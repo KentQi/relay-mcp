@@ -289,6 +289,8 @@ export const relayInit = async (args = {}) => {
       allowedTopLevel: mergeAllowed(top),
       docsPhases: [...DEFAULT_DOCS_PHASES],
       worktree: { enabled: true, cacheDir: '.relay/worktrees', ttlHours: 24, autoCleanup: true },
+      // 事实底账(T013/R10):新项目默认开启;since = 启用时刻,早于它的条目豁免。
+      facts: { enabled: true, since: stamp(), strict: false },
       onboardedAt: nowIso(),
       relayHome: dirname(tdir),
     };
@@ -425,6 +427,8 @@ export const relayOnboard = async (args = {}) => {
       entryFiles,
       allowedTopLevel: mergeAllowed([...(top || []), ...oldAllowed]),
       docsPhases,
+      // 事实底账(T013/R10):onboard 也开启,但保留项目既有 facts 配置(不覆盖显式的 strict/since)
+      facts: (old && old.facts) || { enabled: true, since: stamp(), strict: false },
       onboardedAt: nowIso(),
       relayHome: dirname(tdir),
     };

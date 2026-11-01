@@ -11,6 +11,8 @@ import { join } from 'node:path';
 export const DEFAULT_CODE_ROOTS = ['src', 'lib', 'app'];      // verify.mjs R5 的 /^(src|lib|app)\//
 export const DEFAULT_DOCS_ROOTS = ['docs'];                    // verify.mjs R6 的 startsWith('docs/')
 export const DEFAULT_COMMIT_TEMPLATE = 'relay: session end — {{task}}{{summary}}';
+// 简报字符预算(T015 使用):超限只告警、不裁剪(裁剪=静默降级,违反公理)。
+export const DEFAULT_CONTEXT_BUDGET = 6000;
 // worktree 配置真值表(解析在 worktree.mjs readWorktreeConfig,本文件只放默认值):
 //   enabled    只认 JSON 布尔 true;字符串 "true"、数字 1、其它真值一律视为 false(静默关闭);
 //   cacheDir   只允许 controlRoot 内相对路径(绝对路径 / .. / 盘符 / 控制字符 / .git 前缀非法);
@@ -111,5 +113,15 @@ export const readManifestConfig = async (root) => {
     autoCommit: !(m && m.autoCommit === false),
     // entryFilesTakeover 默认 false = sync 不接管「已存在但无 relay 标记」的入口文件(非破坏)
     entryFilesTakeover: !!(m && m.entryFilesTakeover === true),
+    // 事实底账(T013/R10):缺席 = 旧行为(不写事实行、R10 跳过);init/onboard 显式开启。
+    // since 是「从哪一刻起要求事实行」(YYYY-MM-DD HH:mm,与 LOG 条目时间同格式,字典序即时间序):
+    // 早于 since 的旧条目一律豁免,保证升级项目不被历史条目卡住。
+    facts: {
+      enabled: !!(m && m.facts && m.facts.enabled === true),
+      since: m && m.facts && typeof m.facts.since === 'string' && m.facts.since.trim() ? m.facts.since.trim() : null,
+      strict: !!(m && m.facts && m.facts.strict === true),
+    },
+    // 简报字符预算(T015):非有限数/非正数 → 回退默认;不改变既有行为(只影响告警阈值)。
+    contextBudget: m && Number.isFinite(m.contextBudget) && m.contextBudget > 0 ? m.contextBudget : DEFAULT_CONTEXT_BUDGET,
   };
 };
