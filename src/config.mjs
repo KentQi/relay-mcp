@@ -86,11 +86,17 @@ export const matchesIgnore = (ignores, rel, isDir = false) =>
 const strArr = (v) => (Array.isArray(v) ? v.filter((x) => typeof x === 'string' && x.trim()) : []);
 
 // 读 manifest 并归一全部策略项。manifest 缺失/损坏 → 全部走默认(= 补丁前行为)。
-export const readManifestConfig = async (root) => {
-  const raw = await readFileSafe(join(root, '.relay', 'manifest.json'), null);
+// manifest 可预解析传入(T022):runChecks 已经把 manifest.json 读/解析一次,
+// 这里不再重复读盘——单轮 verify 对 manifest 的读取次数恒为 1。
+export const readManifestConfig = async (root, { manifest: preloaded } = {}) => {
   let m = null;
-  if (raw != null) {
-    try { const p = JSON.parse(raw); if (p && typeof p === 'object') m = p; } catch { m = null; }
+  if (preloaded && typeof preloaded === 'object') {
+    m = preloaded;
+  } else {
+    const raw = await readFileSafe(join(root, '.relay', 'manifest.json'), null);
+    if (raw != null) {
+      try { const p = JSON.parse(raw); if (p && typeof p === 'object') m = p; } catch { m = null; }
+    }
   }
   const codeRoots = strArr(m && m.codeRoots);
   const docsRoots = strArr(m && m.docsRoots);

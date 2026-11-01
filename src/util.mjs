@@ -1,7 +1,8 @@
 // relay-mcp — src/util.mjs (W2)
 // 零依赖公共助手:fs / git / 时间戳。仅使用 node: 内置模块。
 import { readFile, writeFile, mkdir, rename, stat, lstat, unlink, utimes, open as fsOpen2 } from 'node:fs/promises';
-import { realpathSync } from 'node:fs';
+import { realpathSync, writeFileSync } from 'node:fs';
+import { realpath } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { execFile, execFileSync } from 'node:child_process';
@@ -10,12 +11,34 @@ import { randomUUID } from 'node:crypto';
 
 const execFileAsync = promisify(execFile);
 
+// —— 测试用计数追踪(T022)——
+// 只在 RELAY_TRACE_FILE 存在时启用:记录 readFileSafe 的按文件读取次数、git 子进程数(含同步)。
+// 用途:smoke-perf 用**确定性计数断言**(不用计时阈值)验证「单轮 verify 只读一次 LOG/TASKS/manifest」。
+const TRACE_FILE = process.env.RELAY_TRACE_FILE || '';
+const trace = { reads: {}, git: 0, sync: 0 };
+const traceRead = (p) => {
+  if (!TRACE_FILE) return;
+  const k = path.basename(String(p || ''));
+  trace.reads[k] = (trace.reads[k] || 0) + 1;
+};
+const traceGit = (sync = false) => {
+  if (!TRACE_FILE) return;
+  trace.git += 1;
+  if (sync) trace.sync += 1;
+};
+if (TRACE_FILE) {
+  process.on('exit', () => {
+    try { writeFileSync(TRACE_FILE, JSON.stringify(trace)); } catch { /* 追踪失败不影响主流程 */ }
+  });
+}
+
 // relay-mcp/templates 绝对路径:基于本文件(src/util.mjs)向上一级再进 templates
 export const templatesDir = () =>
   path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', 'templates');
 
 // 读文件,不存在(或不可读)返回 fallback
 export const readFileSafe = async (p, fallback = null) => {
+  traceRead(p);
   try {
     return await readFile(p, 'utf8');
   } catch {
@@ -58,6 +81,7 @@ export const backupFile = async (p) => {
 // 会让字符串比较永远不等,把真仓库误判成"非 git 仓库"
 export const isGitRepo = (root) => {
   if (typeof root !== 'string' || root === '') return false;
+  traceGit(true);
   const real = (p) => {
     try { return realpathSync(p); } catch { return path.resolve(p); }
   };
@@ -75,9 +99,28 @@ export const isGitRepo = (root) => {
   }
 };
 
+// 异步版 isGitRepo(T022):fs 快路径先看 root/.git(普通仓库是目录;linked worktree 是文件,
+// 两者都意味着 root 自身是仓库根)→ 命中则**零子进程**;未命中再回退 git rev-parse,
+// 兼容「root 是仓库子目录」的情形(此时 .git 不在 root 下)。
+export const isGitRepoAsync = async (root) => {
+  if (typeof root !== 'string' || root === '') return false;
+  try {
+    const st = await stat(path.join(root, '.git'));
+    if (st.isDirectory() || st.isFile()) return true;
+  } catch { /* 无 .git → 回退 git 探测 */ }
+  const real = async (p) => {
+    try { return await realpath(p); } catch { return path.resolve(p); }
+  };
+  traceGit(false);
+  const r = await gitRun(root, 'rev-parse', '--show-toplevel');
+  if (!r.ok || !r.stdout.trim()) return false;
+  return (await real(r.stdout.trim())) === (await real(root));
+};
+
 // execFile('git', ['-C', root, ...args]) 包装:8 秒超时,永不抛错
 // 返回 {ok, stdout, stderr};ok = exit 0
 export const gitRun = async (root, ...args) => {
+  traceGit(false);
   try {
     const { stdout, stderr } = await execFileAsync(
       'git',

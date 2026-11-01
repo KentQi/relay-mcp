@@ -289,3 +289,11 @@ export const startServer = async ({ onInit, onMethod }) => {
 - **P2-21/22**:新增 `scripts/smoke-review-regressions.mjs`(managed 密钥不落 git / 多提交对账 / 未跟踪文件 / worktree 双根 / 发布护栏,19 断言);smoke-doctor 的零写盘断言扩展到整棵仓库树。
 - **P2-23**:简报「生效配置」回显真实 worktree 生效值(enabled/cacheDir/ttl/autoCleanup)。
 - **P3-21/22/24/28/33**:去掉无用字段与未使用 import;同号任务取首条;numstat 单次调用;模板 TASKS 示例改为待办(不再声称未记录的完成)。
+## 2026-11-01 T022 补充契约(verify 单快照 / git 收敛 / 根解析快路径)
+
+- **单快照**:一次 `relay_verify` 只读一次 `LOG.md` / `TASKS.md` / `manifest.json`;R7/R9/R10/R11 消费同一份快照——同一条日志不会在两条规则下看到不同版本。
+- **git 收敛**:repo 探测走 `isGitRepoAsync`(root/.git 是目录或文件 → 零子进程;否则回退 `git rev-parse`,兼容「root 是仓库子目录」);R2 用一次 `git ls-files -z --cached --others --exclude-standard` 同时拿已跟踪+未跟踪;R5/R6 共用一次 `git log -20 --name-only`;R10 复用快照的 HEAD subject,只额外起一次 diff。
+- **根解析快路径**:`resolveRelayRoots` 在 `root/.git` 是**目录**时直接返回(普通仓库,省 2 个 git);linked worktree 的 `.git` 是**文件**,继续走 git 解析,不丢双根语义。
+- **计数可观测(测试专用)**:设置 `RELAY_TRACE_FILE` 时,进程退出写 `{reads, git, sync}` 计数;生产行为不变。`scripts/smoke-perf.mjs` 用它做**确定性断言**,不用计时阈值(CI 抖动不会造成假红)。
+- **async 路径禁止同步 git 探测**:facts/verify 不再调用同步 `isGitRepo()`;同步版只保留给 bootstrap 等同步场景。
+- **规模不变量**:LOG 20/100/500 条时,读次数(1/1/1)与 git 进程数不变,R1–R11 **判定结果**一致(R7 详情里的「另排除 N 条维护条目」随规模变化属正常,不作断言)。

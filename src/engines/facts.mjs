@@ -4,7 +4,7 @@
 //   2) 只比文件数,不比行数:行级 ±x/-y 会被 CRLF/重命名/合并污染,成为假裁判。
 //   3) 写入侧与校验侧共用 diffStat,且事实行记录 base sha —— 「用哪个 range」是事实的一部分,
 //      不靠两侧各自猜测(旧实现 writer 用 baseSha..HEAD、checker 用 sha^..sha,多提交/二次出场必然错位)。
-import { gitRun, isGitRepo } from '../util.mjs';
+import { gitRun, isGitRepoAsync } from '../util.mjs';
 
 export const FACT_LINE_PREFIX = '- 事实(v1):';
 export const FACT_LINE_RE = /^- 事实\(v1\):\s*(.*)$/;
@@ -46,7 +46,7 @@ export const deriveFacts = async ({
   codeSha = '',
   startedAt = 0,
 }) => {
-  const git = isGitRepo(executionRoot);
+  const git = await isGitRepoAsync(executionRoot);
   let stat = null;
   let base = '';
   if (git) {
@@ -142,8 +142,9 @@ export const parseFactLine = (text) => {
  * 优先用事实行里的代码 SHA(managed);否则用 HEAD(单根:HEAD 就是本次完成提交)。
  * 返回 null 表示「无法定位提交」,调用方应跳过数字对账而不是判错。
  */
-export const recomputeCommitFileCount = async (root, parsed) => {
-  if (!isGitRepo(root)) return null;
+export const recomputeCommitFileCount = async (root, parsed, { isRepo = undefined, headSubject = null } = {}) => {
+  if (isRepo === false) return null;
+  if (isRepo === undefined && !(await isGitRepoAsync(root))) return null;
   let range = null;
   if (parsed && parsed.sha && /^[0-9a-f]{7,40}$/.test(parsed.sha)) {
     // 优先用事实行自带的 base(与写入侧同一个 range);旧事实行没有 base 时才退回 sha^..sha。
@@ -151,8 +152,13 @@ export const recomputeCommitFileCount = async (root, parsed) => {
       ? [`${parsed.base}..${parsed.sha}`]
       : [`${parsed.sha}^`, parsed.sha];
   } else {
-    const msg = await gitRun(root, 'log', '-1', '--pretty=%s');
-    if (!msg.ok || !/T\d+\s*完成/.test(msg.stdout)) return null;
+    // 单根:HEAD 就是本次完成提交。优先用快照里已有的 subject(T022),否则才单独起 git log。
+    let subject = headSubject;
+    if (subject == null) {
+      const msg = await gitRun(root, 'log', '-1', '--pretty=%s');
+      subject = msg.ok ? msg.stdout : '';
+    }
+    if (!/T\d+\s*完成/.test(String(subject || ''))) return null;
     range = ['HEAD^', 'HEAD'];
   }
   const stat = await diffStat(root, range);

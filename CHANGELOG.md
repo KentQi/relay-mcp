@@ -5,6 +5,10 @@
 
 ## [Unreleased]
 
+### Changed
+- `relay_verify` 单轮只读一次 LOG/TASKS/manifest(此前 4/2/2 次),git 子进程从 9 收敛到 2–4;`resolveRelayRoots` 对普通仓库走 fs 快路径(recall/get 的 git 调用 2→0);async 路径不再同步探测 git(T022)
+- 新增 `scripts/smoke-perf.mjs`(22 断言,计数钩子而非计时阈值)接入 `npm test`;`RELAY_TRACE_FILE` 可观测单轮读取/子进程计数
+
 ## [1.4.1] - 2026-11-01
 
 ### Fixed
