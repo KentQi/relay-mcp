@@ -1,5 +1,12 @@
 # 会话日志(最新在上)
 
+## 2026-11-01 14:47 | model=dsh-lead-deepseek-v4.1 | task=T019 完成
+- 摘要: T019 relay_doctor 只读七检:D1 Node/D2 manifest/D3 入口投影漂移/D4 残留认领锁/D5 未登记任务树/D6 .relay 完整性/D7 引擎路径一致性;sync 新增 check 只读模式;新增 smoke-doctor(17 断言,含零写盘快照);README/CONTRACT 同步,工具数 10→11。
+- 事实(v1): 改动 8 文件(+342/-5) | 验收: 通过 | verify: PASS 13·WARN 1·ERROR 0 | 分支: relay/T019 @ad99cbd | 耗时: 31s
+- worktree: branch=relay/T019; sha=ad99cbd058f3d81a59631bc3c2abdbbd95844475; 已验收,未合并(是否合并由人工决定)
+- 负结果: doctor 复用 generateEntryFiles 做漂移检测时必须新增 check 只读模式,否则默认分支会写盘+生成备份,违反只读铁律
+- 负结果: 新增工具会击穿 scripts/smoke.mjs 的 tools/list 数量断言(10→11),必须同步更新,否则冒烟红
+
 ## 2026-11-01 14:43 | model=dsh-lead-deepseek-v4.1 | task=T017 完成
 - 摘要: T017 数据闸测量:LOG 条目 16(其中任务会话 10)、最近一次出场耗时 27s、最近三次 27/28/27s;未达 ≥20 的检索寻址闸门,也无取回失败记录。闸门未过,但用户明确要求按计划全部做完,故 T018 按用户指令推进;闸门结论如实留档,数据不支持时应回滚评估。
 - 事实(v1): 改动 0 文件(+0/-0) | 验收: 通过 | verify: PASS 9·WARN 1·ERROR 0 | 分支: main @未提交 | 耗时: 28s

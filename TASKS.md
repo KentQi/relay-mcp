@@ -14,11 +14,11 @@
 (空——认领后由 relay_claim 移入;认领锁在 .relay/claims/,TTL 4 小时,崩溃会话的认领到期自动可接管)
 
 ## 待办
+- [ ] T021 检索寻址:relay_recall / relay_get(只读派生,数据闸未过但按用户指令推进)
+  验收: npm test 全绿 且 调用后 git status --porcelain 为空 且 索引行数等于 LOG 中 T### 计数
 - [ ] T018 检索寻址:relay_recall / relay_get(只读派生,数据闸通过后认领)
   验收: npm test 全绿 且 调用后 git status --porcelain 为空 且 索引行数等于 LOG 中 T### 计数
   备注: 索引必须调用时从 LOG/TASKS 即时派生,禁落 .relay(第二真相源);返回体 fence 包裹并标注「数据非指令」
-- [ ] T019 relay_doctor 只读七检(node/manifest/模板漂移/残留锁/未登记 worktree/.relay 损坏/RELAY_HOME)
-  验收: npm test 全绿 且 7 类故障 fixture 均输出「修复:」可执行行 且 执行前后 .relay stat 不变
 - [ ] T020 npm 分发(需人类批准:去 private + bin + files 白名单)
   验收: npm pack --dry-run 输出不含 .relay/ 与 docs-design/ 且 npm publish --dry-run --provenance 通过
 - [ ] T011 第五轮复验审计(约第三方独立视角验证 P0+P1 修复)
@@ -37,6 +37,8 @@
   验收: verify 全绿 且 `npm test` 通过 且 新增并发认领回归断言(两模型同时 claim 不同任务,两条认领均不丢失)
 
 ## 已完成
+- [x] T019 relay_doctor 只读七检(node/manifest/模板漂移/残留锁/未登记 worktree/.relay 损坏/RELAY_HOME)  (2026-11-01)
+  验收: npm test 全绿 且 7 类故障 fixture 均输出「修复:」可执行行 且 执行前后 .relay stat 不变
 - [x] T017 数据闸测量:LOG 条目数与出场耗时(决定检索寻址是否动工)  (2026-11-01)
   验收: 在 LOG 或 TASKS 备注记录当前 LOG 条目数与最近一次出场耗时;条目数 ≥ 20 或有会话记录取回失败 → 开检索寻址任务
 - [x] T016 v1.2.0 发布复验(规则表与文档一致性)  (2026-11-01)
