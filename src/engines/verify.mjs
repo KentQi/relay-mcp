@@ -28,7 +28,7 @@ const readText = async (p) => {
 
 // —— 单轮 verify 的读取/子进程快照(T022) ——
 // 一次 runChecks 只读一次 LOG.md / TASKS.md / manifest.json,只起必要数量的 git 子进程;
-// R7/R9/R10/R11 全部消费同一份快照,避免「同一条日志在两条规则下看到不同版本」。
+// R7/R9/R10/R11/R12 全部消费同一份快照,避免「同一条日志在两条规则下看到不同版本」。
 const collectMeta = async (root) => {
   const t = await readText(join(root, '.relay', 'manifest.json'));
   let manifest = null;
@@ -483,6 +483,35 @@ const checkR11 = async (root, snap) => {
   return pass('R11', `TASKS/LOG 无密钥样式内容${exempted ? `(另有 ${exempted} 行标注 relay:secret-ok 被豁免,请人工复核)` : ''}`);
 };
 
+// —— R12 LOG 边界(T024 / T001 最小触发)——
+// LOG 只增不减与「有限上下文」公理冲突;本检查只报警,归档动作留给人工(不自动搬移/删除)。
+// 活跃区 = 归档指针之前的行;指针(<!-- relay:log-archive … --> 或 ## 归档)之后不计入。
+export const R12_MAX_LOG_LINES = 150;
+export const R12_MAX_DONE_ENTRIES = 20;
+const LOG_ARCHIVE_MARKER_RE = /^\s*(?:<!--\s*relay:log-archive|##\s*归档)/;
+const checkR12 = async (root, cfg, snap) => {
+  const t = snap ? snap.logText : await readText(join(root, 'LOG.md'));
+  if (t == null) return skip('R12', 'LOG.md 不存在,无从度量', '出场(relay_session_end)会写入首条日志');
+  const lines = t.replace(/\r\n/g, '\n').split('\n');
+  const marker = lines.findIndex((l) => LOG_ARCHIVE_MARKER_RE.test(l));
+  const area = marker < 0 ? lines : lines.slice(0, marker);
+  const activeLines = area.filter((l, i) => !(i === area.length - 1 && l === '')).length; // 去掉末尾换行造成的空行
+  const doneEntries = parseLogEntries(t).filter((e) => isDoneTaskField(e.task)).length;
+  const overLines = activeLines > R12_MAX_LOG_LINES;
+  const overDone = doneEntries > R12_MAX_DONE_ENTRIES;
+  if (!overLines && !overDone) {
+    return pass('R12', `LOG 活跃区 ${activeLines} 行 / 完成条目 ${doneEntries} 条,在边界内(>${R12_MAX_LOG_LINES} 行或 >${R12_MAX_DONE_ENTRIES} 条才告警)`);
+  }
+  const over = [
+    overLines ? `活跃区 ${activeLines} 行 > ${R12_MAX_LOG_LINES}` : '',
+    overDone ? `完成条目 ${doneEntries} 条 > ${R12_MAX_DONE_ENTRIES}` : '',
+  ].filter(Boolean).join(';');
+  const fix = '归档较早条目:人工决定把尾部历史 git move 到 docs/archive/LOG-YYYY.md,并在 LOG.md 留一行指针(relay 不自动归档,R12 只是触发器);或拆小任务粒度;manifest.logBoundary.strict=true 可升级为 ERROR';
+  return (cfg && cfg.logBoundary && cfg.logBoundary.strict)
+    ? bad('R12', 'ERROR', `LOG 边界超限:${over}`, fix)
+    : bad('R12', 'WARN', `LOG 边界超限:${over}`, fix);
+};
+
 // —— 双根:任务树结构检查(R1/R2/R3/R4/R8)——
 // managed 场景下真正待提交的代码在 executionRoot,结构检查必须覆盖它;
 // 协议面检查(R5/R6/R7/R9)属于 controlRoot,这里刻意不跑——worktree 里的
@@ -519,6 +548,7 @@ export const runChecks = async (root, { full = false, meta: preloadedMeta = null
     await checkR9(root, snap),
     await checkR10(root, cfg, snap),
     await checkR11(root, snap),
+    await checkR12(root, cfg, snap),
   ];
 };
 

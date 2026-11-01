@@ -13,6 +13,10 @@
 - **事实行升 v2**:以 `||` 拆两段——机检段 `mode | 文件 N | ± +x/-y | base | sha | branch`(检查时点可从 git 重算)与叙述段 `验收 | verify 汇总 | 耗时`(写时快照,仅结构校验)。机检段任一字段与 git 重算不符 → R10 **ERROR**(不再依赖 `facts.strict`);叙述段被改**不误红**
 - **R10 去 fail-open**:无法定位对应提交(伪造 sha、提交被重写、历史被裁剪)→ **WARN,永不 PASS**;缺事实行维持 WARN;v1 旧行继续可解析,只对文件数
 
+### Added(T024)
+- **R12 LOG 边界**:LOG 活跃区(归档指针之前的行)>150 行 或 完成条目 >20 → WARN(`manifest.logBoundary.strict=true` 升 ERROR);只报警、不自动归档,归档动作留人工;阈值按现状设定(本仓库当前 139 行 / 16 完成条目,落地即绿)
+- `scripts/smoke-r12-boundary.mjs`(11 断言)接入 `npm test`
+
 ## [1.4.1] - 2026-11-01
 
 ### Fixed

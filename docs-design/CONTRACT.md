@@ -27,7 +27,7 @@
 以下为修复轮补充的现行语义,覆盖上文同名字段的早期表述:
 
 - **出场双提交**:绿闸(verify 全量 + 验收执行门)通过后,executionRoot 提交任务分支代码(`relay/T###`,SHA₁);成功后 controlRoot **只** `git add -- TASKS.md LOG.md` 并提交(SHA₂,提交信息含 `T### 完成`)。输出两个 SHA;代码提交或控制面提交任一失败 → isError、TASKS/LOG 不改完成状态、保留认领锁,修复后重跑补交。`autoCommit:false` 明确"控制面未提交"。executionRoot 内出现 TASKS/LOG 改动时拒绝/排除,协议文件只由 controlRoot 写。
-- **双根 verify / 成对证据**:受管 worktree 中 controlRoot 跑全量 R 系列,executionRoot 跑代码向检查(R1/R2/R3/R4/R8;跳过 R7/R9 以免读任务分支里的旧协议副本);两侧 ERROR 合并阻断。managed 完成额外校验四项成对证据:任务分支代码提交、controlRoot 完成提交(消息含 `T### 完成`)、controlRoot 的 TASKS/LOG 已提交干净、LOG 记录 branch+代码 SHA;任一缺失 → isError、不落完成状态、可重跑补交。R5/R6 仍按 controlRoot 历史计算(任务分支提交不进入其窗口),跨分支评估留待后续。
+- **双根 verify / 成对证据**:受管 worktree 中 controlRoot 跑全量 R 系列,executionRoot 跑代码向检查(R1/R2/R3/R4/R8;跳过 R7/R9/R10/R11/R12 以免读任务分支里的旧协议副本);两侧 ERROR 合并阻断。managed 完成额外校验四项成对证据:任务分支代码提交、controlRoot 完成提交(消息含 `T### 完成`)、controlRoot 的 TASKS/LOG 已提交干净、LOG 记录 branch+代码 SHA;任一缺失 → isError、不落完成状态、可重跑补交。R5/R6 仍按 controlRoot 历史计算(任务分支提交不进入其窗口),跨分支评估留待后续。
 - **根错配 fail-closed(严格)**:任务在 registry 中仍有未完成记录时,从 controlRoot 完成出场**一律 isError**「根错配」并提示在 executionRoot 出场;不再有"干净空树可单根完成"的兼容例外。注册表缺失/损坏/记录丢失时,用 `git worktree list` 反查 `relay/<task>` 是否仍被某 worktree checkout,并检查受管缓存路径 `.relay/worktrees/<task>` / 残留记录路径是否存在——命中同样拒绝(给出重建登记或 executionRoot 出场的修复指令);分支单独存在不视为痕迹。managed 出场 HEAD==baseSha 且无改动 → 拒绝伪 SHA。未登记 linked worktree 的完成出场 fail-closed,维护出场仅告警。
 - **未合并分支可见性与人工合并**:任务分支验收通过 ≠ 已合并;relay 不自动 merge/rebase/push、不删分支。claim/session_start/cleanup 输出未合并 `relay/T###` 清单;人工流程 `git log <控制面分支>..relay/T###` → `git merge --no-ff relay/T###` → 可选 `git branch -d`。
 - **清理保护(ignored)**:清理前用 `git status --porcelain --ignored=matching -uall` 检查;含未跟踪或 ignored 本地内容(`.env`、`node_modules`、构建产物)的 worktree 默认保留并给出理由,不自动删除;删除只走非强制 `git worktree remove`,分支保留。
@@ -184,6 +184,7 @@ export const startServer = async ({ onInit, onMethod }) => {
 | R9 | LOG/TASKS 一致性 | LOG 最新条目里 task=Txxx 完成 而 TASKS 中 Txxx 仍为未完成 → error |
 | R10 | 事实对账 | LOG **最新完成条目**必须含引擎写入的「事实(v2)」行;机检段(mode/文件数/±/base/sha/branch)与 git 重算逐字段一致,不一致 → error;叙述段(验收/verify/耗时)不参与对账;无法定位提交 → warn(**永不 PASS**);缺事实行 → warn;v1 旧行只对文件数 |
 | R11 | 协议文件敏感内容 | TASKS.md/LOG.md 内容级扫描(AWS/GitHub/Slack/OpenAI/Google 密钥样式 + PEM 私钥块);同行 `relay:secret-ok` 豁免;命中 → error,`relay_session_end` 在任何写盘前阻断 |
+| R12 | LOG 边界 | 活跃区(归档指针之前的行)>150 行 或 完成条目 >20 → warn(`manifest.logBoundary.strict=true` 升 error);只报警不自动归档,归档动作留人工 |
 
 - 检查输出:`| ID | 结果 | 详情 |` 表格 + 末尾汇总;任一 error → isError:true(fast 模式跳过 R5/R6/R8,session_end 默认 fast=false 全量)
 - **受保护路径**:`verify`(脚本)、`.relay/**`、`*/tests/**`、`*.test.*`、`*.spec.*` —— relay_session_end 若检测到本会话改动了这些文件,则**不自动 commit**,输出"涉及受保护路径(护栏),需人类批准后手动提交"并列出文件
@@ -302,10 +303,18 @@ export const startServer = async ({ onInit, onMethod }) => {
 - **根解析快路径**:`resolveRelayRoots` 在 `root/.git` 是**目录**时直接返回(普通仓库,省 2 个 git);linked worktree 的 `.git` 是**文件**,继续走 git 解析,不丢双根语义。
 - **计数可观测(测试专用)**:设置 `RELAY_TRACE_FILE` 时,进程退出写 `{reads, git, sync}` 计数;生产行为不变。`scripts/smoke-perf.mjs` 用它做**确定性断言**,不用计时阈值(CI 抖动不会造成假红)。
 - **async 路径禁止同步 git 探测**:facts/verify 不再调用同步 `isGitRepo()`;同步版只保留给 bootstrap 等同步场景。
-- **规模不变量**:LOG 20/100/500 条时,读次数(1/1/1)与 git 进程数不变,R1–R11 **判定结果**一致(R7 详情里的「另排除 N 条维护条目」随规模变化属正常,不作断言)。
+- **规模不变量**:LOG 20/100/500 条时,读次数(1/1/1)与 git 进程数不变,R1–R12 **判定结果**一致(R7 详情里的「另排除 N 条维护条目」随规模变化属正常,不作断言)。
 ## 2026-11-01 T023 补充契约(事实行 v2 / R10 去 fail-open)
 
 - 事实行升 **v2**:机检段(可复算)与叙述段(写时快照)以 `||` 分隔,详见 T013 修订段。
 - R10 不再有 fail-open:无法定位提交(伪造 sha、提交被重写、历史被裁剪)→ **WARN**,绝不 PASS。
 - 机检段篡改 → **ERROR**(默认,不再依赖 `facts.strict`);叙述段篡改**不误红**。
 - 向后兼容:v1 旧行继续可解析,只对文件数(不一致 WARN,strict 升 ERROR)。
+## 2026-11-01 T024 补充契约(LOG 边界 R12)
+
+- 新增 **R12 LOG 边界**(controlRoot only,同 R7/R9/R10/R11):活跃区(归档指针之前的行)>150 行 或 完成条目 >20 条 → **WARN**;`manifest.logBoundary.strict=true` 升 **ERROR**。
+- **只报警不自动归档**:R12 是触发器不是执行器——归档涉及"哪些条目算历史"的语义判断,机器不做;人工动作 = 把较早条目 `git mv` 到 `docs/archive/LOG-YYYY.md`,并在 LOG.md 留一行指针(`<!-- relay:log-archive: docs/archive/LOG-YYYY.md -->`)。
+- **活跃区定义**:LOG.md 从顶部到归档指针(不含)的行数;无指针 = 全文。指针之后的行不再计入阈值。
+- **阈值固定**,不做 manifest 可配置:否则"把阈值调大"会变成消音手段。
+- **归档落地的硬约束(实现前必读)**:只从尾部搬、永不触碰头部;边界严格早于最新完成条目(否则 R10 逃逸);live 保留 ≥3 条任务会话(R7 窗口不退化);控制面提交白名单/PROTOCOL_FILES/R11 扫描面同步扩展,否则归档文件进不了控制提交 = 新漂移;归档只 `git mv` + 指针,不压缩不删历史。
+- **修宪三处一致**:CONTRACT 规则表 + `relay_rules` + AGENTS 模板规则表;冒烟脚本对此做机检。

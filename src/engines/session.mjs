@@ -1104,7 +1104,7 @@ export const relaySessionEnd = async (args = {}) => {
     }
     out.push('', '---', '', formatChecks(controlResults, { root, full: true }));
     if (taskResults.length) {
-      out.push('', formatChecks(taskResults, { root: executionRoot, full: false, mode: 'executionRoot 任务树(R7/R9 只在 controlRoot 跑)' }));
+      out.push('', formatChecks(taskResults, { root: executionRoot, full: false, mode: 'executionRoot 任务树(R7/R9/R10/R11/R12 只在 controlRoot 跑)' }));
     }
     return { content: [{ type: 'text', text: out.join('\n') }], isError: true };
   }
