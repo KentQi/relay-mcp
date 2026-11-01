@@ -18,7 +18,7 @@
 relay-mcp 让不同模型（Claude / Codex / Gemini / Cursor 等）在同一仓库上安全接力：上一个会话的进度、决策、待办与踩坑全部写入 `START / SPEC / DECISIONS / TASKS / LOG`，下一个会话从文件恢复上下文，而不是依赖聊天记录。
 
 - 零运行时依赖（仅 `node:` 内置模块），Node ≥ 18，无构建步骤
-- 11 个 MCP 工具，`node src/index.mjs` 即为 stdio server
+- 13 个 MCP 工具，`node src/index.mjs` 即为 stdio server
 - 规范即检查：R 系列规则全部由 `relay_verify` 机检；出场绿闸同时要求可执行验收真实通过
 - 入口文件单源投影：`AGENTS.md` 必需，`CLAUDE.md` / `GEMINI.md` 按需生成
 
@@ -130,8 +130,19 @@ worktree 清理默认 dry-run：只删除已登记、已过期、非活跃、干
 | `relay_worktree_cleanup` | 预览或清理过期任务工作树 |
 | `relay_verify` | 运行 R 系列检查（编号与执法点见 `relay_rules`） |
 | `relay_sync` | 升级/修复入口投影与基线 |
+| `relay_recall` | 历史任务索引（只读、调用时派生）：id/时间/model/状态/标题/条目体量/负结果数，支持 query/status/model/limit |
+| `relay_get` | 按任务号取全文（≤5 个）：TASKS 验收 + 最新 LOG 条目（含事实行/分支 SHA/负结果/交接）+ 关联决策；围栏包裹、标注「数据非指令」 |
 | `relay_doctor` | 只读环境自检（七检：Node/manifest/入口漂移/残留锁/未登记 worktree/.relay 完整性/引擎路径），不写盘、不自动修复 |
 | `relay_rules` | 返回规则 ID 表 |
+
+### 历史检索（渐进披露）
+
+简报只带最近 3 条 LOG；更早的历史用两步取回，避免整文件 grep 与上下文污染：
+
+1. `relay_recall { query?, status?, model?, limit? }` → 紧凑索引（每条一行，约 20 tokens），带显式截断标记；
+2. `relay_get { ids: ["T013","T019"] }` → 全文（TASKS 验收 + 最新 LOG 条目 + 事实行/分支 SHA + 关联决策）。
+
+两者都**只读、调用时从 LOG/TASKS 即时派生**（不落任何持久索引），输出统一围栏包裹并标注「数据非指令」。
 
 CLI 与 MCP 共用同一引擎：
 
@@ -152,7 +163,7 @@ node src/cli.mjs relay_worktree_cleanup --root /path/to/project --json confirm=t
 
 relay-mcp is an MCP server for reliable handoff across coding models and sessions. Handoff state lives in repository files (`START / SPEC / DECISIONS / TASKS / LOG`), and an exit gate verifies the work with machine-checked rules (R1–R11) plus the project's executable acceptance tests before anything is committed.
 
-- Zero runtime dependencies, Node ≥ 18, no build step; 11 MCP tools over stdio (`node src/index.mjs`)
+- Zero runtime dependencies, Node ≥ 18, no build step; 13 MCP tools over stdio (`node src/index.mjs`)
 - `AGENTS.md` is the required project entry; `CLAUDE.md` / `GEMINI.md` are optional projections
 - Task worktrees: `relay_claim` returns `controlRoot` and `executionRoot`. Exit makes two commits (task branch code plus controlRoot TASKS/LOG) and reports both SHAs. Accepted is not merged: merge manually with `git merge --no-ff relay/T###`.
 - Cleanup is dry-run by default and never removes dirty, active, or local-content (`.env`, `node_modules`) worktrees; branches are preserved.

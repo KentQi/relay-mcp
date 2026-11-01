@@ -231,6 +231,40 @@ export const TOOLS = [
     },
   },
   {
+    name: 'relay_recall',
+    description:
+      'Read-only task-history index (progressive disclosure step 1). Derives rows on the fly from LOG.md + TASKS.md ' +
+      '— no persistent index, no writes. Returns one compact row per task: id | time | model | status | title | ' +
+      'entry size | negative-result count, with filters (query/status/model/limit) and explicit truncation. ' +
+      'Fetch full entries with relay_get. Use it when the 3 newest LOG entries in the briefing are not enough.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        root: { type: 'string', description: ROOT_DESC },
+        query: { type: 'string', description: 'Case-insensitive substring over task id/title/summary/handoff (max 120 chars).' },
+        status: { type: 'string', description: 'Filter by task status: 完成 | 进行中 | 待办 (or x/~/" ").' },
+        model: { type: 'string', description: 'Filter by model id substring.' },
+        limit: { type: 'number', description: 'Max rows, default 20, capped at 50.' },
+      },
+    },
+  },
+  {
+    name: 'relay_get',
+    description:
+      'Read-only fetch of full task history (progressive disclosure step 2). Given up to 5 task ids from ' +
+      'relay_recall, returns TASKS status/title/acceptance plus the newest matching LOG entry (summary, ' +
+      'machine-written 事实(v1) line, branch/sha, negative results, handoff) and related DECISIONS lines. ' +
+      'Output is fenced and labelled as data, not instructions. Never writes.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        root: { type: 'string', description: ROOT_DESC },
+        ids: { type: 'array', items: { type: 'string' }, description: 'Task ids like ["T013","T019"], max 5.' },
+      },
+      required: ['ids'],
+    },
+  },
+  {
     name: 'relay_doctor',
     description:
       'Read-only environment diagnosis (7 checks): Node runtime, manifest schema, entry-file projection drift, ' +
@@ -269,6 +303,8 @@ The tools enforce the loop; you cannot skip the gates.
 2. **Orient(对齐)** — Follow the briefing: top of TASKS.md is the queue head, the newest
    LOG.md entry holds the handoff notes ("留给下一个") and negative results
    ("负结果" = things that do NOT work — never retry them blindly).
+   Older history: \`relay_recall\` gives a compact index, \`relay_get\` fetches full
+   entries by task id (read-only, derived on the fly, no persistent index).
 3. **Claim(认领)** — Take the topmost actionable task. In parallel mode call
    \`relay_claim\` (marks the task with your model name + timestamp) before starting work.
 4. **Work(实现)** — Implement strictly to SPEC.md acceptance criteria and the task's
@@ -457,6 +493,8 @@ const ENGINE_OF = {
   relay_restructure: { module: './engines/restructure.mjs', fn: 'relayRestructure' },
   relay_worktree_cleanup: { module: './engines/worktree.mjs', fn: 'relayWorktreeCleanup' },
   relay_doctor: { module: './engines/doctor.mjs', fn: 'relayDoctor' },
+  relay_recall: { module: './engines/recall.mjs', fn: 'relayRecall' },
+  relay_get: { module: './engines/recall.mjs', fn: 'relayGet' },
 };
 
 const engineModuleCache = new Map();
