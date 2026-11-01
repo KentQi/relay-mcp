@@ -1,5 +1,14 @@
 # 会话日志(最新在上)
 
+## 2026-11-01 14:00 | model=dsh-lead-deepseek-v4.1 | task=T014 完成
+- 摘要: T014 内容级密钥闸(R11):util 新增窄规则 scanSecrets(仅前4字符预览);verify 新增 R11 扫 TASKS/LOG;session_end 在任何写盘前扫描本次输入并阻断,写盘前二次扫描;新增 smoke-content-guard(13 断言);模板/README/CONTRACT 同步,R11 进 relay_rules。
+- worktree: branch=relay/T014; sha=0b485c7d716fbd080c9a8f6c7c14e2eef00362a1; 已验收,未合并(是否合并由人工决定)
+- 负结果: 只扫写盘后的文本会出现「TASKS 已写、LOG 被拦」的半写状态;必须在任何写入之前先扫模型输入(前置闸),写盘前再扫一次做纵深
+- 负结果: 扫描结果若回显命中串,会把密钥复制进简报/LOG/transcript;预览只保留前 4 字符
+- 负结果: 文件名含 secret/credential 会被路径级密钥守卫判为敏感文件,出场拒绝自动提交;测试脚本命名要避开这些词(本次 smoke-secrets→smoke-content-guard)
+- 负结果: relay_sync 重投影会在 executionRoot 生成 AGENTS.md.relay-bak-* 备份,必须删除,否则会被 git add -A 卷进代码提交
+- 留给下一个: 双根只比文件数且用 --no-renames;旧条目按 manifest.facts.since 不触发;先 WARN,strict 才 ERROR
+
 ## 2026-10-29 11:56 | model=kimi-work | task=T012 完成
 - 摘要: 任务级 worktree 生命周期采用方案 B:claim 创建/复用 relay/T###,controlRoot 管理 TASKS/LOG,executionRoot 执行验收与代码提交;过期非活跃缓存经 Git 非强制删除并保留分支,不自动 merge/rebase/push;AGENTS.md 成为不可豁免的必需入口;修复 TTL 接管、非持有者完成与锁所有权;统一三套冒烟测试
 - 负结果: macOS 临时目录 /var 与 /private/var 指向同一位置,Git 根目录与清理校验统一使用 realpath,跨路径断言也必须比较规范化路径

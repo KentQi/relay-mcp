@@ -14,6 +14,12 @@
 (空——认领后由 relay_claim 移入;认领锁在 .relay/claims/,TTL 4 小时,崩溃会话的认领到期自动可接管)
 
 ## 待办
+- [ ] T013 事实底账(R10):session_end 机器派生「事实(v1)」行 + 双根文件数对账
+  验收: npm test 全绿 且 ./verify 无 ERROR 且 出场后 grep -c '^- 事实(v1):' LOG.md 大于等于 1
+  备注: 只比文件数不比行数;旧条目按 manifest.facts.since 不触发;先 WARN,strict 才 ERROR
+- [ ] T015 简报有界化:字段上限 + 溢出告警(不做裁剪)
+  验收: npm test 全绿 且 ./verify 无 ERROR 且 500 字摘要 fixture 下简报少于 6000 字符
+  备注: 委员会否决级联裁剪;上界由字段上限保证,超限只告警
 - [ ] T011 第五轮复验审计(约第三方独立视角验证 P0+P1 修复)
   验收: 复验方独立实测:P0 安检(选项注入/目录逃逸/密钥)、并发回归、幂等、维护语义全部复现通过
   备注: 审计范围另含 5 视角报告中的中低危残留(模板占位符注入/symlink/root 校验/manifest 版本路径)
@@ -30,6 +36,9 @@
   验收: verify 全绿 且 `npm test` 通过 且 新增并发认领回归断言(两模型同时 claim 不同任务,两条认领均不丢失)
 
 ## 已完成
+- [x] T014 敏感内容机检闸(R11):TASKS/LOG 内容级密钥扫描 + 出场写盘前阻断  (2026-11-01)
+  验收: npm test 全绿 且 ./verify 无 ERROR 且 新增断言:LOG 写入 AKIAABCDEFGHIJKLMNOP 后 verify isError 含「修复:」,同行 relay:secret-ok 放行
+  备注: 现有 findSensitiveChanges 是路径级,本任务补内容级;这是 T013 的前置(A 必须绑 I)
 - [x] T012 任务级 worktree 生命周期与 AGENTS.md 硬约束  (2026-10-29)
   验收: `npm test`(三套冒烟)全绿 且 `./verify` 无 ERROR;覆盖创建/复用、TTL、安全清理、双根提交与锁所有权
   备注: 新 init 默认启用,既有项目缺省关闭;保留任务分支,完成不等于合并;分支 PR 交人工审核
