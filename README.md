@@ -166,7 +166,9 @@ node src/cli.mjs relay_worktree_cleanup --root /path/to/project --json confirm=t
 
 ### 自举
 
-本仓库使用自身协议开发：`START.md` 是入口，`TASKS.md` 是 backlog，`LOG.md` 记录会话。`npm test` 覆盖 5 套端到端冒烟（协议、补丁、worktree、升级兼容、安装器），CI 覆盖 Node 22/24/26。
+本仓库使用自身协议开发：`START.md` 是入口，`TASKS.md` 是 backlog，`LOG.md` 记录会话。`npm test` 覆盖 13 套端到端冒烟（协议、补丁、worktree、升级兼容、安装器、密钥闸、事实底账、简报、doctor、检索、打包、评审回归、性能计数），CI 覆盖 Node 22/24/26。
+
+`relay_verify` 的单轮成本是可观测的：只读一次 LOG/TASKS/manifest，git 子进程收敛到必要数量；设 `RELAY_TRACE_FILE=<path>` 可让进程退出时写出 `{reads, git, sync}` 计数（测试用，生产无行为变化）。
 
 设计与接口契约见 [docs-design/](docs-design/)。贡献与安全问题见 [CONTRIBUTING.md](CONTRIBUTING.md)、[SECURITY.md](SECURITY.md)。
 

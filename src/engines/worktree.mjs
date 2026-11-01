@@ -211,6 +211,16 @@ const parseWorktreeList = (raw) => {
 // 受管身份依赖 gitignored 注册表,注册表不可读时不得静默把受管 worktree 当作普通目录。
 export const resolveRelayRoots = async (root) => {
   const input = path.resolve(root || process.cwd());
+  // 快路径(T022):普通仓库 root/.git 是**目录** → 直接返回,省 2 个 git。
+  // linked worktree 的 .git 是**文件**,必须继续走下面的 git 解析——否则会把受管任务树
+  // 误判成普通仓库(丢掉 controlRoot/executionRoot 双根语义)。
+  try {
+    const st = await stat(path.join(input, '.git'));
+    if (st.isDirectory()) {
+      const rp = await realPath(input);
+      return { controlRoot: rp, executionRoot: rp, managed: false, linkedWorktree: false, registryState: 'not-applicable' };
+    }
+  } catch { /* 无 .git(仓库子目录/裸仓库)→ 走原路径 */ }
   const top = await gitRun(input, 'rev-parse', '--show-toplevel');
   if (!top.ok || !top.stdout.trim()) {
     return { controlRoot: input, executionRoot: input, managed: false, linkedWorktree: false, registryState: 'not-applicable' };
