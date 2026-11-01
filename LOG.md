@@ -1,5 +1,12 @@
 # 会话日志(最新在上)
 
+## 2026-11-01 14:53 | model=dsh-lead-deepseek-v4.1 | task=T018 完成
+- 摘要: T018 检索寻址:新增 relay_recall(索引,query/status/model/limit,默认20上限50)+relay_get(按 T### 取全文≤5,含验收/事实行/分支SHA/负结果/关联决策);只读、调用时派生、零持久索引;输出围栏+「数据非指令」声明;新增 smoke-recall(22 断言);工具数 11→13,README/CONTRACT/协议资源同步。
+- 事实(v1): 改动 7 文件(+318/-4) | 验收: 通过 | verify: PASS 13·WARN 1·ERROR 0 | 分支: relay/T018 @4d80fe9 | 耗时: 30s
+- worktree: branch=relay/T018; sha=4d80fe98bd7ea68879cbb066eb1f2425e0a80c5e; 已验收,未合并(是否合并由人工决定)
+- 负结果: 在 PROTOCOL_TEXT 模板字面量里插反引号会直接击穿 contract.mjs 语法;模板内所有反引号必须转义为 \`
+- 负结果: next.title 与 TASKS 既有任务标题不完全一致会插入重复任务(本次产生了 T021 与 T018 重复),next 必须逐字对齐既有标题
+
 ## 2026-11-01 14:47 | model=dsh-lead-deepseek-v4.1 | task=T019 完成
 - 摘要: T019 relay_doctor 只读七检:D1 Node/D2 manifest/D3 入口投影漂移/D4 残留认领锁/D5 未登记任务树/D6 .relay 完整性/D7 引擎路径一致性;sync 新增 check 只读模式;新增 smoke-doctor(17 断言,含零写盘快照);README/CONTRACT 同步,工具数 10→11。
 - 事实(v1): 改动 8 文件(+342/-5) | 验收: 通过 | verify: PASS 13·WARN 1·ERROR 0 | 分支: relay/T019 @ad99cbd | 耗时: 31s
