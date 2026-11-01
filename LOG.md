@@ -1,5 +1,10 @@
 # 会话日志(最新在上)
 
+## 2026-11-01 14:11 | model=dsh-lead-deepseek-v4.1 | task=T016 完成
+- 摘要: v1.2.0 发布复验:relay_rules 含 R10/R11;./verify 全量无 ERROR(R10 实测对账一致 6 文件、R11 通过);npm test 八套冒烟全绿;README/CONTRACT/CHANGELOG/AGENTS 模板与规则表一致。
+- 事实(v1): 改动 0 文件(+0/-0) | 验收: 通过 | verify: PASS 9·WARN 1·ERROR 0 | 分支: main @未提交 | 耗时: 27s
+- 负结果: 自举时 MCP server 缓存引擎模块,新引擎行为只能用 CLI 冷加载验证(见 T015 负结果);发布复验必须用 CLI 跑 relay_rules/verify
+
 ## 2026-11-01 14:10 | model=dsh-lead-deepseek-v4.1 | task=T015 完成
 - 摘要: T015 简报有界化:LOG 摘要硬上限 200 字符(超长标注全文见 LOG.md);简报总长超 manifest.contextBudget(默认6000)追加显式告警而不裁剪任何段落;头部回显生效配置;新增 smoke-brief(10 断言);README/CONTRACT/CHANGELOG(1.2.0)与版本号同步。
 - 事实(v1): 改动 6 文件(+101/-4) | 验收: 通过 | verify: PASS 13·WARN 0·ERROR 0 | 分支: relay/T015 @da3c837 | 耗时: 28s
