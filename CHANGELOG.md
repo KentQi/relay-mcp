@@ -3,7 +3,7 @@
 本项目遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 格式;
 版本号遵循 [SemVer](https://semver.org/lang/zh-CN/)。
 
-## [1.2.0] - 2026-11-01
+## [1.3.0] - 2026-11-01
 
 ### Added
 - **事实底账(R10)**:`relay_session_end` 由引擎确定性写入 `- 事实(v1):` 行(改动文件数/±/验收结果/verify 汇总/分支与 SHA/耗时);`relay_verify` 校验存在性与文件数一致(默认 WARN,`manifest.facts.strict=true` 升级 ERROR,`facts.since` 之前的旧条目豁免)。零 LLM、零新增状态文件
