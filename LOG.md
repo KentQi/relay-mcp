@@ -1,5 +1,14 @@
 # 会话日志(最新在上)
 
+## 2026-11-01 23:46 | model=dsh-lead-deepseek-v4.1 | task=T025 完成
+- 摘要: T025 provenance 发布前置:package.json 补 repository(git+https://github.com/KentQi/relay-mcp.git)与 bugs(…/issues);smoke-pack 增加 2 条机检断言(28→30),打包边界 46 文件断言不回归;npm test 14 套 573 断言全绿
+- 事实(v2): mode=managed | 文件 2 | ± +10/-0 | base=bbf250f74f9989f3d2a21c6fea10319a83efbd79 | sha=93b68c161441638c244ea609ea30afc23a75e4ad | branch=relay/T025 || 验收: 通过 | verify: PASS 15·WARN 0·ERROR 0 | 耗时: 28s
+- worktree: branch=relay/T025; sha=93b68c161441638c244ea609ea30afc23a75e4ad; 已验收,未合并(是否合并由人工决定)
+- 负结果: provenance 字段必须机器可验:只加 repository 字符串不够,冒烟要断言 url 指向真实仓库/ issues,否则拼错域名也能绿
+- 负结果: package.json 的 files 白名单不含 scripts/,冒烟脚本改了不进包——发布面与开发面要分开看
+- 负结果: T025 原验收是 node -e 自由文本,验收执行门只跑 test: 路径与 npm test,自由文本永不执行;改成 test:scripts/smoke-pack.mjs 才是可执行绿灯
+- 留给下一个: 数据闸已自然越过:LOG 22 条目 / 17 完成条目;决策动作=在 DECISIONS.md 追加标题含 T018 的条目,锚定 T017 提交 sha 与对应 LOG 原文,写可测复评阈值(LOG ≥ 30 条),断言脚本用 git log 反查 sha 真实存在
+
 ## 2026-11-01 23:43 | model=dsh-lead-deepseek-v4.1 | task=T024 完成
 - 摘要: T024 LOG 边界规则 R12:活跃区(归档指针之前的行)>150 或完成条目 >20 → WARN(manifest.logBoundary.strict=true 升 ERROR),只报警不自动归档;归档指针语义与落地硬约束写入 CONTRACT;CONTRACT/relay_rules/AGENTS 模板三处一致;新增 13 断言冒烟并接入 npm test;perf 规模不变量改为 R12 单列断言
 - 事实(v2): mode=managed | 文件 12 | ± +159/-19 | base=56cfed8d9983946703b2c0aceefa07f32dc06b54 | sha=aff8eeb950e23877dffc9db6f5ca5f3fb4db4ab5 | branch=relay/T024 || 验收: 通过 | verify: PASS 15·WARN 0·ERROR 0 | 耗时: 28s

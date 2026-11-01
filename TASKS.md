@@ -14,8 +14,6 @@
 (空——认领后由 relay_claim 移入;认领锁在 .relay/claims/,TTL 4 小时,崩溃会话的认领到期自动可接管)
 
 ## 待办
-- [ ] T025 补 package.json 的 repository / bugs 字段(provenance 发布前置)
-  验收: node -e "const p=require('./package.json'); if(!p.repository||!p.bugs) process.exit(1)" 退出 0
 - [ ] T021 检索寻址(T018)收益复核:数据闸未过(LOG 16 < 20),按实测决定去留
   验收: test:scripts/smoke-t021-decision.mjs
   备注: 完成动作 = 在 DECISIONS.md 追加一条标题含 T018 的决策条目,且必须锚定不可变证据(T017 的提交 sha + 对应 LOG 条目原文)与可测复评阈值(如 LOG ≥ 30 条),断言脚本会用 git log 反查 sha 是否真实存在——只写「保留」两个字不算通过;调用次数与「取回失败」无法机检(recall 零持久化、无遥测),只作为决策理由的人工依据;回退方式 = 移除 relay_recall/relay_get 注册,协议面与事实底账不受影响;数据闸现状如实记录:实测 16 条 → 当前 20 条,已自然越过闸门
@@ -35,6 +33,9 @@
   验收: verify 全绿 且 `npm test` 通过 且 新增并发认领回归断言(两模型同时 claim 不同任务,两条认领均不丢失)
 
 ## 已完成
+- [x] T025 补 package.json 的 repository / bugs 字段(provenance 发布前置)  (2026-11-01)
+  验收: test:scripts/smoke-pack.mjs
+  断言: package.json 含 repository(指向 github.com/KentQi/relay-mcp)与 bugs(指向 /issues);现有 46 文件/129kB 打包断言不回归
 - [x] T024 LOG 边界规则(P3-32 / T001 最小触发):新增 R12,LOG 活跃区 >150 行或完成条目 >20 → WARN(facts.strict 同款 strict 可升 ERROR);归档动作留人工  (2026-11-01)
   验收: test:scripts/smoke-r12-boundary.mjs
   断言: 151 行 LOG fixture → R12 WARN;120 行 → 全绿;CONTRACT.md 规则表含 `| R12 |` 行且 README 规则清单提及 R12(修宪三处一致:CONTRACT + relay_rules + AGENTS 模板)
