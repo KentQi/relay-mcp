@@ -182,6 +182,7 @@ export const startServer = async ({ onInit, onMethod }) => {
 | R7 | 发散报警 | LOG 最近 3 条任务会话(task=维护 的条目不计入)task 均非「T### 完成」→ error:停机,升级人类仲裁 |
 | R8 | 风格归一化 | 项目存在 prettier/eslint 配置或 package.json scripts.format → 提示运行;不存在 → skip(不强加工具链) |
 | R9 | LOG/TASKS 一致性 | LOG 最新条目里 task=Txxx 完成 而 TASKS 中 Txxx 仍为未完成 → error |
+| R11 | 协议文件敏感内容 | TASKS.md/LOG.md 内容级扫描(AWS/GitHub/Slack/OpenAI/Google 密钥样式 + PEM 私钥块);同行 `relay:secret-ok` 豁免;命中 → error,`relay_session_end` 在任何写盘前阻断 |
 
 - 检查输出:`| ID | 结果 | 详情 |` 表格 + 末尾汇总;任一 error → isError:true(fast 模式跳过 R5/R6/R8,session_end 默认 fast=false 全量)
 - **受保护路径**:`verify`(脚本)、`.relay/**`、`*/tests/**`、`*.test.*`、`*.spec.*` —— relay_session_end 若检测到本会话改动了这些文件,则**不自动 commit**,输出"涉及受保护路径(护栏),需人类批准后手动提交"并列出文件
@@ -198,3 +199,13 @@ export const startServer = async ({ onInit, onMethod }) => {
 ## W1 专属:规范文档改写目标
 
 把 `<claude 配置目录>/CLAUDE-PROJECT-RULES.md`(先读原文)改造为 v3:五公理→三原则(最小充分状态/无信任交接/规范即检查)→仓库文件集(START/SPEC/DECISIONS/TASKS/LOG/verify + docs 五件套**原样保留**)→单源投影注入(入口文件生成,CI 零 diff)→六步会话协议→规则 ID 表(同上 R1-R9)→人类四件事(验收标准/仲裁阻塞/抽查/批准护栏修改)→三场景使用(0→1 用 relay_init;1→10/10→100 用 relay_onboard;日常用 session_start/end)→失效模式表→自检清单。≤220 行,注明"本规范的可执行形式 = relay-mcp"。
+## 2026-11-01 T014 补充契约(内容级密钥闸 / R11)
+
+- **分层**:`findSensitiveChanges`(util)继续负责**路径级**密钥守卫(`.env*`/`*secret*`/`*.key`/`*.pem`/id_rsa 不自动提交);新增 `scanSecrets` 负责**内容级**扫描,二者互补,任一不得单独移除。
+- **规则 R11**:`relay_verify` 扫描 controlRoot 的 `TASKS.md` + `LOG.md`(fast 与 full 均执行;executionRoot 任务树不跑,同 R7/R9 边界)。命中 → ERROR,详情以 `修复:` 开头;输出只含命中行号、规则名与**前 4 字符**预览,绝不回显完整密钥。
+- **规则集(刻意窄,宁漏不误报)**:AWS `AKIA[0-9A-Z]{16}`、GitHub `gh[pous]_[A-Za-z0-9]{36}`、Slack `xox[baprs]-…`、OpenAI 风格 `sk-[A-Za-z0-9]{20,}`、Google `AIza…`、PEM 私钥块 `-----BEGIN … PRIVATE KEY-----`。
+- **豁免**:同一行出现 `relay:secret-ok` 即跳过该行(人类可见、进 diff、可审计);不提供 manifest 白名单——少一个绕过面。
+- **出场前置闸**:`relay_session_end` 在**任何文件写入之前**扫描本次输入(`model`/`summary`/`blocked`/`done_task`/`next.*`/`negatives[]`);命中 → isError,不写 TASKS、不写 LOG、不提交、不释放认领锁(避免「TASKS 已写、LOG 被拦」的半写状态)。
+- **写盘二次扫描**:TASKS/LOG 序列化后的全文在 `writeProtocolFile` 前再扫一次(兜住既有条目里已存在的密钥),命中同样阻断。
+- **不可逆语义**:密钥一旦进入 git 历史即不可撤回;R11 只防「未来写入」,不救已提交内容——修复指令明确要求轮换密钥。
+- **冒烟**:`scripts/smoke-content-guard.mjs` 覆盖命中/豁免/阻断/无半写四类断言,已接入 `npm test` 链。

@@ -26,6 +26,7 @@
 ## 红线
 
 - 受保护路径(`verify`、`.relay/`、`tests/`、`*.test.*`、`*.spec.*`)的改动不会自动提交,需人类批准;疑似密钥文件(`.env*`、`*secret*`、`*.key`、`*.pem`)同理
+- 协议文件(`TASKS.md`/`LOG.md`)内容里的密钥样式串会被 R11 阻断(误报同行标注 `relay:secret-ok` 豁免)
 - 出场绿闸会实际执行可执行验收(`test:` 路径跑 `node --test`;有 `package.json` 的 `scripts.test` 就跑 `npm test`)——不绿不提交
 - LOG 连续 3 条无“完成”(R7)→ 停机升级人类仲裁,不要硬干
 - 验收标准不可执行 = 没有验收标准;一个会话内搞不定 → LOG 写负结果,换路或拆任务

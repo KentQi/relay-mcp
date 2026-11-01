@@ -148,6 +148,36 @@ export const findSensitiveChanges = (statusLines) => {
   return [...hits.entries()].map(([path, why]) => ({ path, why })).sort((a, b) => a.path.localeCompare(b.path));
 };
 
+// —— 协议文件内容级密钥扫描(R11)——
+// 上面的 SECRET_RULES/findSensitiveChanges 只看路径,不看内容;这里补内容级。
+// 规则刻意窄:宁可漏掉冷门格式,也不要误报把出场绿闸变成噪音源。
+// 一行只报一条,preview 只保留前 4 字符——扫描结果会进简报/LOG,绝不能回显完整密钥。
+export const SECRET_OK_MARKER = 'relay:secret-ok';
+export const SECRET_CONTENT_RULES = [
+  ['AWS access key', /AKIA[0-9A-Z]{16}/],
+  ['GitHub token', /gh[pous]_[A-Za-z0-9]{36}/],
+  ['Slack token', /xox[baprs]-[A-Za-z0-9-]{10,}/],
+  ['OpenAI-style key', /sk-[A-Za-z0-9]{20,}/],
+  ['Google API key', /AIza[0-9A-Za-z_-]{35}/],
+  ['private key block', /-----BEGIN [A-Z ]*PRIVATE KEY-----/],
+];
+export const scanSecrets = (text, { allowMarker = true } = {}) => {
+  const hits = [];
+  const lines = String(text ?? '').replace(/\r\n/g, '\n').split('\n');
+  for (let i = 0; i < lines.length; i++) {
+    if (allowMarker && lines[i].includes(SECRET_OK_MARKER)) continue;
+    for (const [rule, re] of SECRET_CONTENT_RULES) {
+      const m = re.exec(lines[i]);
+      if (!m) continue;
+      hits.push({ rule, line: i + 1, preview: `${m[0].slice(0, 4)}…(${m[0].length} chars)` });
+      break; // 一行只报一条,避免同一行刷屏
+    }
+  }
+  return hits;
+};
+export const formatSecretHits = (hits, file = '') =>
+  (hits || []).map((h) => `${file ? `${file}:` : ''}${h.line} 命中 ${h.rule} ${h.preview}`).join('; ');
+
 // =====================================================================
 // 协议文件安全写 / 符号链接防线 / 锁协议(JSON v2,兼容旧文本 v1)
 // =====================================================================

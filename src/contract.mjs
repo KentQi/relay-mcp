@@ -392,7 +392,7 @@ export const PROMPTS = [
 
 /* ------------------------------- RULES ------------------------------- */
 
-const RULES_TEXT = `# relay 规则表(R1–R9)
+const RULES_TEXT = `# relay 规则表(R 系列)
 
 机检规则与执法点。任一 error 级规则失败 → relay_verify / relay_session_end 返回 isError:true;
 每条失败详情以 \`修复:\` 开头,给出可执行指令。
@@ -408,6 +408,7 @@ const RULES_TEXT = `# relay 规则表(R1–R9)
 | R7 | 发散报警 | LOG 最近 3 条任务会话(task=维护 的条目不计入)task 均非「T### 完成」→ error:停机,升级人类仲裁 | relay_verify |
 | R8 | 风格归一化 | 项目存在 prettier/eslint 配置或 package.json scripts.format → 提示运行;不存在 → skip(不强加工具链) | relay_verify(full) |
 | R9 | LOG/TASKS 一致性 | LOG 最新条目 task=Txxx 完成 而 TASKS 中 Txxx 仍为未完成 → error | relay_verify / session_end 绿闸 |
+| R11 | 协议文件敏感内容 | TASKS.md/LOG.md 内容级扫描(AWS/GitHub/Slack/OpenAI/Google 密钥样式与 PEM 私钥块);同行 \`relay:secret-ok\` 豁免;命中 → error,出场写盘前阻断且不提交 | relay_verify / session_end 绿闸 |
 
 补充:
 

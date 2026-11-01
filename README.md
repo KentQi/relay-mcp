@@ -5,7 +5,7 @@
 [![Node](https://img.shields.io/badge/node-%E2%89%A518-brightgreen)](package.json)
 [![deps](https://img.shields.io/badge/dependencies-0-blue)](package.json)
 
-**多模型、多会话开发的接力协议 MCP server。** 状态存放在仓库文件中，由 R1–R9 机检与可执行验收共同守门。
+**多模型、多会话开发的接力协议 MCP server。** 状态存放在仓库文件中，由 R 系列机检规则（R1–R11）与可执行验收共同守门。
 
 **[中文](#中文) | [English](#english)**
 
@@ -19,7 +19,7 @@ relay-mcp 让不同模型（Claude / Codex / Gemini / Cursor 等）在同一仓�
 
 - 零运行时依赖（仅 `node:` 内置模块），Node ≥ 18，无构建步骤
 - 10 个 MCP 工具，`node src/index.mjs` 即为 stdio server
-- 规范即检查：R1–R9 全部由 `relay_verify` 机检；出场绿闸同时要求可执行验收真实通过
+- 规范即检查：R 系列规则全部由 `relay_verify` 机检；出场绿闸同时要求可执行验收真实通过
 - 入口文件单源投影：`AGENTS.md` 必需，`CLAUDE.md` / `GEMINI.md` 按需生成
 
 ### 安装
@@ -53,7 +53,7 @@ node scripts/install-mcp.mjs --target dsh --dsh-profile desktop
 
 出场前必须同时满足：
 
-1. `relay_verify` 全量 R1–R9 无 ERROR；
+1. `relay_verify` 全量 R 系列规则无 ERROR；
 2. 任务的可执行验收真实通过（`test:` 路径运行 `node --test`；项目声明 `scripts.test` 时运行 `npm test`）。
 
 任一条件不满足：不更新 TASKS/LOG、不提交、保留认领锁。
@@ -67,7 +67,7 @@ node scripts/install-mcp.mjs --target dsh --dsh-profile desktop
 
 **出场 = 双提交**：executionRoot 提交任务分支代码，controlRoot 仅提交 `TASKS.md` / `LOG.md`；两者 SHA 都会输出，任一失败则不标完成、保留认领锁。
 
-- **双根绿闸**：controlRoot 跑全量 R1–R9；executionRoot 跑任务树 R1/R2/R3/R4/R8；两侧 ERROR 合并阻断。
+- **双根绿闸**：controlRoot 跑全量 R 系列；executionRoot 跑任务树 R1/R2/R3/R4/R8；两侧 ERROR 合并阻断。
 - **根错配保护**：受管任务从 controlRoot 完成一律 isError（无空树例外）；HEAD 无新提交的伪 SHA 同样拒绝。
 - **成对证据（R5/R6）**：任务分支代码提交、controlRoot 完成提交、TASKS/LOG 已提交干净、LOG 记录 `branch=` 与代码 SHA，四项缺一不可。
 - **注册表恢复**：`.relay/worktrees.json` 缺失或损坏时 fail-closed；可用 `git worktree list` 核对，并在 controlRoot 重新 `relay_claim` 重建登记。
@@ -108,6 +108,7 @@ worktree 清理默认 dry-run：只删除已登记、已过期、非活跃、干
 ### 安全与边界
 
 - 密钥守卫：`.env*`、`*secret*`、`*credential*`、`*.key`、`*.pem`、`id_rsa` 不自动提交。
+- 内容级密钥闸（R11）：`TASKS.md` / `LOG.md` 命中 AWS / GitHub / Slack / OpenAI / Google 密钥样式或 PEM 私钥块 → `relay_verify` 报 ERROR，出场写盘前直接阻断（不写、不提交）；误报可在同一行标注 `relay:secret-ok` 豁免。扫描输出只给前 4 字符预览，绝不回显完整密钥。
 - 受保护路径：`verify`、`.relay/**`、`tests/**` 与测试文件改动不自动提交；最终防线是 CI 与人工审核。
 - 锁：仓库写锁带心跳与写前 fencing；任务认领锁刻意关闭心跳，保留 240 分钟 TTL 崩溃恢复。并发会话必须使用不同 `model` 标识（同名 model 无法区分持有者）。
 - 当前不提供 abort/release、任务 status 工具或 sessionId；恢复方式为 TTL 接管、出场释放或 cleanup。
@@ -123,7 +124,7 @@ worktree 清理默认 dry-run：只删除已登记、已过期、非活跃、干
 | `relay_session_end` | 出场绿闸与双提交 |
 | `relay_claim` | 认领任务，返回双根与任务分支 |
 | `relay_worktree_cleanup` | 预览或清理过期任务工作树 |
-| `relay_verify` | 运行 R1–R9 检查 |
+| `relay_verify` | 运行 R 系列检查（编号与执法点见 `relay_rules`） |
 | `relay_sync` | 升级/修复入口投影与基线 |
 | `relay_rules` | 返回规则 ID 表 |
 
@@ -144,7 +145,7 @@ node src/cli.mjs relay_worktree_cleanup --root /path/to/project --json confirm=t
 
 ## English
 
-relay-mcp is an MCP server for reliable handoff across coding models and sessions. Handoff state lives in repository files (`START / SPEC / DECISIONS / TASKS / LOG`), and an exit gate verifies the work with machine-checked rules (R1–R9) plus the project's executable acceptance tests before anything is committed.
+relay-mcp is an MCP server for reliable handoff across coding models and sessions. Handoff state lives in repository files (`START / SPEC / DECISIONS / TASKS / LOG`), and an exit gate verifies the work with machine-checked rules (R1–R11) plus the project's executable acceptance tests before anything is committed.
 
 - Zero runtime dependencies, Node ≥ 18, no build step; 10 MCP tools over stdio (`node src/index.mjs`)
 - `AGENTS.md` is the required project entry; `CLAUDE.md` / `GEMINI.md` are optional projections
