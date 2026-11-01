@@ -116,6 +116,10 @@ export const generateEntryFiles = async (root, ctx = {}) => {
     const current = await readFileSafe(target, null);
 
     if (current === null) {
+      if (mode === 'check') { // 只读模式(relay_doctor):报告缺失,绝不落盘
+        result.drift.push({ file: name, diff: '文件缺失(未生成)' });
+        continue;
+      }
       await writeFile(target, generated, 'utf8');
       result.created.push(name);
       continue;
@@ -125,6 +129,10 @@ export const generateEntryFiles = async (root, ctx = {}) => {
     const projection = composeProjection(generated, current);
     if (current === projection) {
       result.kept.push({ file: name, reason: '与模板再生内容一致(含用户保留区)' });
+      continue;
+    }
+    if (mode === 'check') { // 只读模式(relay_doctor):报告漂移,绝不落盘
+      result.drift.push({ file: name, diff: diffSummary(current, projection) });
       continue;
     }
 

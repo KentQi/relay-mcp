@@ -231,9 +231,24 @@ export const TOOLS = [
     },
   },
   {
+    name: 'relay_doctor',
+    description:
+      'Read-only environment diagnosis (7 checks): Node runtime, manifest schema, entry-file projection drift, ' +
+      'stale claim locks, unregistered relay task worktrees, .relay directory integrity, and engine path ' +
+      'consistency (RELAY_HOME / manifest.relayHome). Never writes, never takes the repo write lock, and never ' +
+      'auto-fixes: every problem line starts with "修复:" with an executable instruction. Use it after upgrades ' +
+      'or when install/registration drift is suspected. Repo-rule health is relay_verify territory.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        root: { type: 'string', description: ROOT_DESC },
+      },
+    },
+  },
+  {
     name: 'relay_rules',
     description:
-      'Return the R1–R9 rule table: which repo rules are machine-checked, what each checks, and where ' +
+      'Return the R-series rule table (R1–R11): which repo rules are machine-checked, what each checks, and where ' +
       'it is enforced (relay_verify / session_end green gate). Read this when a verify failure is ' +
       'unclear, or to see the whole rule set without running verify.',
     inputSchema: { type: 'object', properties: {} },
@@ -441,6 +456,7 @@ const ENGINE_OF = {
   relay_claim: { module: './engines/session.mjs', fn: 'relayClaim' },
   relay_restructure: { module: './engines/restructure.mjs', fn: 'relayRestructure' },
   relay_worktree_cleanup: { module: './engines/worktree.mjs', fn: 'relayWorktreeCleanup' },
+  relay_doctor: { module: './engines/doctor.mjs', fn: 'relayDoctor' },
 };
 
 const engineModuleCache = new Map();

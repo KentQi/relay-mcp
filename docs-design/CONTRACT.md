@@ -235,3 +235,18 @@ export const startServer = async ({ onInit, onMethod }) => {
 - **生效配置回显**:简报头部新增一行 `- 生效配置: facts=… contextBudget=…`,让 manifest 里被静默忽略的拼错字段当场可见。
 - **配置**:`"contextBudget": 6000`;非有限数或非正数回退默认(不改变既有行为,只影响告警阈值)。
 - **冒烟**:`scripts/smoke-brief.mjs` 覆盖截断/总长/告警/不裁剪段落四类断言,已接入 `npm test` 链。
+## 2026-11-01 T019 补充契约(relay_doctor 只读七检)
+
+- **定位**:`relay_doctor` 诊断「环境/安装面」漂移,`relay_verify` 诊断「仓库规范面」;二者不互相替代。
+- **只读铁律**:不写任何文件、不取仓库写锁、不自动修复。修复指令只引用 relay 原生命令,**绝不输出 rm**。
+- **七检**:
+  - D1 Node 运行时 ≥ 18;
+  - D2 `.relay/manifest.json` 可解析 + schema 兼容(version=1,关键字段);
+  - D3 入口文件与模板投影漂移(复用 `generateEntryFiles` 新增的 **check 只读模式**,绝不落盘);
+  - D4 `.relay/claims/*.lock` 残留/过期(TTL 240min;空/半初始化锁也报);
+  - D5 未登记的 relay 任务树(`git worktree list` 对比注册表;分支 `relay/*` 或位于受管缓存);
+  - D6 `.relay` 存在、非符号链接、注册表可解析;
+  - D7 引擎路径一致性(`RELAY_HOME`、`manifest.relayHome` vs 实际 `templates/` 的父目录)。
+- **退出语义**:存在 ERROR → isError true(WARN 不阻断);输出 `| 检查 | 结果 | 详情 |` 表 + 按序「修复:」清单。
+- **sync.mjs 新增只读模式**:`generateEntryFiles(root, { mode: 'check' })` 只报告漂移/缺失,不写盘、不备份;doctor 专用,其余模式行为不变。
+- **冒烟**:`scripts/smoke-doctor.mjs` 覆盖健康仓库 + 6 类故障 fixture(manifest 缺失/损坏、引擎路径错配、过期锁、未登记 worktree、入口漂移、注册表损坏)+ `.relay` 零写盘快照断言,已接入 `npm test`。
