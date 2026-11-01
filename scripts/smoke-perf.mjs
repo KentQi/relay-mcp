@@ -62,23 +62,26 @@ try {
   ok(t2 && t2.git <= 3, `fast git 子进程 ${t2 && t2.git} ≤ 3`);
   ok(t2 && t2.sync === 0, 'fast 同步 spawn = 0');
 
-  console.log('\n== 规模无关性:20/100/500 条计数一致 ==');
+  console.log('\n== 规模无关性:20/100/500 条计数一致(R12 除外——它按设计随规模变化) ==');
   const counts = [];
   const tables = [];
+  const r12 = [];
   for (const n of [20, 100, 500]) {
     fillLog(n);
     cli(tmp, 'relay_verify', { full: true }, trace);
     const t = traceOf(trace);
     counts.push(t ? `${t.reads['LOG.md']}/${t.reads['TASKS.md']}/${t.reads['manifest.json']}/${t.git}/${t.sync}` : 'null');
     const r = cli(tmp, 'relay_verify', { full: true }, '');
-    // 只比较「ID + 判定」两列:R7 的详情天然随维护条目数变化(「另排除 N 条维护条目」),
-    // 判定结果本身必须与 LOG 规模无关,这才是规模不变量的可机检形态。
-    tables.push(out(r).split('\n').filter((l) => l.startsWith('| R'))
-      .map((l) => l.split('|').slice(1, 3).map((s) => s.trim()).join('='))
-      .join('\n'));
+    // 只比较「ID + 判定」两列:R7 的详情天然随维护条目数变化(「另排除 N 条维护条目」);
+    // R12 是唯一按设计随 LOG 规模变化的规则(边界规则,500 行 fixture 必须 WARN),单独断言。
+    const rows = out(r).split('\n').filter((l) => l.startsWith('| R'))
+      .map((l) => l.split('|').slice(1, 3).map((s) => s.trim()));
+    r12.push((rows.find((x) => x[0] === 'R12') || ['', ''])[1]);
+    tables.push(rows.filter((x) => x[0] !== 'R12').map((x) => x.join('=')).join('\n'));
   }
   ok(counts[0] === counts[1] && counts[1] === counts[2], `读/进程计数与 LOG 规模无关(${counts.join(' | ')})`);
-  ok(tables[0] === tables[1] && tables[1] === tables[2], 'R1–R11 判定结果与 LOG 规模无关(20/100/500 条一致)');
+  ok(tables[0] === tables[1] && tables[1] === tables[2], 'R1–R11 判定结果与 LOG 规模无关(20/100/500 条一致;R12 除外)');
+  ok(r12[0] === 'PASS' && r12[1] === 'WARN' && r12[2] === 'WARN', `R12 按设计随规模变化(20/100/500 条 ≈62/302/1502 行 → ${r12.join('/')})`);
 
   console.log('\n== 普通仓库:recall/get 的 git = 0(fs 快路径) ==');
   const r1 = cli(tmp, 'relay_recall', {}, trace);

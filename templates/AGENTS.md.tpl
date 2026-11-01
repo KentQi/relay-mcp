@@ -18,7 +18,7 @@
 - **双根**:`relay_claim` 返回 controlRoot(协议控制面:TASKS/LOG/认领锁/注册表)与 executionRoot(独立检出:代码/测试/任务分支提交);代码与测试只在 executionRoot 执行。
 - **独立依赖**:executionRoot 是独立 checkout,`node_modules`/`.env` 不与主工作树共享;在其中装好依赖再跑 R8/测试。
 - **双提交出场**:绿闸通过后先在 executionRoot 提交代码到 `relay/T###`,再在 controlRoot 只提交 `TASKS.md`+`LOG.md`;输出两个 SHA(代码 + 控制面)。控制面提交失败 → 重跑出场补交;成对证据要求两提交 + LOG 记录 branch/sha 齐备。
-- **双根绿闸**:controlRoot 全量 R 系列;executionRoot R1/R2/R3/R4/R8(跳过 R7/R9/R10/R11);两侧 ERROR 合并阻断。
+- **双根绿闸**:controlRoot 全量 R 系列;executionRoot R1/R2/R3/R4/R8(跳过 R7/R9/R10/R11/R12);两侧 ERROR 合并阻断。
 - **根错配(严格)**:任务仍有 registry 未完成记录时,从 controlRoot 完成**一律被拒**(无空树例外),须在 executionRoot 出场;注册表缺失/损坏/记录丢失时用 `git worktree list` 反查 `relay/<task>` checkout 与受管缓存路径,命中同样拒绝;未登记 linked worktree 完成出场 fail-closed。
 - **未合并语义**:任务分支验收通过 ≠ 已合并;relay 不自动 merge/rebase/push/删分支。人工流程:`git log <controlRoot>..relay/T###` 复核 → `git merge --no-ff relay/T###` → 需要时 `git branch -d`。
 - **清理保护**:`relay_worktree_cleanup` 默认 dry-run;含未跟踪/ignored 本地内容(`.env`、`node_modules`、构建产物)的 worktree 默认保留;只删干净、过期、非活跃、已登记的目录,分支保留。
@@ -41,6 +41,7 @@
 | R9 | LOG 记完成的任务,TASKS 里必须已完成 |
 | R10 | 完成条目必须带引擎写入的「事实(v2)」行:机检段(文件数/±/base/sha/branch)与 git 重算逐字段一致,不一致 ERROR;叙述段(验收/verify/耗时)不参与对账 |
 | R11 | 协议文件不得含密钥样式内容;出场写盘前阻断,误报同行标注 `relay:secret-ok` 豁免 |
+| R12 | LOG 活跃区 >150 行或完成条目 >20 → WARN(strict 升 ERROR);归档动作留人工 |
 
 细则与执法点:`relay_rules`;完整规范见 relay-mcp 仓库与全局 CLAUDE-PROJECT-RULES。
 

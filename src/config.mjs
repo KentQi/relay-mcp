@@ -127,6 +127,11 @@ export const readManifestConfig = async (root, { manifest: preloaded } = {}) => 
       since: m && m.facts && typeof m.facts.since === 'string' && m.facts.since.trim() ? m.facts.since.trim() : null,
       strict: !!(m && m.facts && m.facts.strict === true),
     },
+    // LOG 边界(T024/R12):活跃区行数/完成条目数超限 → WARN;strict 同 facts.strict 风格可升 ERROR。
+    // 阈值固定(150 行 / 20 完成条目),不做可配置——避免"把阈值调大"成为消音手段。
+    logBoundary: {
+      strict: !!(m && m.logBoundary && m.logBoundary.strict === true),
+    },
     // 简报字符预算(T015):非有限数/非正数 → 回退默认;不改变既有行为(只影响告警阈值)。
     contextBudget: m && Number.isFinite(m.contextBudget) && m.contextBudget > 0 ? m.contextBudget : DEFAULT_CONTEXT_BUDGET,
   };
