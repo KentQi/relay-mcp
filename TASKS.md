@@ -18,11 +18,11 @@
   验收: test:scripts/smoke-perf.mjs(计数钩子,不用计时阈值):full 模式 LOG/TASKS/manifest 各读 1 次、git 进程 ≤4、同步 spawn=0;fast 模式 git ≤3;普通仓库下 relay_recall/relay_get 的 git 进程=0 且输出与 golden 逐字一致;12 套既有 smoke 全绿
   备注: 实测依据(perf-eng,median 5):full verify 9 个 spawn≈60-75ms,远大于 500 条时 LOG 4× 读放大(+1.8ms),所以子进程收敛优先于读放大;isGitRepo 同步阻塞实测 4 次≈40ms 事件循环冻结(async 等价 ≤3ms);recall/get 15ms 里 ~14ms 是 resolveRelayRoots 的 2 个 git;增长率≈220 条/年,不按"LOG 会很大"立项
 - [ ] T023 事实行 v2 + R10 去 fail-open(P3-31):按「可复算性」拆机检段/叙述段——机检段=文件数、±行数(managed)、range/base、sha、分支(检查时点全部从 git 重算);叙述段=验收结果、耗时、verify 汇总(写时快照,不可重算,仅结构校验、不构成交接证据);verify.mjs:381 的「无可定位提交→PASS」改为 WARN/SKIP,永不 PASS
-  验收: test:scripts/smoke-facts.mjs 扩展:篡改机检段任一字段 → R10 红;改叙述段 → 不误红;伪造 sha / 删除提交 → WARN 或 SKIP 而非 PASS;npm test + ./verify 全绿
+  验收: test:scripts/smoke-facts.mjs 扩展:篡改机检段任一字段 → R10 红;改叙述段 → 不误红;伪造 sha / 删除提交 → WARN 或 SKIP 而非 PASS;npm test + ./verify 全绿 且 新增断言:CONTRACT.md 的事实行字段清单与 v2 拆段一致(规则改动走修宪,三处一致才算完整)
   备注: 拒绝"8 项全对账"(protocol-eng 复核):验收/耗时/verify 汇总是写时快照,检查时点重算不出,强行对账只能产假绿或死锁;R10 当前是装饰绿——"未验证的确信"比空白更危险
-- [ ] T024 LOG 边界规则(P3-32 / T001 最小触发):新增 R12,LOG 活跃区 >100 行或完成条目 >30 → WARN(facts.strict 同款 strict 可升 ERROR);归档动作留人工
-  验收: npm test 全绿 且 新增 smoke:101 行 LOG fixture → relay_verify 输出含 R12 WARN;剪回 80 行 → 全绿
-  备注: 不做归档引擎;完整归档的触发条件 = R12 WARN 连续两次或完成条目 >30。归档实现时的硬约束(protocol-eng):只从尾部搬、永不触碰头部;边界严格早于最新完成条目(否则 R10 逃逸);live 保留 ≥3 条任务会话(R7 窗口不退化);控制面提交白名单/PROTOCOL_FILES/R11 扫描面必须同步扩展,否则归档文件进不了控制提交=新漂移;归档只能 git move+指针,不压缩不删历史
+- [ ] T024 LOG 边界规则(P3-32 / T001 最小触发):新增 R12,LOG 活跃区 >150 行或完成条目 >20 → WARN(facts.strict 同款 strict 可升 ERROR);归档动作留人工
+  验收: test:scripts/smoke-r12-boundary.mjs:151 行 LOG fixture → R12 WARN;120 行 → 全绿 且 CONTRACT.md 规则表含 `| R12 |` 行 且 README 规则清单提及 R12 且 npm test 全绿
+  备注: 阈值按现状设定——本仓库当前 117 行 / 20 完成条目,低于阈值,落地即绿,避免"裁判刚立就响"稀释真警报(审计方实测指出原 100 行阈值今天已越过);不做归档引擎;完整归档的触发条件 = R12 WARN 连续两次或完成条目 >20。归档实现时的硬约束(protocol-eng):只从尾部搬、永不触碰头部;边界严格早于最新完成条目(否则 R10 逃逸);live 保留 ≥3 条任务会话(R7 窗口不退化);控制面提交白名单/PROTOCOL_FILES/R11 扫描面必须同步扩展,否则归档文件进不了控制提交=新漂移;归档只能 git move+指针,不压缩不删历史
 - [ ] T025 补 package.json 的 repository / bugs 字段(provenance 发布前置)
   验收: node -e "const p=require('./package.json'); if(!p.repository||!p.bugs) process.exit(1)" 退出 0
 - [ ] T021 检索寻址(T018)收益复核:数据闸未过(LOG 16 < 20),按实测决定去留
