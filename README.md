@@ -38,6 +38,17 @@ node scripts/install-mcp.mjs --target dsh --dsh-profile desktop
 
 未内置的 harness 使用 `--print-json` 获取标准片段，粘贴到其 `mcpServers` 配置。安装后重启对应客户端，工具名为 `mcp__relay-mcp__relay_*`。
 
+### npm 分发（发布需人工批准）
+
+包内只含 `src/`、`templates/`、安装器与 README/LICENSE（`files` 白名单）；协议状态（`.relay/`、TASKS/LOG）与开发文档不进包。
+
+```sh
+npm pack --dry-run        # 校验打包面（46 个文件，约 129 kB）
+npx relay-mcp             # 启动 stdio server（等价 node src/index.mjs）
+```
+
+发布动作（`npm publish`）属人类修宪级决策，仓库不做自动发布；`scripts/smoke-pack.mjs` 在 CI 中守住打包边界。
+
 ### 快速开始
 
 | 场景 | 工具 |
