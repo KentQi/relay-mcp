@@ -182,7 +182,7 @@ export const startServer = async ({ onInit, onMethod }) => {
 | R7 | 发散报警 | LOG 最近 3 条任务会话(task=维护 的条目不计入)task 均非「T### 完成」→ error:停机,升级人类仲裁 |
 | R8 | 风格归一化 | 项目存在 prettier/eslint 配置或 package.json scripts.format → 提示运行;不存在 → skip(不强加工具链) |
 | R9 | LOG/TASKS 一致性 | LOG 最新条目里 task=Txxx 完成 而 TASKS 中 Txxx 仍为未完成 → error |
-| R10 | 事实对账 | LOG **最新完成条目**必须含引擎写入的「事实(v1)」行;可定位提交时只比文件数(`--no-renames`,用事实行自带的 base sha 对齐 range),不一致 → warn(`facts.strict=true` 才 error);缺事实行 → warn(旧条目豁免靠 `facts.since`,避免锁死出场) |
+| R10 | 事实对账 | LOG **最新完成条目**必须含引擎写入的「事实(v2)」行;机检段(mode/文件数/±/base/sha/branch)与 git 重算逐字段一致,不一致 → error;叙述段(验收/verify/耗时)不参与对账;无法定位提交 → warn(**永不 PASS**);缺事实行 → warn;v1 旧行只对文件数 |
 | R11 | 协议文件敏感内容 | TASKS.md/LOG.md 内容级扫描(AWS/GitHub/Slack/OpenAI/Google 密钥样式 + PEM 私钥块);同行 `relay:secret-ok` 豁免;命中 → error,`relay_session_end` 在任何写盘前阻断 |
 
 - 检查输出:`| ID | 结果 | 详情 |` 表格 + 末尾汇总;任一 error → isError:true(fast 模式跳过 R5/R6/R8,session_end 默认 fast=false 全量)
@@ -212,22 +212,28 @@ export const startServer = async ({ onInit, onMethod }) => {
 - **冒烟**:`scripts/smoke-content-guard.mjs` 覆盖命中/豁免/阻断/无半写四类断言,已接入 `npm test` 链。
 ## 2026-11-01 T013 补充契约(事实底账 / R10)
 
-- **写入**:`relay_session_end` 在 LOG 条目「摘要」之后追加一行 `- 事实(v1): …`,内容由引擎确定性派生,**模型不得手写或改写**。字段:改动文件数与 ± 行数、验收执行结果、verify 汇总(PASS/WARN/ERROR 计数)、分支与代码 SHA(单根未提交时标 `@未提交`)、耗时。
+- **写入**:`relay_session_end` 在 LOG 条目「摘要」之后追加一行 `- 事实(v2): …`,由引擎确定性派生,**模型不得手写或改写**。
+- **两段式(v2,以 `||` 分隔)**:
+  - **机检段**:`mode=<managed|single> | 文件 N | ± +x/-y | base=<sha|-> | sha=<sha|-> | branch=<name|->`——检查时点全部可从 git 重算;
+  - **叙述段**:`验收: … | verify: PASS a·WARN b·ERROR c | 耗时: Ns`——写时快照,检查时点不可重算,仅结构校验、不构成交接证据。
 - **口径**:
-  - managed(受管 worktree):`git diff --name-only --no-renames <baseSha>..HEAD`(executionRoot 任务分支)。
-  - 单根:工作区 vs HEAD(`git diff HEAD`),此时代码尚未提交,故不写 SHA。
-  - 非 git / git 不可读:退化为 `git status` 文件数,± 记 0(不假装知道)。
+  - managed(受管 worktree):`git diff --numstat --no-renames <baseSha>..HEAD`(文件数与 ± 都可对账);
+  - 单根:文件数取 `git status`(含未跟踪文件),± 取工作区 vs HEAD(未跟踪不计入 ±,故 v2 只在 managed 对账 ±);
+  - 非 git / git 不可读:退化为 status 文件数,± 记 0(不假装知道);
   - 协议文件 `TASKS.md`/`LOG.md` 恒不计入改动文件数。
 - **校验 R10**(仅 controlRoot,同 R7/R9 边界):
-  - 10.1 最新完成条目缺「事实(v1)」行 → **ERROR**(防手写伪造完成条目);
+  - 10.1 最新完成条目缺事实行 → **WARN**(由 ERROR 降级:ERROR 会锁死出场,而修复动作正是被阻断的调用);
   - 10.2 行格式不可解析 → **ERROR**(说明被手改或引擎回退);
-  - 10.3 可定位提交时重算文件数,不一致 → **WARN**;`manifest.facts.strict=true` → **ERROR**;
-  - 10.4 `manifest.facts.enabled` 未开 / `since` 未设 / 条目早于 `since` → **SKIP**(升级兼容)。
+  - 10.3 v2 机检段逐字段对账(文件数;managed 另对 ±),不一致 → **ERROR**;叙述段不参与对账;
+  - 10.3b 机检段结构自洽(不依赖 git):managed 必须有 base/sha 且 branch 以 `relay/` 开头;single 必须无 base/sha——篡改 mode/branch 直接 **ERROR**;
+  - 10.4 v1 旧行只对文件数(不一致 WARN,`facts.strict=true` 升 ERROR);
+  - 10.5 **无法定位提交 → WARN,永不 PASS**(fail-open 修复:未验证的确信比空白更危险);
+  - 10.6 `manifest.facts.enabled` 未开 / `since` 未设 / 条目早于 `since` → **SKIP**(升级兼容)。
 - **配置**(`.relay/manifest.json`):
   `"facts": { "enabled": true, "since": "YYYY-MM-DD HH:mm", "strict": false }`。
   `relay_init` / `relay_onboard` 默认写入 `enabled:true` 与启用时刻 `since`;旧项目缺席即旧行为(不写事实行、R10 跳过),`relay_sync` 输出升级提示但不改写 manifest(非破坏)。
-- **为何只比文件数**:行级 ±x/-y 会被 CRLF、重命名、合并与跨多提交污染,成为恒过或恒错的假裁判;文件数在同一 `--no-renames` 口径下稳定可复现。
-- **冒烟**:`scripts/smoke-facts.mjs` 覆盖写入/存在性/数字 WARN/strict ERROR/升级 SKIP 五类断言,已接入 `npm test` 链。
+- **为何拆段而不是全对账**:验收结果/verify 汇总/耗时是写时快照,检查时点重算不出;强行全对账只能产假绿或死锁。机检段必须可复算,叙述段显式不构成证据。
+- **冒烟**:`scripts/smoke-facts.mjs` 覆盖 v2 写入、机检段篡改、叙述段不误红、伪造 sha、managed ±、升级 SKIP、CONTRACT 一致性,已接入 `npm test` 链。
 ## 2026-11-01 T015 补充契约(简报有界化 / 预算告警)
 
 - **字段上限**:入场简报中每条 LOG 摘要最多 200 字符(负结果、留给下一个仍为 120),超限以 `…[截断 N 字,全文见 LOG.md]` 标注;**只截断展示,不改 LOG 本体**。
@@ -297,3 +303,9 @@ export const startServer = async ({ onInit, onMethod }) => {
 - **计数可观测(测试专用)**:设置 `RELAY_TRACE_FILE` 时,进程退出写 `{reads, git, sync}` 计数;生产行为不变。`scripts/smoke-perf.mjs` 用它做**确定性断言**,不用计时阈值(CI 抖动不会造成假红)。
 - **async 路径禁止同步 git 探测**:facts/verify 不再调用同步 `isGitRepo()`;同步版只保留给 bootstrap 等同步场景。
 - **规模不变量**:LOG 20/100/500 条时,读次数(1/1/1)与 git 进程数不变,R1–R11 **判定结果**一致(R7 详情里的「另排除 N 条维护条目」随规模变化属正常,不作断言)。
+## 2026-11-01 T023 补充契约(事实行 v2 / R10 去 fail-open)
+
+- 事实行升 **v2**:机检段(可复算)与叙述段(写时快照)以 `||` 分隔,详见 T013 修订段。
+- R10 不再有 fail-open:无法定位提交(伪造 sha、提交被重写、历史被裁剪)→ **WARN**,绝不 PASS。
+- 机检段篡改 → **ERROR**(默认,不再依赖 `facts.strict`);叙述段篡改**不误红**。
+- 向后兼容:v1 旧行继续可解析,只对文件数(不一致 WARN,strict 升 ERROR)。

@@ -71,7 +71,7 @@ npx relay-mcp             # 启动 stdio server（等价 node src/index.mjs）
 
 **简报有界（T015）**：入场简报的每条 LOG 摘要硬上限 200 字符（负结果/交接提示 120），超长条目只截断展示并标注"全文见 LOG.md"；总长超过 `manifest.contextBudget`（默认 6000）时追加显式告警而**不裁剪任何段落**（裁剪即静默降级）。
 
-**事实底账（R10）**：出场时由引擎写入一行 `- 事实(v1): 改动 N 文件(+x/-y) | 验收: 通过 | verify: PASS … | 分支: … @sha | 耗时: …s`，模型不得手写或改写。`relay_verify` 会核对它与 git 事实的文件数（`--no-renames`，只比文件数不比行数）：不一致默认 WARN，`manifest.facts.strict=true` 时升级为 ERROR；`manifest.facts.since` 之前的旧条目豁免，保证升级项目不被历史卡住。
+**事实底账（R10）**：出场时由引擎写入一行 `- 事实(v2): mode=… | 文件 N | ± +x/-y | base=… | sha=… | branch=… || 验收: … | verify: PASS a·WARN b·ERROR c | 耗时: Ns`，模型不得手写或改写。以 `||` 拆两段：**机检段**（mode/文件数/±/base/sha/branch）由 `relay_verify` 与 git 重算逐字段对账，不一致即 ERROR；**叙述段**（验收/verify 汇总/耗时）是写时快照，检查时点重算不出，不参与对账、不构成交接证据。无法定位对应提交（伪造 sha、历史被改写）→ WARN，**永不 PASS**；`manifest.facts.since` 之前的旧条目豁免，保证升级项目不被历史卡住。
 
 ### 任务级 worktree
 

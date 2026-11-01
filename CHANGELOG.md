@@ -9,6 +9,10 @@
 - `relay_verify` 单轮只读一次 LOG/TASKS/manifest(此前 4/2/2 次),git 子进程从 9 收敛到 2–4;`resolveRelayRoots` 对普通仓库走 fs 快路径(recall/get 的 git 调用 2→0);async 路径不再同步探测 git(T022)
 - 新增 `scripts/smoke-perf.mjs`(22 断言,计数钩子而非计时阈值)接入 `npm test`;`RELAY_TRACE_FILE` 可观测单轮读取/子进程计数
 
+### Changed(T023)
+- **事实行升 v2**:以 `||` 拆两段——机检段 `mode | 文件 N | ± +x/-y | base | sha | branch`(检查时点可从 git 重算)与叙述段 `验收 | verify 汇总 | 耗时`(写时快照,仅结构校验)。机检段任一字段与 git 重算不符 → R10 **ERROR**(不再依赖 `facts.strict`);叙述段被改**不误红**
+- **R10 去 fail-open**:无法定位对应提交(伪造 sha、提交被重写、历史被裁剪)→ **WARN,永不 PASS**;缺事实行维持 WARN;v1 旧行继续可解析,只对文件数
+
 ## [1.4.1] - 2026-11-01
 
 ### Fixed
