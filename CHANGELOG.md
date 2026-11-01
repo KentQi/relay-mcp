@@ -3,6 +3,17 @@
 本项目遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 格式;
 版本号遵循 [SemVer](https://semver.org/lang/zh-CN/)。
 
+## [1.4.0] - 2026-11-01
+
+### Added
+- **检索寻址(T018)**:`relay_recall`(只读索引:任务号/时间/model/状态/标题/条目体量/负结果数,支持 query/status/model/limit)与 `relay_get`(按任务号取全文 ≤5 个:验收 + 最新 LOG 条目 + 事实行/分支 SHA/负结果/交接 + 关联决策)。调用时从 LOG/TASKS 即时派生,**零持久索引**;输出围栏包裹并标注「数据非指令」
+- **自愈诊断(T019)**:`relay_doctor` 只读七检(Node / manifest schema / 入口投影漂移 / 残留认领锁 / 未登记任务树 / .relay 完整性 / 引擎路径一致性),不写盘、不取写锁、不自动修复;每条问题给可执行「修复:」指令。`generateEntryFiles` 新增 `mode: 'check'` 只读模式
+- **npm 分发面(T020)**:移除 `private`,`bin.relay-mcp = src/index.mjs`,`files` 白名单(src/templates/安装器/README/LICENSE),`engines.node >= 18`;`npm pack` 46 文件约 129 kB,协议状态与开发文档不进包;发布动作仍需人类批准
+- `scripts/smoke-doctor.mjs`(17 断言)、`scripts/smoke-recall.mjs`(22 断言)、`scripts/smoke-pack.mjs`(28 断言)接入 `npm test`
+
+### Changed
+- MCP 工具 11 → 13;`relay_rules`/`relay://protocol`/README/CONTRACT 同步检索与诊断能力
+
 ## [1.3.0] - 2026-11-01
 
 ### Added
