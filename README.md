@@ -58,6 +58,8 @@ node scripts/install-mcp.mjs --target dsh --dsh-profile desktop
 
 任一条件不满足：不更新 TASKS/LOG、不提交、保留认领锁。
 
+**简报有界（T015）**：入场简报的每条 LOG 摘要硬上限 200 字符（负结果/交接提示 120），超长条目只截断展示并标注"全文见 LOG.md"；总长超过 `manifest.contextBudget`（默认 6000）时追加显式告警而**不裁剪任何段落**（裁剪即静默降级）。
+
 **事实底账（R10）**：出场时由引擎写入一行 `- 事实(v1): 改动 N 文件(+x/-y) | 验收: 通过 | verify: PASS … | 分支: … @sha | 耗时: …s`，模型不得手写或改写。`relay_verify` 会核对它与 git 事实的文件数（`--no-renames`，只比文件数不比行数）：不一致默认 WARN，`manifest.facts.strict=true` 时升级为 ERROR；`manifest.facts.since` 之前的旧条目豁免，保证升级项目不被历史卡住。
 
 ### 任务级 worktree

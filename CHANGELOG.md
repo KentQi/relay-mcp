@@ -3,6 +3,22 @@
 本项目遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 格式;
 版本号遵循 [SemVer](https://semver.org/lang/zh-CN/)。
 
+## [1.2.0] - 2026-11-01
+
+### Added
+- **事实底账(R10)**:`relay_session_end` 由引擎确定性写入 `- 事实(v1):` 行(改动文件数/±/验收结果/verify 汇总/分支与 SHA/耗时);`relay_verify` 校验存在性与文件数一致(默认 WARN,`manifest.facts.strict=true` 升级 ERROR,`facts.since` 之前的旧条目豁免)。零 LLM、零新增状态文件
+- **内容级密钥闸(R11)**:`TASKS.md`/`LOG.md` 扫描 AWS/GitHub/Slack/OpenAI/Google 密钥样式与 PEM 私钥块;命中 ERROR,出场在任何写盘前阻断(不写、不提交、保留认领锁);同行 `relay:secret-ok` 豁免;输出只回显前 4 字符
+- **简报有界化**:LOG 摘要硬上限 200 字符,超长标注"全文见 LOG.md";总长超 `manifest.contextBudget`(默认 6000)显式告警而不裁剪段落;简报头部回显生效配置
+- `scripts/smoke-facts.mjs`(18 断言)、`scripts/smoke-brief.mjs`(10 断言)、`scripts/smoke-content-guard.mjs`(13 断言)接入 `npm test`
+
+### Changed
+- 规则表扩到 R1–R11;`relay_rules`、AGENTS.md 模板、README、CONTRACT 同步
+- `relay_init`/`relay_onboard` 默认写入 `manifest.facts`;旧项目缺席即旧行为
+- 模板 LOG 示例条目改为 `task=无`(避免新项目首日触发 R10 误报)
+
+### Fixed
+- 事实行与密钥闸的写入顺序:先扫模型输入再写任何文件,杜绝"TASKS 已写、LOG 被拦"的半写状态
+
 ## [Unreleased]
 
 ### Added
