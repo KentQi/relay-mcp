@@ -1,12 +1,12 @@
 <!-- relay:generated v1 -->
 # relay-mcp — 规范入口(canonical)
 
-本文件由 relay-mcp 单源投影生成(2026-10-29);CLAUDE.md 与 GEMINI.md 只是它的指针副本。
+本文件由 relay-mcp 单源投影生成(2026-11-01);CLAUDE.md 与 GEMINI.md 只是它的指针副本。
 规则要改:改 relay 引擎模板后运行 `relay_sync` 重投影;不要只手改其中一份(会漂移,R1 拦)。
 
 ## 项目身份
 - 项目:relay-mcp
-- 规范的可执行形式:`./verify`(委托 relay 引擎机检 R1-R9)
+- 规范的可执行形式:`./verify`(委托 relay 引擎机检 R 系列规则,编号与执法点以 `relay_rules` 为准)
 
 ## 开工必读
 先读 `./START.md`(三步引导:验状态 → 领任务 → 按协议干)。任务与验收看 `TASKS.md`,意图与验收标准看 `SPEC.md`,既定决策看 `DECISIONS.md`(勿重复论证),上个会话的产出与踩坑看 `LOG.md`。
@@ -18,7 +18,7 @@
 - **双根**:`relay_claim` 返回 controlRoot(协议控制面:TASKS/LOG/认领锁/注册表)与 executionRoot(独立检出:代码/测试/任务分支提交);代码与测试只在 executionRoot 执行。
 - **独立依赖**:executionRoot 是独立 checkout,`node_modules`/`.env` 不与主工作树共享;在其中装好依赖再跑 R8/测试。
 - **双提交出场**:绿闸通过后先在 executionRoot 提交代码到 `relay/T###`,再在 controlRoot 只提交 `TASKS.md`+`LOG.md`;输出两个 SHA(代码 + 控制面)。控制面提交失败 → 重跑出场补交;成对证据要求两提交 + LOG 记录 branch/sha 齐备。
-- **双根绿闸**:controlRoot 全量 R1–R9;executionRoot R1/R2/R3/R4/R8(跳过 R7/R9);两侧 ERROR 合并阻断。
+- **双根绿闸**:controlRoot 全量 R 系列;executionRoot R1/R2/R3/R4/R8(跳过 R7/R9/R11);两侧 ERROR 合并阻断。
 - **根错配(严格)**:任务仍有 registry 未完成记录时,从 controlRoot 完成**一律被拒**(无空树例外),须在 executionRoot 出场;注册表缺失/损坏/记录丢失时用 `git worktree list` 反查 `relay/<task>` checkout 与受管缓存路径,命中同样拒绝;未登记 linked worktree 完成出场 fail-closed。
 - **未合并语义**:任务分支验收通过 ≠ 已合并;relay 不自动 merge/rebase/push/删分支。人工流程:`git log <controlRoot>..relay/T###` 复核 → `git merge --no-ff relay/T###` → 需要时 `git branch -d`。
 - **清理保护**:`relay_worktree_cleanup` 默认 dry-run;含未跟踪/ignored 本地内容(`.env`、`node_modules`、构建产物)的 worktree 默认保留;只删干净、过期、非活跃、已登记的目录,分支保留。
@@ -27,7 +27,7 @@
 - **锁语义**:仓库写锁 `.relay/relay.lock` 约 20s 心跳 + 写前 fencing(长 cleanup/出场不被 120s 误判);任务认领锁 `.relay/claims/T###.lock` **不心跳**,保留 240min TTL 崩溃恢复(agent 崩溃后到期可接管);model 含换行/控制字符会被拒收。
 - **能力边界**:暂无 claim 的 abort/release、按任务查询 status、sessionId;恢复靠认领锁 240min TTL 到期接管 / relay_session_end 释放 / relay_worktree_cleanup。并发会话必须用不同 model 标识。
 
-## 规则速查 R1-R9
+## 规则速查(R 编号即规则 ID)
 | ID | 一句话 |
 |---|---|
 | R1 | AGENTS.md 必需;其与已配置适配入口均须存在且首行带 relay 生成标记(缺失→relay_sync;已存在无标记→onboard 接管 / `entryFilesTakeover:true` / 手工加标记) |
@@ -39,6 +39,7 @@
 | R7 | 会话日志连续 3 条任务会话(维护不计入)无「T### 完成」→ 停机,人类仲裁 |
 | R8 | 项目配了 format 工具链就跑;没配不硬加 |
 | R9 | LOG 记完成的任务,TASKS 里必须已完成 |
+| R11 | 协议文件不得含密钥样式内容;出场写盘前阻断,误报同行标注 `relay:secret-ok` 豁免 |
 
 细则与执法点:`relay_rules`;完整规范见 relay-mcp 仓库与全局 CLAUDE-PROJECT-RULES。
 

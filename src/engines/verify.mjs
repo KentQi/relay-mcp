@@ -2,7 +2,7 @@
 // 依据 CONTRACT.md「检查器规则表」「仓库文件格式」「安全与降级」。
 // TASKS 任务行与 LOG 条目标题的正则与契约逐字符一致,绝不改动;
 // 每条非 PASS 结果都附一条以「修复:」开头的可执行指令。
-import { readFileSafe, isGitRepo, gitRun } from '../util.mjs';
+import { readFileSafe, isGitRepo, gitRun, scanSecrets, formatSecretHits } from '../util.mjs';
 import { readManifestConfig, underRoots, matchesIgnore, DEFAULT_CODE_ROOTS, DEFAULT_DOCS_ROOTS } from '../config.mjs';
 import { readdir } from 'node:fs/promises';
 import { join } from 'node:path';
@@ -327,6 +327,25 @@ const checkR9 = async (root) => {
   return pass('R9', `LOG/TASKS 一致(${id} 已标 [x])`);
 };
 
+// —— R11 协议文件敏感内容 ——
+// 路径级守卫见 findSensitiveChanges(H3);本检查补内容级:密钥写进 LOG 就进了 git 历史,事后不可撤回。
+// 只扫 controlRoot 的协议文件;executionRoot 里的 TASKS/LOG 只是 baseSha 快照(同 R7/R9 的边界)。
+const checkR11 = async (root) => {
+  const hits = [];
+  for (const f of ['TASKS.md', 'LOG.md']) {
+    const t = await readText(join(root, f));
+    if (t == null) continue;
+    for (const h of scanSecrets(t)) hits.push({ file: f, ...h });
+  }
+  if (hits.length) {
+    const shown = hits.slice(0, 3).map((h) => formatSecretHits([h], h.file)).join('; ');
+    return bad('R11', 'ERROR',
+      `协议文件含疑似密钥内容(${hits.length} 处): ${shown}${hits.length > 3 ? ` 等 ${hits.length} 处` : ''}`,
+      '删除或替换为 [REDACTED];若该串曾进入 git 历史,立即轮换该密钥。确属误报可在同一行标注 relay:secret-ok 豁免');
+  }
+  return pass('R11', 'TASKS/LOG 无密钥样式内容');
+};
+
 // —— 双根:任务树结构检查(R1/R2/R3/R4/R8)——
 // managed 场景下真正待提交的代码在 executionRoot,结构检查必须覆盖它;
 // 协议面检查(R5/R6/R7/R9)属于 controlRoot,这里刻意不跑——worktree 里的
@@ -358,6 +377,7 @@ export const runChecks = async (root, { full = false } = {}) => {
     await checkR7(root),
     full ? await checkR8(root) : fastSkip('R8', '(R8 风格归一化)'),
     await checkR9(root),
+    await checkR11(root),
   ];
 };
 

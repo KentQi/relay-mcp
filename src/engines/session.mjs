@@ -10,7 +10,7 @@
 import {
   acquireFileLock, acquireRepoLock, checkProtocolFilesSafe, parseLockContent, readFileSafe, isGitRepo, gitIdentityArgs,
   gitRun, findSensitiveChanges, releaseFileLock, stamp, nowIso, templatesDir,
-  writeProtocolFile,
+  writeProtocolFile, scanSecrets, SECRET_OK_MARKER,
 } from '../util.mjs';
 import { stat as fsStat } from 'node:fs/promises';
 import { join, resolve, sep } from 'node:path';
@@ -48,6 +48,26 @@ const hasControlChars = (value) => CONTROL_CHAR_RE.test(String(value ?? ''));
 const controlCharError = (label) =>
   `\`${label}\` 含换行/控制字符(可伪造协议行或破坏锁文件结构),已拒绝。修复:改为单行纯文本后重试。`;
 const flattenText = (value) => String(value ?? '').replace(/[\u0000-\u001f\u007f]+/g, ' ').replace(/\s+/g, ' ').trim();
+
+// —— 敏感内容闸(T014/R11)——
+// 协议文件写盘前扫描:summary/next/负结果 是模型自由文本,一旦写入就进 git 历史,事后不可撤回。
+// 命中即阻断本次出场(不写、不提交、不释放认领锁),输出只含前 4 字符预览。
+const secretGateBlock = (label, text) => {
+  const hits = scanSecrets(text);
+  if (!hits.length) return null;
+  return [
+    '## 敏感内容闸:已阻断 — 未写入',
+    '',
+    `${label} 含疑似密钥内容(${hits.length} 处):`,
+    ...hits.slice(0, 5).map((h) => `- 第 ${h.line} 行 命中 ${h.rule} ${h.preview}`),
+    ...(hits.length > 5 ? [`- 等 ${hits.length} 处`] : []),
+    '',
+    '修复:把该串替换为 [REDACTED](或移出协议文件);若该串曾进入 git 历史,立即轮换该密钥。',
+    `确属误报可在同一行标注 ${SECRET_OK_MARKER} 豁免。`,
+    '',
+    '本次未写入任何文件、未提交、未释放认领锁。',
+  ].join('\n');
+};
 
 const parseTaskLine = (line) => {
   const m = String(line).match(TASK_LINE_RE);
@@ -1258,13 +1278,29 @@ export const relaySessionEnd = async (args = {}) => {
       changes.push(`TASKS.md: 待办区顶部插入 \`${id} ${String(next.title).trim()}\`(含验收行)`);
     }
   }
+  // 敏感内容前置闸(T014/R11):summary/next/负结果 是模型自由文本,必须在任何写入之前拦截,
+  // 否则会出现「TASKS 已写、LOG 被拦」的半写状态。
+  const modelText = [model, summary, blocked, doneTask, next && next.title, next && next.acceptance, next && next.notes, ...(negatives || [])]
+    .filter((x) => typeof x === 'string' && x).join('\n');
+  const inputSecret = secretGateBlock('本次出场输入(summary / next / 负结果)', modelText);
+  if (inputSecret) {
+    out.push(inputSecret);
+    return { content: [{ type: 'text', text: out.join('\n') }], isError: true };
+  }
+
   // fencing + 原子写:TASKS.md 是任务队列唯一事实源,tmp+rename 防半写截断,写前复核锁归属。
   const fenceBeforeTasks = await exitLock.check();
   if (!fenceBeforeTasks.held) {
     out.push('## 并发出场:被拒 — 未提交', '', `仓库写锁在出场期间被接管(${fenceBeforeTasks.warning || '锁已不属于当前会话'}),未更新 TASKS/LOG;请重试。`);
     return { content: [{ type: 'text', text: out.join('\n') }], isError: true };
   }
-  await writeProtocolFile(root, 'TASKS.md', tidy(tLines), { token: exitLock.token, lockLabel: '仓库写锁' });
+  const tasksText = tidy(tLines);
+  const tasksSecret = secretGateBlock('TASKS.md', tasksText);
+  if (tasksSecret) {
+    out.push(tasksSecret);
+    return { content: [{ type: 'text', text: out.join('\n') }], isError: true };
+  }
+  await writeProtocolFile(root, 'TASKS.md', tasksText, { token: exitLock.token, lockLabel: '仓库写锁' });
 
   // 4. 更新 LOG.md(顶部、标题行之后)
   const logPath = join(root, 'LOG.md');
@@ -1292,7 +1328,13 @@ export const relaySessionEnd = async (args = {}) => {
   if (!dupLog) {
     if (lLines[titleIdx + 1] === '') lLines.splice(titleIdx + 2, 0, ...entry, '');
     else lLines.splice(titleIdx + 1, 0, '', ...entry, '');
-    await writeProtocolFile(root, 'LOG.md', tidy(lLines), { token: exitLock.token, lockLabel: '仓库写锁' });
+    const logTextOut = tidy(lLines);
+    const logSecret = secretGateBlock('LOG.md', logTextOut);
+    if (logSecret) {
+      out.push(logSecret);
+      return { content: [{ type: 'text', text: out.join('\n') }], isError: true };
+    }
+    await writeProtocolFile(root, 'LOG.md', logTextOut, { token: exitLock.token, lockLabel: '仓库写锁' });
     changes.push(`LOG.md: 顶部新增条目「${entry[0]}」`);
   } else {
     changes.push('LOG.md: 最新条目即本次出场(幂等跳过,不重复记录)');
