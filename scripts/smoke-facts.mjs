@@ -44,11 +44,11 @@ try {
   ok(/验收: 通过/.test(fact[0]), '事实行记录验收执行结果');
   ok(/verify: PASS \d+/.test(fact[0]), '事实行记录 verify 汇总');
 
-  console.log('\n== R10 存在性:删除事实行 → ERROR ==');
+  console.log('\n== R10 存在性:删除事实行 → WARN(P1-14:不锁死出场) ==');
   writeFileSync(logPath, log.replace(/^- 事实\(v1\): .*\n/m, ''));
   const v1 = cli('relay_verify', { full: true });
-  ok(v1.status === 1, 'verify 退出码 1(isError)', out(v1).slice(0, 300));
-  ok(/R10/.test(out(v1)), '输出含 R10');
+  ok(v1.status === 0, 'WARN 不阻断(退出码 0,避免 R10 死锁出场)', out(v1).slice(0, 300));
+  ok(/R10\s*\|\s*WARN/.test(out(v1)), '输出为 R10 WARN(缺事实行)');
   ok(/修复:/.test(out(v1)), '输出含可执行「修复:」');
 
   console.log('\n== R10 数字对账:篡改文件数 → WARN(strict 前) ==');

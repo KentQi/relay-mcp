@@ -150,7 +150,7 @@ export const TOOLS = [
   {
     name: 'relay_verify',
     description:
-      'Run all repo checkers R1–R9 and return a | ID | 结果 | 详情 | table; every failure line starts ' +
+      'Run all repo checkers R1–R11 and return a | ID | 结果 | 详情 | table; every failure line starts ' +
       'with "修复:" followed by an executable fix instruction. Any error-level check → isError true. ' +
       'full=false (default) is the fast pass that skips R5/R6/R8 (commit atomicity, doc staleness, ' +
       'style); relay_session_end always runs the full set internally. Call this any time you want to ' +
@@ -316,7 +316,7 @@ The tools enforce the loop; you cannot skip the gates.
    A \`test:<failing-test-path>\` acceptance means the previous session left a red test
    on purpose — your job is to make it green.
 5. **Verify(验证)** — Run \`relay_verify\` (full) until green; execute every \`修复:\`
-   instruction it gives. In a managed worktree the gate checks controlRoot (R1–R9) and the
+   instruction it gives. In a managed worktree the gate checks controlRoot (R1–R11) and the
    task checkout (code rules), so R5/R6 commit evidence comes from both the control-plane
    commit and the task-branch commit. Never hand off a red repo.
 6. **Exit(出场)** — Call \`relay_session_end\` LAST with model, summary, done_task,
@@ -465,7 +465,7 @@ const RULES_TEXT = `# relay 规则表(R 系列)
 补充:
 
 - 检查输出:\`| ID | 结果 | 详情 |\` 表格 + 末尾汇总;fast 模式(full=false)跳过 R5/R6/R8。
-- **双根检查**:受管 worktree 中 controlRoot 跑全量 R1–R9(协议面),executionRoot 跑代码向检查 R1/R2/R3/R4/R8(跳过 R7/R9,避免读任务分支里的旧协议副本);两侧 ERROR 合并阻断。**成对证据**:managed 完成还须同时具备任务分支代码提交、controlRoot 完成提交(消息含 \`T### 完成\`)、controlRoot 的 TASKS/LOG 已提交干净、LOG 记录 branch+代码 SHA;任一缺失 → isError、不落完成状态、可重跑补交。R5/R6 仍按 controlRoot 历史计算(任务分支提交不进入其窗口),跨分支评估留待后续。
+- **双根检查**:受管 worktree 中 controlRoot 跑全量 R 系列(协议面),executionRoot 跑代码向检查 R1/R2/R3/R4/R8(跳过 R7/R9,避免读任务分支里的旧协议副本);两侧 ERROR 合并阻断。**成对证据**:managed 完成还须同时具备任务分支代码提交、controlRoot 完成提交(消息含 \`T### 完成\`)、controlRoot 的 TASKS/LOG 已提交干净、LOG 记录 branch+代码 SHA;任一缺失 → isError、不落完成状态、可重跑补交。R5/R6 仍按 controlRoot 历史计算(任务分支提交不进入其窗口),跨分支评估留待后续。
 - **绿闸与双提交**:relay_session_end 默认全量 verify,全绿且验收通过后 → 先在 executionRoot 提交代码(\`git add -A && git commit\`),成功后 controlRoot 只提交 \`TASKS.md\`+\`LOG.md\`(路径限定,提交信息含 \`T### 完成\`);输出两个 SHA(代码 SHA + 控制面 SHA)。controlRoot 提交失败 → isError + 保留认领锁,修复后重跑补交;\`autoCommit:false\` 时明确"控制面未提交"。
 - **根错配 fail-closed(严格)**:任务在 registry 仍有未完成记录时,从 controlRoot 完成出场**一律 isError**「根错配」,须在 executionRoot 出场(无"干净空树"例外);注册表缺失/损坏/记录丢失时用 \`git worktree list\` 反查 \`relay/<task>\` checkout 与受管缓存路径 \`.relay/worktrees/<task>\` 是否存在,命中同样拒绝;分支单独存在不算痕迹。managed 出场 HEAD==baseSha 且无改动 → 拒绝伪 SHA。未登记 linked worktree:完成出场 fail-closed,维护出场仅告警。
 - **未合并分支**:任务分支 \`relay/T###\` 验收通过 ≠ 已合并;claim/session_start/cleanup 会列出未合并分支,由人工 \`git merge --no-ff relay/T###\` 整合(relay 不自动 merge/rebase/push/删分支)。

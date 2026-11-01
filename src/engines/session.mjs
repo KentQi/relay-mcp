@@ -17,7 +17,7 @@ import { join, resolve, sep } from 'node:path';
 import { execFile, exec } from 'node:child_process';
 import { promisify } from 'node:util';
 import { runChecks, formatChecks, runTaskTreeChecks, TASK_LINE_RE, LOG_TITLE_RE, parseLogEntries } from './verify.mjs';
-import { readManifestConfig, DEFAULT_COMMIT_TEMPLATE, DEFAULT_CONTEXT_BUDGET } from '../config.mjs';
+import { readManifestConfig, DEFAULT_COMMIT_TEMPLATE } from '../config.mjs';
 import { deriveFacts, formatFactLine } from './facts.mjs';
 import {
   cleanupWorktrees, ensureTaskWorktree, ensureWorktreeGitignore, findManagedWorktreeEvidence, formatUnmergedBranchesNote,
@@ -398,6 +398,7 @@ const acquireClaimLock = async (root, task, model, ttlMin = CLAIM_TTL_MIN) => {
       sameHolder: (holder) => holder === model,
       label: `任务 ${task} 认领锁`,
       heartbeat: false,
+      ttlMinutes: ttlMin,
     });
   } catch (e) {
     return { ok: false, holder: '(锁路径异常)', ageMin: 0, ttlMin, warning: e?.message || String(e) };
@@ -428,6 +429,10 @@ export const relaySessionStart = async (args = {}) => {
   const executionRoot = roots.executionRoot;
   // 简报预算(T015):只读配置,用于「字段上限 + 溢出显式告警」;绝不裁剪段落。
   const briefCfg = await readManifestConfig(root);
+  // 生效配置回显(P2-23):worktree 由 worktree.mjs 单独解析,必须回显真实生效值,
+  // 否则 manifest 写成字符串 "true"(静默失效)时简报会误导 agent 以为 worktree 已开启。
+  let briefWt = null;
+  try { briefWt = await readWorktreeConfig(root); } catch { briefWt = null; }
   const startText = await readText(join(root, 'START.md'));
   if (startText == null) {
     return {
@@ -624,7 +629,7 @@ export const relaySessionStart = async (args = {}) => {
     `- controlRoot: ${root}`,
     `- executionRoot: ${executionRoot}`,
     // 生效配置回显(T015):manifest 未知字段静默忽略是已文档化的漂移陷阱,一行回显让配置错误当场可见。
-    `- 生效配置: worktree=${briefCfg ? '见 manifest' : '?'} facts=${briefCfg.facts.enabled ? `on(since=${briefCfg.facts.since || '未设'},strict=${briefCfg.facts.strict})` : 'off'} contextBudget=${briefCfg.contextBudget}`,
+    `- 生效配置: worktree=${briefWt ? `enabled=${briefWt.enabled},cacheDir=${briefWt.cacheDir},ttl=${briefWt.ttlHours}h,autoCleanup=${briefWt.autoCleanup}` : '不可读'} facts=${briefCfg.facts.enabled ? `on(since=${briefCfg.facts.since || '未设'},strict=${briefCfg.facts.strict})` : 'off'} contextBudget=${briefCfg.contextBudget}`,
     ...lifecycleNotes,
     '',
     '## 目标',
@@ -959,6 +964,17 @@ export const relaySessionEnd = async (args = {}) => {
   const negatives = Array.isArray(args.negative_results)
     ? args.negative_results.map((s) => String(s).trim()).filter(Boolean)
     : [];
+  // 敏感内容前置闸(T014/R11 + P0-1):summary/next/负结果 是模型自由文本,必须在**任何提交或写入之前**拦截。
+  // managed 模式的代码提交消息会内嵌 summary 首行,闸门若放在提交之后,密钥会先进入 git 历史(不可撤回)。
+  {
+    const modelText = [model, summary, blocked, doneTask, next && next.title, next && next.acceptance, next && next.notes, ...(negatives || [])]
+      .filter((x) => typeof x === 'string' && x).join('\n');
+    const inputSecret = secretGateBlock('本次出场输入(summary / next / 负结果)', modelText);
+    if (inputSecret) {
+      out.push(inputSecret);
+      return { content: [{ type: 'text', text: out.join('\n') }], isError: true };
+    }
+  }
   const badNegative = negatives.find((s) => hasControlChars(s));
   if (badNegative != null) {
     out.push('## 参数校验失败', '', controlCharError('negative_results 条目'));
@@ -1293,16 +1309,6 @@ export const relaySessionEnd = async (args = {}) => {
       changes.push(`TASKS.md: 待办区顶部插入 \`${id} ${String(next.title).trim()}\`(含验收行)`);
     }
   }
-  // 敏感内容前置闸(T014/R11):summary/next/负结果 是模型自由文本,必须在任何写入之前拦截,
-  // 否则会出现「TASKS 已写、LOG 被拦」的半写状态。
-  const modelText = [model, summary, blocked, doneTask, next && next.title, next && next.acceptance, next && next.notes, ...(negatives || [])]
-    .filter((x) => typeof x === 'string' && x).join('\n');
-  const inputSecret = secretGateBlock('本次出场输入(summary / next / 负结果)', modelText);
-  if (inputSecret) {
-    out.push(inputSecret);
-    return { content: [{ type: 'text', text: out.join('\n') }], isError: true };
-  }
-
   // fencing + 原子写:TASKS.md 是任务队列唯一事实源,tmp+rename 防半写截断,写前复核锁归属。
   const fenceBeforeTasks = await exitLock.check();
   if (!fenceBeforeTasks.held) {
@@ -1329,7 +1335,8 @@ export const relaySessionEnd = async (args = {}) => {
   const summaryFlat = summary.split('\n').map((s) => s.trim()).filter(Boolean).join('; ');
   // 事实底账(T013/R10):由引擎确定性派生并写入,模型不得手写/改写。
   // managed 用 baseSha..HEAD(任务分支);单根用工作区 vs HEAD;非 git 退化为 statusLines 文件数。
-  const factLine = formatFactLine(await deriveFacts({
+  const factsEnabled = !!(cfg && cfg.facts && cfg.facts.enabled);
+  const factLine = factsEnabled ? formatFactLine(await deriveFacts({
     executionRoot,
     managed,
     baseSha: (roots.record && roots.record.baseSha) || '',
@@ -1341,11 +1348,11 @@ export const relaySessionEnd = async (args = {}) => {
       : (isRepo ? (await gitRun(executionRoot, 'branch', '--show-current')).stdout.trim() : ''),
     codeSha: managedCommit ? managedCommit.sha : '',
     startedAt,
-  }));
+  })) : null;
   const entry = [
     `## ${stamp()} | model=${model} | task=${taskField}`,
     `- 摘要: ${summaryFlat}`,
-    factLine,
+    ...(factLine ? [factLine] : []),
   ];
   if (managedCommit && doneTask) entry.push(`- worktree: branch=${managedCommit.branch}; sha=${managedCommit.sha}; 已验收,未合并(是否合并由人工决定)`);
   for (const n of negatives) entry.push(`- 负结果: ${n}`);

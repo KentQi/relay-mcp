@@ -18,10 +18,12 @@ executionRoot 是独立检出(node_modules 等依赖需单独安装)。任务分
 (空——认领后由 relay_claim 移入;认领锁在 .relay/claims/,TTL 4 小时,崩溃会话的认领到期自动可接管)
 
 ## 待办
+- [ ] T002 用户表迁移
+  验收: verify 全绿 且 `npm test` 通过
 - [ ] T003 实现登录接口
   验收: verify 全绿 且 `npm test -- login` 通过
 - [ ] T004 对接支付回调
   验收: verify 全绿 且 `npm test -- login` 通过
 
 ## 已完成
-- [x] T002 用户表迁移  ({{TODAY}})
+(空——relay_session_end 盖完成章后由引擎移入)

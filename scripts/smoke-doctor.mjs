@@ -27,6 +27,7 @@ const snapshot = (dir) => {
     let entries = [];
     try { entries = readdirSync(d, { withFileTypes: true }); } catch { return; }
     for (const e of entries.sort((a, b) => a.name.localeCompare(b.name))) {
+      if (e.isDirectory() && e.name === '.git') continue; // .git 内部变动与 doctor 只读性无关
       const rel = prefix ? `${prefix}/${e.name}` : e.name;
       const full = path.join(d, e.name);
       if (e.isDirectory()) { acc.push(`${rel}/dir`); walk(full, rel); }
@@ -41,13 +42,14 @@ try {
   console.log('== 健康仓库:全绿 + 零写盘 ==');
   const init = cli('relay_init', { name: 'doctor 演示' });
   ok(init.status === 0, 'relay_init 成功', out(init).slice(0, 300));
-  const before = snapshot(path.join(tmp, '.relay'));
+  // P2-22:快照整个仓库树(排除 .git),才能守住 check 模式对 AGENTS.md 等根目录文件的只读铁律
+  const before = snapshot(tmp);
   const d0 = cli('relay_doctor', {});
   const t0 = out(d0);
   ok(d0.status === 0, '健康仓库 doctor 退出码 0', t0.slice(0, 300));
   ok(t0.includes('D1') && t0.includes('D7'), '输出覆盖 D1–D7 七项检查');
   ok(!t0.includes('修复:'), '健康仓库无「修复:」行');
-  ok(snapshot(path.join(tmp, '.relay')) === before, 'doctor 零写盘(.relay 快照不变)');
+  ok(snapshot(tmp) === before, 'doctor 零写盘(整棵仓库树快照不变,含根目录入口文件)');
 
   console.log('\n== fixture 1:manifest 缺失 ==');
   const mfBackup = readFileSync(mfPath, 'utf8');

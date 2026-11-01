@@ -6,7 +6,7 @@
 
 ## 第一步 验状态
 
-`./verify`(委托 relay 引擎机检 R1-R9)。有 error → 先按输出中的“修复:”指令处理,再继续;仅 warn(R5/R6/R8)→ 可继续,记得补课。
+`./verify`(委托 relay 引擎机检 R 系列规则)。有 error → 先按输出中的“修复:”指令处理,再继续;仅 warn(R5/R6/R8)→ 可继续,记得补课。
 若本机没有 relay 引擎:`export RELAY_HOME=/path/to/relay-mcp` 后再跑;没有挂 MCP 时也可用 CLI:`node "$RELAY_HOME/src/cli.mjs" relay_verify --root .`
 
 ## 第二步 领任务

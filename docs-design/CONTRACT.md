@@ -27,7 +27,7 @@
 以下为修复轮补充的现行语义,覆盖上文同名字段的早期表述:
 
 - **出场双提交**:绿闸(verify 全量 + 验收执行门)通过后,executionRoot 提交任务分支代码(`relay/T###`,SHA₁);成功后 controlRoot **只** `git add -- TASKS.md LOG.md` 并提交(SHA₂,提交信息含 `T### 完成`)。输出两个 SHA;代码提交或控制面提交任一失败 → isError、TASKS/LOG 不改完成状态、保留认领锁,修复后重跑补交。`autoCommit:false` 明确"控制面未提交"。executionRoot 内出现 TASKS/LOG 改动时拒绝/排除,协议文件只由 controlRoot 写。
-- **双根 verify / 成对证据**:受管 worktree 中 controlRoot 跑全量 R1–R9,executionRoot 跑代码向检查(R1/R2/R3/R4/R8;跳过 R7/R9 以免读任务分支里的旧协议副本);两侧 ERROR 合并阻断。managed 完成额外校验四项成对证据:任务分支代码提交、controlRoot 完成提交(消息含 `T### 完成`)、controlRoot 的 TASKS/LOG 已提交干净、LOG 记录 branch+代码 SHA;任一缺失 → isError、不落完成状态、可重跑补交。R5/R6 仍按 controlRoot 历史计算(任务分支提交不进入其窗口),跨分支评估留待后续。
+- **双根 verify / 成对证据**:受管 worktree 中 controlRoot 跑全量 R 系列,executionRoot 跑代码向检查(R1/R2/R3/R4/R8;跳过 R7/R9 以免读任务分支里的旧协议副本);两侧 ERROR 合并阻断。managed 完成额外校验四项成对证据:任务分支代码提交、controlRoot 完成提交(消息含 `T### 完成`)、controlRoot 的 TASKS/LOG 已提交干净、LOG 记录 branch+代码 SHA;任一缺失 → isError、不落完成状态、可重跑补交。R5/R6 仍按 controlRoot 历史计算(任务分支提交不进入其窗口),跨分支评估留待后续。
 - **根错配 fail-closed(严格)**:任务在 registry 中仍有未完成记录时,从 controlRoot 完成出场**一律 isError**「根错配」并提示在 executionRoot 出场;不再有"干净空树可单根完成"的兼容例外。注册表缺失/损坏/记录丢失时,用 `git worktree list` 反查 `relay/<task>` 是否仍被某 worktree checkout,并检查受管缓存路径 `.relay/worktrees/<task>` / 残留记录路径是否存在——命中同样拒绝(给出重建登记或 executionRoot 出场的修复指令);分支单独存在不视为痕迹。managed 出场 HEAD==baseSha 且无改动 → 拒绝伪 SHA。未登记 linked worktree 的完成出场 fail-closed,维护出场仅告警。
 - **未合并分支可见性与人工合并**:任务分支验收通过 ≠ 已合并;relay 不自动 merge/rebase/push、不删分支。claim/session_start/cleanup 输出未合并 `relay/T###` 清单;人工流程 `git log <控制面分支>..relay/T###` → `git merge --no-ff relay/T###` → 可选 `git branch -d`。
 - **清理保护(ignored)**:清理前用 `git status --porcelain --ignored=matching -uall` 检查;含未跟踪或 ignored 本地内容(`.env`、`node_modules`、构建产物)的 worktree 默认保留并给出理由,不自动删除;删除只走非强制 `git worktree remove`,分支保留。
@@ -182,6 +182,7 @@ export const startServer = async ({ onInit, onMethod }) => {
 | R7 | 发散报警 | LOG 最近 3 条任务会话(task=维护 的条目不计入)task 均非「T### 完成」→ error:停机,升级人类仲裁 |
 | R8 | 风格归一化 | 项目存在 prettier/eslint 配置或 package.json scripts.format → 提示运行;不存在 → skip(不强加工具链) |
 | R9 | LOG/TASKS 一致性 | LOG 最新条目里 task=Txxx 完成 而 TASKS 中 Txxx 仍为未完成 → error |
+| R10 | 事实对账 | LOG **最新完成条目**必须含引擎写入的「事实(v1)」行;可定位提交时只比文件数(`--no-renames`,用事实行自带的 base sha 对齐 range),不一致 → warn(`facts.strict=true` 才 error);缺事实行 → warn(旧条目豁免靠 `facts.since`,避免锁死出场) |
 | R11 | 协议文件敏感内容 | TASKS.md/LOG.md 内容级扫描(AWS/GitHub/Slack/OpenAI/Google 密钥样式 + PEM 私钥块);同行 `relay:secret-ok` 豁免;命中 → error,`relay_session_end` 在任何写盘前阻断 |
 
 - 检查输出:`| ID | 结果 | 详情 |` 表格 + 末尾汇总;任一 error → isError:true(fast 模式跳过 R5/R6/R8,session_end 默认 fast=false 全量)
@@ -198,7 +199,7 @@ export const startServer = async ({ onInit, onMethod }) => {
 
 ## W1 专属:规范文档改写目标
 
-把 `<claude 配置目录>/CLAUDE-PROJECT-RULES.md`(先读原文)改造为 v3:五公理→三原则(最小充分状态/无信任交接/规范即检查)→仓库文件集(START/SPEC/DECISIONS/TASKS/LOG/verify + docs 五件套**原样保留**)→单源投影注入(入口文件生成,CI 零 diff)→六步会话协议→规则 ID 表(同上 R1-R9)→人类四件事(验收标准/仲裁阻塞/抽查/批准护栏修改)→三场景使用(0→1 用 relay_init;1→10/10→100 用 relay_onboard;日常用 session_start/end)→失效模式表→自检清单。≤220 行,注明"本规范的可执行形式 = relay-mcp"。
+把 `<claude 配置目录>/CLAUDE-PROJECT-RULES.md`(先读原文)改造为 v3:五公理→三原则(最小充分状态/无信任交接/规范即检查)→仓库文件集(START/SPEC/DECISIONS/TASKS/LOG/verify + docs 五件套**原样保留**)→单源投影注入(入口文件生成,CI 零 diff)→六步会话协议→规则 ID 表(同上 R 系列)→人类四件事(验收标准/仲裁阻塞/抽查/批准护栏修改)→三场景使用(0→1 用 relay_init;1→10/10→100 用 relay_onboard;日常用 session_start/end)→失效模式表→自检清单。≤220 行,注明"本规范的可执行形式 = relay-mcp"。
 ## 2026-11-01 T014 补充契约(内容级密钥闸 / R11)
 
 - **分层**:`findSensitiveChanges`(util)继续负责**路径级**密钥守卫(`.env*`/`*secret*`/`*.key`/`*.pem`/id_rsa 不自动提交);新增 `scanSecrets` 负责**内容级**扫描,二者互补,任一不得单独移除。
@@ -267,3 +268,24 @@ export const startServer = async ({ onInit, onMethod }) => {
 - **发布是人的动作**:仓库不做自动发布;`npm publish` 属人类修宪级决策。CI 只做 `npm pack --dry-run` 的产物边界断言。
 - **安装器兼容**:`scripts/install-mcp.mjs` 随包分发,安装时以自身位置推导仓库根;npx 场景下 `npx relay-mcp` 直接启动 stdio server。
 - **冒烟**:`scripts/smoke-pack.mjs` 断言 private 已移除 / bin 指向带 shebang 的入口 / files 白名单 / 零依赖 / engines / `npm pack --dry-run` 的进包与不进包清单,已接入 `npm test`。
+## 2026-11-01 评审修复轮(PR #6 审计 P0/P1/P2 全部处置)
+
+- **P0-1 密钥闸前置**:输入密钥闸移到**任何提交/写入之前**(managed 代码提交消息内嵌 summary 首行,闸门若在提交后则密钥先入 git 历史)。闸门输出不再谎称「未提交」。
+- **P0-2 事实行口径统一**:事实行新增 `base=<sha>`,写入侧(`baseSha..HEAD`)与校验侧共用同一 range;单根模式文件数改用 `git status`(含未跟踪文件);`diffStat` 收敛为单次 `git diff --numstat`。
+- **P0-3 密钥规则补全**:新增 `sk-ant-*`、`sk-proj-*`、`github_pat_*`;`scanSecrets` 默认 **fail-closed(不接受 relay:secret-ok)**,只有 R11 探测器显式豁免并把豁免行数写进输出。
+- **P0-4 双根解析**:`relay_recall`/`relay_get`/`relay_doctor` 一律经 `resolveRelayRoots` 读 controlRoot;worktree 内不再失明/误报。
+- **P1-5/6 写入原语级闸**:`writeProtocolFile` 内置 `scanSecrets`(命中抛 `ProtocolSecretError`),claim/session_end/未来写路径自动受保护;`relay_restructure` 的裸 `writeFile` 同样加闸。
+- **P1-7**:事实行写入遵守 `manifest.facts.enabled`。
+- **P1-8**:D3 比较前归一化日期(仅日期不同不再报漂移)。
+- **P1-9/10/11**:recall 复用 verify 的任务行/日志正则与 facts 的事实行解析;`status:" "` 不再被 trim 吞掉;先过滤后按 id 去重。
+- **P1-12**:D5 注册表路径相对 controlRoot 解析,删除死代码 absPath 分支。
+- **P1-13**:锁文件落 `ttlMinutes`,D4 读真实 TTL(旧锁回退默认并注明)。
+- **P1-14**:R10 缺事实行从 ERROR 降为 WARN(ERROR 会锁死出场,而修复指令正是被阻断的动作)。
+- **P1-15**:`relay_sync` 输出事实底账升级提示。
+- **P1-16**:R10 检查**最新完成条目**而非最新条目。
+- **P1-17**:MCP 握手 `serverInfo.version` 读 `package.json`(单一版本源)。
+- **P2-16/17/18/20**:CONTRACT 规则表补 R10 行;清除残留「R1–R9」;双根跳过列表补 R10;CHANGELOG 的 `[Unreleased]` 移回顶部。
+- **P2-19**:新增 `prepublishOnly` 发布护栏(`RELAY_ALLOW_PUBLISH=1` 才放行),替代被移除的 `private:true`。
+- **P2-21/22**:新增 `scripts/smoke-review-regressions.mjs`(managed 密钥不落 git / 多提交对账 / 未跟踪文件 / worktree 双根 / 发布护栏,19 断言);smoke-doctor 的零写盘断言扩展到整棵仓库树。
+- **P2-23**:简报「生效配置」回显真实 worktree 生效值(enabled/cacheDir/ttl/autoCleanup)。
+- **P3-21/22/24/28/33**:去掉无用字段与未使用 import;同号任务取首条;numstat 单次调用;模板 TASKS 示例改为待办(不再声称未记录的完成)。

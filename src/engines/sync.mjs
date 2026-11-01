@@ -57,6 +57,10 @@ const buildVars = (root, ctx = {}) => ({
   relayHome: ctx.relayHome || dirname(templatesDir()),
 });
 
+// check 模式(relay_doctor)比较前把日期归一化:模板里的 {{TODAY}} 会让健康仓库从次日起每天报漂移,
+// 而 D3 的修复建议(relay_sync 重投影)会重写 AGENTS.md 并留下 .relay-bak 备份。
+const normalizeDates = (s) => String(s ?? '').replace(/\d{4}-\d{2}-\d{2}/g, '<DATE>');
+
 const render = (raw, vars) => raw
   .replaceAll('{{PROJECT_NAME}}', vars.projectName)
   .replaceAll('{{TODAY}}', vars.today)
@@ -132,7 +136,11 @@ export const generateEntryFiles = async (root, ctx = {}) => {
       continue;
     }
     if (mode === 'check') { // 只读模式(relay_doctor):报告漂移,绝不落盘
-      result.drift.push({ file: name, diff: diffSummary(current, projection) });
+      if (normalizeDates(current) === normalizeDates(projection)) {
+        result.kept.push({ file: name, reason: '与模板投影一致(仅生成日期不同,已归一化)' });
+      } else {
+        result.drift.push({ file: name, diff: diffSummary(current, projection) });
+      }
       continue;
     }
 
@@ -235,6 +243,13 @@ export const relaySync = async (args = {}) => {
     for (const r of res.rewritten) rows.push(`| ${r.file} | 重写(${r.note};备份: ${relOf(root, r.backup)}) |`);
     for (const n of res.notes) rows.push(`| — | 跳过:${n} |`);
 
+    // P1-15:契约承诺「旧项目缺席即旧行为(不写事实行、R10 跳过),relay_sync 输出升级提示」。
+    const factsEnabled = !!(manifest.facts && manifest.facts.enabled === true);
+    const factsHint = factsEnabled
+      ? []
+      : ['', '- 事实底账未启用(manifest.facts.enabled 缺失):出场不会写「事实(v1)」行,R10 会一直 SKIP。',
+        '  - 如需启用:在 .relay/manifest.json 写入 \"facts\": {\"enabled\": true, \"since\": \"' + stamp() + '\", \"strict\": false} 后重跑 relay_verify。'];
+
     const lines = [
       `## relay:sync — 入口文件对账(${entryFiles.length} 个)`,
       '',
@@ -242,6 +257,7 @@ export const relaySync = async (args = {}) => {
       '|---|---|',
       ...rows,
     ];
+    lines.push(...factsHint);
     if (gi.status === 'created') {
       lines.push('', '- `.gitignore` 已按基线新建(含 `.relay/worktrees/`、`.relay/worktrees.json`、`.relay/worktrees.lock` 等运行时忽略项)');
     } else if (gi.status === 'appended') {

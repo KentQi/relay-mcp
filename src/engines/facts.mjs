@@ -2,7 +2,8 @@
 // 设计铁律:
 //   1) 零 LLM、零新状态:写入在 relay_session_end 内完成,校验在 relay_verify 内完成,不落 .relay。
 //   2) 只比文件数,不比行数:行级 ±x/-y 会被 CRLF/重命名/合并污染,成为假裁判。
-//   3) 写入侧与校验侧使用同一条 git 命令(--name-only --no-renames),口径天然一致。
+//   3) 写入侧与校验侧共用 diffStat,且事实行记录 base sha —— 「用哪个 range」是事实的一部分,
+//      不靠两侧各自猜测(旧实现 writer 用 baseSha..HEAD、checker 用 sha^..sha,多提交/二次出场必然错位)。
 import { gitRun, isGitRepo } from '../util.mjs';
 
 export const FACT_LINE_PREFIX = '- 事实(v1):';
@@ -10,22 +11,22 @@ export const FACT_LINE_RE = /^- 事实\(v1\):\s*(.*)$/;
 // 协议文件不计入「改动文件数」:它们由控制面提交维护,不是本次任务的代码事实。
 const PROTOCOL_FILES = new Set(['TASKS.md', 'LOG.md']);
 
+// 一次 git 调用同时拿到文件数与 ±(--numstat 每行自带路径);两侧共用本函数。
 const diffStat = async (root, range) => {
-  const names = await gitRun(root, '-c', 'core.quotePath=false', 'diff', '--name-only', '--no-renames', ...range);
   const nums = await gitRun(root, '-c', 'core.quotePath=false', 'diff', '--numstat', '--no-renames', ...range);
-  if (!names.ok || !nums.ok) return null;
-  const files = names.stdout.split('\n').map((s) => s.trim()).filter(Boolean).filter((p) => !PROTOCOL_FILES.has(p));
+  if (!nums.ok) return null;
+  let files = 0;
   let insertions = 0;
   let deletions = 0;
   for (const line of nums.stdout.split('\n')) {
     const m = line.match(/^(\d+|-)\t(\d+|-)\t(.*)$/);
     if (!m) continue;
-    const p = m[3].trim();
-    if (PROTOCOL_FILES.has(p)) continue;
+    if (PROTOCOL_FILES.has(m[3].trim())) continue;
+    files += 1;
     if (m[1] !== '-') insertions += Number(m[1]);
     if (m[2] !== '-') deletions += Number(m[2]);
   }
-  return { files: files.length, insertions, deletions };
+  return { files, insertions, deletions };
 };
 
 /**
@@ -47,10 +48,21 @@ export const deriveFacts = async ({
 }) => {
   const git = isGitRepo(executionRoot);
   let stat = null;
+  let base = '';
   if (git) {
-    stat = managed && baseSha
-      ? await diffStat(executionRoot, [`${baseSha}..HEAD`])
-      : await diffStat(executionRoot, ['HEAD']);
+    if (managed && baseSha) {
+      // managed:整条任务分支(baseSha..HEAD);base 写进事实行,校验侧用同一个 range。
+      stat = await diffStat(executionRoot, [`${baseSha}..HEAD`]);
+      base = baseSha;
+    } else {
+      // 单根:文件数取 git status(含未跟踪文件——它们会被随后的 git add -A 纳入提交);
+      // ± 取工作区 vs HEAD(numstat 不含未跟踪文件,故 ± 可能为 0,不假装知道)。
+      const changed = (statusLines || [])
+        .map((l) => String(l).slice(3).trim())
+        .filter((p) => p && !PROTOCOL_FILES.has(p));
+      const nums = await diffStat(executionRoot, ['HEAD']);
+      stat = { files: changed.length, insertions: nums ? nums.insertions : 0, deletions: nums ? nums.deletions : 0 };
+    }
   }
   if (!stat) {
     const files = (statusLines || [])
@@ -69,6 +81,7 @@ export const deriveFacts = async ({
     files: stat.files,
     insertions: stat.insertions,
     deletions: stat.deletions,
+    base,
     verifyPass: counts.PASS || 0,
     verifyWarn: counts.WARN || 0,
     verifyError: counts.ERROR || 0,
@@ -84,8 +97,9 @@ export const deriveFacts = async ({
 export const formatFactLine = (f) => {
   const branch = f.branch || (f.git ? '未知' : '无 git');
   const sha = f.sha ? ` @${String(f.sha).slice(0, 7)}` : (f.git ? ' @未提交' : '');
+  const base = f.base ? ` base=${String(f.base).slice(0, 7)}` : '';
   return `${FACT_LINE_PREFIX} 改动 ${f.files} 文件(+${f.insertions}/-${f.deletions}) | 验收: ${f.acceptance} | `
-    + `verify: PASS ${f.verifyPass}·WARN ${f.verifyWarn}·ERROR ${f.verifyError} | 分支: ${branch}${sha} | 耗时: ${f.durationSec}s`;
+    + `verify: PASS ${f.verifyPass}·WARN ${f.verifyWarn}·ERROR ${f.verifyError} | 分支: ${branch}${sha}${base} | 耗时: ${f.durationSec}s`;
 };
 
 export const parseFactLine = (text) => {
@@ -106,6 +120,7 @@ export const parseFactLine = (text) => {
   const err = num(/ERROR (\d+)/);
   const branchM = body.match(/分支:\s*(\S+)/);
   const shaM = body.match(/@([0-9a-f]{7,40})/);
+  const baseM = body.match(/base=([0-9a-f]{7,40})/);
   const dur = num(/耗时:\s*(\d+)s/);
   return {
     files,
@@ -117,6 +132,7 @@ export const parseFactLine = (text) => {
     verifyError: err == null ? 0 : err,
     branch: branchM ? branchM[1] : '',
     sha: shaM ? shaM[1] : '',
+    base: baseM ? baseM[1] : '',
     durationSec: dur == null ? 0 : dur,
   };
 };
@@ -130,14 +146,15 @@ export const recomputeCommitFileCount = async (root, parsed) => {
   if (!isGitRepo(root)) return null;
   let range = null;
   if (parsed && parsed.sha && /^[0-9a-f]{7,40}$/.test(parsed.sha)) {
-    range = [`${parsed.sha}^`, parsed.sha];
+    // 优先用事实行自带的 base(与写入侧同一个 range);旧事实行没有 base 时才退回 sha^..sha。
+    range = parsed.base && /^[0-9a-f]{7,40}$/.test(parsed.base)
+      ? [`${parsed.base}..${parsed.sha}`]
+      : [`${parsed.sha}^`, parsed.sha];
   } else {
     const msg = await gitRun(root, 'log', '-1', '--pretty=%s');
     if (!msg.ok || !/T\d+\s*完成/.test(msg.stdout)) return null;
     range = ['HEAD^', 'HEAD'];
   }
-  const names = await gitRun(root, '-c', 'core.quotePath=false', 'diff', '--name-only', '--no-renames', ...range);
-  if (!names.ok) return null;
-  return names.stdout.split('\n').map((s) => s.trim()).filter(Boolean)
-    .filter((p) => !PROTOCOL_FILES.has(p)).length;
+  const stat = await diffStat(root, range);
+  return stat ? stat.files : null;
 };

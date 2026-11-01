@@ -48,7 +48,7 @@
   验收: npm test 全绿 且 ./verify 无 ERROR 且 出场后 grep -c '^- 事实(v1):' LOG.md 大于等于 1
   备注: 只比文件数不比行数;旧条目按 manifest.facts.since 不触发;先 WARN,strict 才 ERROR
 - [x] T014 敏感内容机检闸(R11):TASKS/LOG 内容级密钥扫描 + 出场写盘前阻断  (2026-11-01)
-  验收: npm test 全绿 且 ./verify 无 ERROR 且 新增断言:LOG 写入 AKIAABCDEFGHIJKLMNOP 后 verify isError 含「修复:」,同行 relay:secret-ok 放行
+  验收: npm test 全绿 且 ./verify 无 ERROR 且 新增断言:LOG 写入 AWS 示例密钥样式串后 verify isError 含「修复:」,同行豁免标记放行
   备注: 现有 findSensitiveChanges 是路径级,本任务补内容级;这是 T013 的前置(A 必须绑 I)
 - [x] T012 任务级 worktree 生命周期与 AGENTS.md 硬约束  (2026-10-29)
   验收: `npm test`(三套冒烟)全绿 且 `./verify` 无 ERROR;覆盖创建/复用、TTL、安全清理、双根提交与锁所有权

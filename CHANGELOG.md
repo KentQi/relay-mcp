@@ -3,6 +3,18 @@
 本项目遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 格式;
 版本号遵循 [SemVer](https://semver.org/lang/zh-CN/)。
 
+## [Unreleased]
+
+## [1.4.1] - 2026-11-01
+
+### Fixed
+- **P0-1** managed 出场:密钥闸前移到任何提交之前,密钥不再先进入 git 提交消息
+- **P0-2** 事实行口径:记录 base sha,写入/校验共用同一 range;单根模式覆盖未跟踪文件;多提交分支不再误判
+- **P0-3** 密钥规则补 `sk-ant-*` / `sk-proj-*` / `github_pat_*`;豁免默认 fail-closed 且 R11 显式报告豁免行数
+- **P0-4** `relay_recall`/`relay_get`/`relay_doctor` 解析 controlRoot,worktree 内不再失明
+- **P1** 写入原语级密钥闸、facts.enabled 生效、D3 日期归一化、D4 真实 TTL、D5 注册根解析、R10 改查最新完成条目且缺行降 WARN、sync 输出 facts 升级提示、握手版本单一来源、recall 过滤/去重/解析器统一
+- **P2** CONTRACT 规则表补 R10、清除残留 R1–R9、跳过列表补 R10、发布护栏 prepublishOnly、CHANGELOG 顺序、回归冒烟(19 断言)与整树零写盘断言、简报回显真实 worktree 配置
+
 ## [1.4.0] - 2026-11-01
 
 ### Added
@@ -29,8 +41,6 @@
 
 ### Fixed
 - 事实行与密钥闸的写入顺序:先扫模型输入再写任何文件,杜绝"TASKS 已写、LOG 被拦"的半写状态
-
-## [Unreleased]
 
 ## [1.2.0] - 2026-10-29
 

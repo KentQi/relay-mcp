@@ -1,8 +1,8 @@
-// relay-mcp — W4 验证引擎:R1–R9 检查器与 relay_verify。
+// relay-mcp — W4 验证引擎:R 系列检查器(R1–R11)与 relay_verify。
 // 依据 CONTRACT.md「检查器规则表」「仓库文件格式」「安全与降级」。
 // TASKS 任务行与 LOG 条目标题的正则与契约逐字符一致,绝不改动;
 // 每条非 PASS 结果都附一条以「修复:」开头的可执行指令。
-import { readFileSafe, isGitRepo, gitRun, scanSecrets, formatSecretHits } from '../util.mjs';
+import { readFileSafe, isGitRepo, gitRun, scanSecrets, formatSecretHits, SECRET_OK_MARKER } from '../util.mjs';
 import { FACT_LINE_RE, parseFactLine, recomputeCommitFileCount } from './facts.mjs';
 import { readManifestConfig, underRoots, matchesIgnore, DEFAULT_CODE_ROOTS, DEFAULT_DOCS_ROOTS } from '../config.mjs';
 import { readdir } from 'node:fs/promises';
@@ -346,26 +346,30 @@ const checkR10 = async (root, cfg) => {
   const t = await readText(join(root, 'LOG.md'));
   if (t == null) return skip('R10', 'LOG.md 不存在', '出场会写入首条日志');
   const lines = t.replace(/\r\n/g, '\n').split('\n');
+  // P1-16:找**最新完成条目**,而不是最新条目。LOG 顶部常是 task=无 的维护条目,
+  // 若只看第一条,伪造/裁剪过的完成条目会被整条跳过(与 10.1「防手写伪造完成条目」的目的相反)。
   let start = -1;
   let end = lines.length;
   for (let i = 0; i < lines.length; i++) {
-    if (LOG_TITLE_RE.test(lines[i])) { start = i; break; }
+    const mm = lines[i].match(LOG_TITLE_RE);
+    if (mm && isDoneTaskField(mm[3])) { start = i; break; }
   }
-  if (start < 0) return skip('R10', 'LOG.md 无条目', '出场后自动产生');
+  if (start < 0) return pass('R10', 'LOG 中暂无完成条目,无需事实对账');
   for (let i = start + 1; i < lines.length; i++) {
     if (LOG_TITLE_RE.test(lines[i])) { end = i; break; }
   }
   const m = lines[start].match(LOG_TITLE_RE);
   const entry = { time: m[1], model: m[2], task: m[3] };
-  if (!isDoneTaskField(entry.task)) return pass('R10', `最新条目未声明完成(task=${entry.task}),无需事实对账`);
   if (entry.time < facts.since) {
-    return skip('R10', `最新条目(${entry.time})早于 facts.since(${facts.since}),跳过(升级兼容)`, null);
+    return skip('R10', `最新完成条目(${entry.time})早于 facts.since(${facts.since}),跳过(升级兼容)`, null);
   }
   const block = lines.slice(start + 1, end);
   const factIdx = block.findIndex((l) => FACT_LINE_RE.test(l));
   if (factIdx < 0) {
-    return bad('R10', 'ERROR', `最新完成条目(${entry.time} ${entry.task})缺少机器写入的「事实(v1)」行`,
-      '重跑 relay_session_end 由引擎补写(不要手写该行);若该条目确由旧版本引擎生成,把 manifest.facts.since 前移到该条目之后即可豁免');
+    // P1-14:这里若判 ERROR,出场绿闸会永久卡死,而唯一的修复动作(重跑 session_end)
+    // 正是被阻断的那个调用,且引擎从不回填历史条目 —— 死锁。降为 WARN 并给可执行出路。
+    return bad('R10', 'WARN', `最新完成条目(${entry.time} ${entry.task})缺少机器写入的「事实(v1)」行`,
+      '该条目由旧版本引擎或手工写入,引擎不会回填历史条目;把 .relay/manifest.json 的 facts.since 前移到该条目之后即可豁免,或人工补一行格式正确的 事实(v1) 行');
   }
   const parsed = parseFactLine(block[factIdx]);
   if (!parsed) {
@@ -390,10 +394,15 @@ const checkR10 = async (root, cfg) => {
 // 只扫 controlRoot 的协议文件;executionRoot 里的 TASKS/LOG 只是 baseSha 快照(同 R7/R9 的边界)。
 const checkR11 = async (root) => {
   const hits = [];
+  let exempted = 0;
   for (const f of ['TASKS.md', 'LOG.md']) {
     const t = await readText(join(root, f));
     if (t == null) continue;
-    for (const h of scanSecrets(t)) hits.push({ file: f, ...h });
+    // 探测器允许 relay:secret-ok 豁免(写入原语不接受),但豁免必须可见:行数写进输出。
+    for (const h of scanSecrets(t, { allowMarker: true })) hits.push({ file: f, ...h });
+    // 只统计「真的会命中密钥、但因标记被放行」的行;单纯提到标记名的普通行不算豁免。
+    exempted += String(t).split('\n')
+      .filter((l) => l.includes(SECRET_OK_MARKER) && scanSecrets(l).length > 0).length;
   }
   if (hits.length) {
     const shown = hits.slice(0, 3).map((h) => formatSecretHits([h], h.file)).join('; ');
@@ -401,7 +410,7 @@ const checkR11 = async (root) => {
       `协议文件含疑似密钥内容(${hits.length} 处): ${shown}${hits.length > 3 ? ` 等 ${hits.length} 处` : ''}`,
       '删除或替换为 [REDACTED];若该串曾进入 git 历史,立即轮换该密钥。确属误报可在同一行标注 relay:secret-ok 豁免');
   }
-  return pass('R11', 'TASKS/LOG 无密钥样式内容');
+  return pass('R11', `TASKS/LOG 无密钥样式内容${exempted ? `(另有 ${exempted} 行标注 relay:secret-ok 被豁免,请人工复核)` : ''}`);
 };
 
 // —— 双根:任务树结构检查(R1/R2/R3/R4/R8)——

@@ -4,12 +4,12 @@
 //   2) 每条非 OK 结果都以「修复:」开头,给可执行指令,且只引用 relay 原生命令(绝不输出 rm)。
 //   3) 诊断的是「环境/安装面」漂移,不是仓库规范(R1–R11 归 relay_verify)。
 import { readFileSafe, isGitRepo, gitRun, parseLockContent, templatesDir } from '../util.mjs';
-import { readWorktreeRegistryState } from './worktree.mjs';
+import { readWorktreeRegistryState, resolveRelayRoots } from './worktree.mjs';
 import { generateEntryFiles } from './sync.mjs';
 import { join, resolve } from 'node:path';
 import { readdir, lstat } from 'node:fs/promises';
 
-const CLAIM_TTL_MIN = 240;
+const CLAIM_TTL_MIN = 240; // 锁文件未记录 ttlMinutes 时的兜底(输出会注明)
 const ok = (id, name, detail) => ({ id, name, result: 'OK', detail, fix: null });
 const warn = (id, name, detail, fix) => ({ id, name, result: 'WARN', detail, fix });
 const bad = (id, name, detail, fix) => ({ id, name, result: 'ERROR', detail, fix });
@@ -79,8 +79,11 @@ const checkClaimLocks = async (root) => {
     if (!info.token) { stale.push(`${task}(空/半初始化锁)`); continue; }
     const t = info.acquiredAt ? Date.parse(info.acquiredAt) : NaN;
     const ageMin = Number.isNaN(t) ? null : Math.round((Date.now() - t) / 60000);
+    // P1-13:优先用锁文件里记录的真实 TTL(claim 支持 ttl_minutes 覆盖);旧锁没有该字段时按默认 240 分钟并注明。
+    const ttl = info.ttlMinutes || CLAIM_TTL_MIN;
+    const ttlNote = info.ttlMinutes ? `TTL ${ttl} 分钟` : `按默认 ${ttl} 分钟判定`;
     if (ageMin == null) stale.push(`${task}(无时间戳,持有者 ${info.holder || '?'})`);
-    else if (ageMin > CLAIM_TTL_MIN) stale.push(`${task}(已过期 ${ageMin} 分钟,持有者 ${info.holder || '?'})`);
+    else if (ageMin > ttl) stale.push(`${task}(已过期 ${ageMin} 分钟 > ${ttlNote},持有者 ${info.holder || '?'})`);
   }
   if (stale.length) {
     return warn('D4', '认领锁', `${stale.length} 把残留锁:${stale.join('; ')}`, '对已过期锁:relay_claim 同一 task 即可按 TTL 接管;或由原持有者 relay_session_end 释放;确认无人使用后可人工删除对应 .relay/claims/<T###>.lock');
@@ -105,7 +108,8 @@ const checkWorktrees = async (root) => {
   const registered = new Set();
   if (regState.state === 'ok' && regState.registry) {
     for (const w of regState.registry.worktrees || []) {
-      if (w && typeof w.absPath === 'string') registered.add(resolve(w.absPath));
+      // P1-12:注册表存的是**控制根相对路径**(如 .relay/worktrees/T014),必须相对 root 解析;
+      // 记录里没有 absPath 字段,旧分支是死代码。
       if (w && typeof w.path === 'string') registered.add(resolve(root, w.path));
     }
   }
@@ -149,7 +153,15 @@ const checkEnginePath = async (root, manifest) => {
 };
 
 export const relayDoctor = async (args = {}) => {
-  const root = resolve((args && args.root) || process.cwd());
+  const inputRoot = resolve((args && args.root) || process.cwd());
+  // P0-4:协议面(.relay / TASKS / LOG)只在控制根;在任务 worktree 里跑 doctor 也必须看控制根,
+  // 否则 .relay 是 gitignored、只存在于控制根,会得到「未登记任务树」等假 ERROR。
+  let controlRoot = inputRoot;
+  try {
+    const roots = await resolveRelayRoots(inputRoot);
+    if (roots && roots.controlRoot) controlRoot = roots.controlRoot;
+  } catch { /* 解析失败按输入根诊断 */ }
+  const root = controlRoot;
   const rawManifest = await readText(join(root, '.relay', 'manifest.json'));
   let manifest = null;
   try { manifest = rawManifest ? JSON.parse(rawManifest) : null; } catch { manifest = null; }
@@ -168,6 +180,7 @@ export const relayDoctor = async (args = {}) => {
   const lines = [
     `# relay doctor — ${root}`,
     '',
+    `- 输入根: ${inputRoot}${inputRoot !== root ? `(已解析到 controlRoot)` : ''}`,
     `- 引擎: ${engineRoot}`,
     `- 结论: ${counts.ERROR ? `发现 ${counts.ERROR} 项 ERROR` : counts.WARN ? `可用(有 ${counts.WARN} 项 WARN)` : '健康'}`,
     '',
