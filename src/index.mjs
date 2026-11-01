@@ -2,13 +2,17 @@
 // relay-mcp — src/index.mjs (W2)
 // 入口:启动 MCP stdio server,把 contract.mjs 的定义表接到 rpc.mjs 的分派上。
 // stdout 只允许出现协议响应;一切日志/诊断走 stderr。
+import { readFileSync } from 'node:fs';
 import { startServer } from './rpc.mjs';
 import { TOOLS, RESOURCES, PROMPTS, dispatch } from './contract.mjs';
+
+// 版本单一来源:握手自报的 version 必须等于 package.json.version(P1-17),否则已发布包对外报错版本。
+const PKG = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8'));
 
 const onInit = async () => ({
   protocolVersion: '2025-06-18',
   capabilities: { tools: {}, resources: {}, prompts: {} },
-  serverInfo: { name: 'relay-mcp', version: '1.0.0' },
+  serverInfo: { name: 'relay-mcp', version: PKG.version },
 });
 
 const onMethod = async (method, params) => {

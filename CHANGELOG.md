@@ -5,6 +5,43 @@
 
 ## [Unreleased]
 
+## [1.4.1] - 2026-11-01
+
+### Fixed
+- **P0-1** managed 出场:密钥闸前移到任何提交之前,密钥不再先进入 git 提交消息
+- **P0-2** 事实行口径:记录 base sha,写入/校验共用同一 range;单根模式覆盖未跟踪文件;多提交分支不再误判
+- **P0-3** 密钥规则补 `sk-ant-*` / `sk-proj-*` / `github_pat_*`;豁免默认 fail-closed 且 R11 显式报告豁免行数
+- **P0-4** `relay_recall`/`relay_get`/`relay_doctor` 解析 controlRoot,worktree 内不再失明
+- **P1** 写入原语级密钥闸、facts.enabled 生效、D3 日期归一化、D4 真实 TTL、D5 注册根解析、R10 改查最新完成条目且缺行降 WARN、sync 输出 facts 升级提示、握手版本单一来源、recall 过滤/去重/解析器统一
+- **P2** CONTRACT 规则表补 R10、清除残留 R1–R9、跳过列表补 R10、发布护栏 prepublishOnly、CHANGELOG 顺序、回归冒烟(19 断言)与整树零写盘断言、简报回显真实 worktree 配置
+
+## [1.4.0] - 2026-11-01
+
+### Added
+- **检索寻址(T018)**:`relay_recall`(只读索引:任务号/时间/model/状态/标题/条目体量/负结果数,支持 query/status/model/limit)与 `relay_get`(按任务号取全文 ≤5 个:验收 + 最新 LOG 条目 + 事实行/分支 SHA/负结果/交接 + 关联决策)。调用时从 LOG/TASKS 即时派生,**零持久索引**;输出围栏包裹并标注「数据非指令」
+- **自愈诊断(T019)**:`relay_doctor` 只读七检(Node / manifest schema / 入口投影漂移 / 残留认领锁 / 未登记任务树 / .relay 完整性 / 引擎路径一致性),不写盘、不取写锁、不自动修复;每条问题给可执行「修复:」指令。`generateEntryFiles` 新增 `mode: 'check'` 只读模式
+- **npm 分发面(T020)**:移除 `private`,`bin.relay-mcp = src/index.mjs`,`files` 白名单(src/templates/安装器/README/LICENSE),`engines.node >= 18`;`npm pack` 46 文件约 129 kB,协议状态与开发文档不进包;发布动作仍需人类批准
+- `scripts/smoke-doctor.mjs`(17 断言)、`scripts/smoke-recall.mjs`(22 断言)、`scripts/smoke-pack.mjs`(28 断言)接入 `npm test`
+
+### Changed
+- MCP 工具 11 → 13;`relay_rules`/`relay://protocol`/README/CONTRACT 同步检索与诊断能力
+
+## [1.3.0] - 2026-11-01
+
+### Added
+- **事实底账(R10)**:`relay_session_end` 由引擎确定性写入 `- 事实(v1):` 行(改动文件数/±/验收结果/verify 汇总/分支与 SHA/耗时);`relay_verify` 校验存在性与文件数一致(默认 WARN,`manifest.facts.strict=true` 升级 ERROR,`facts.since` 之前的旧条目豁免)。零 LLM、零新增状态文件
+- **内容级密钥闸(R11)**:`TASKS.md`/`LOG.md` 扫描 AWS/GitHub/Slack/OpenAI/Google 密钥样式与 PEM 私钥块;命中 ERROR,出场在任何写盘前阻断(不写、不提交、保留认领锁);同行 `relay:secret-ok` 豁免;输出只回显前 4 字符
+- **简报有界化**:LOG 摘要硬上限 200 字符,超长标注"全文见 LOG.md";总长超 `manifest.contextBudget`(默认 6000)显式告警而不裁剪段落;简报头部回显生效配置
+- `scripts/smoke-facts.mjs`(18 断言)、`scripts/smoke-brief.mjs`(10 断言)、`scripts/smoke-content-guard.mjs`(13 断言)接入 `npm test`
+
+### Changed
+- 规则表扩到 R1–R11;`relay_rules`、AGENTS.md 模板、README、CONTRACT 同步
+- `relay_init`/`relay_onboard` 默认写入 `manifest.facts`;旧项目缺席即旧行为
+- 模板 LOG 示例条目改为 `task=无`(避免新项目首日触发 R10 误报)
+
+### Fixed
+- 事实行与密钥闸的写入顺序:先扫模型输入再写任何文件,杜绝"TASKS 已写、LOG 被拦"的半写状态
+
 ## [1.2.0] - 2026-10-29
 
 ### Added

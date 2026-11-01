@@ -148,6 +148,43 @@ export const findSensitiveChanges = (statusLines) => {
   return [...hits.entries()].map(([path, why]) => ({ path, why })).sort((a, b) => a.path.localeCompare(b.path));
 };
 
+// —— 协议文件内容级密钥扫描(R11)——
+// 上面的 SECRET_RULES/findSensitiveChanges 只看路径,不看内容;这里补内容级。
+// 规则刻意窄:宁可漏掉冷门格式,也不要误报把出场绿闸变成噪音源。
+// 一行只报一条,preview 只保留前 4 字符——扫描结果会进简报/LOG,绝不能回显完整密钥。
+export const SECRET_OK_MARKER = 'relay:secret-ok';
+// 规则集覆盖主流 provider 的**带连字符前缀**(旧规则 sk-[A-Za-z0-9]{20,} 会漏掉 sk-ant-/sk-proj-,
+// 而 sk-ant-* 恰是 Claude/Anthropic 生态最常被写进日志的形态)。
+export const SECRET_CONTENT_RULES = [
+  ['AWS access key', /AKIA[0-9A-Z]{16}/],
+  ['GitHub classic token', /gh[pous]_[A-Za-z0-9]{36}/],
+  ['GitHub fine-grained token', /github_pat_[A-Za-z0-9_]{20,}/],
+  ['Slack token', /xox[baprs]-[A-Za-z0-9-]{10,}/],
+  ['Anthropic key', /sk-ant-[A-Za-z0-9_-]{20,}/],
+  ['OpenAI project key', /sk-proj-[A-Za-z0-9_-]{20,}/],
+  ['OpenAI legacy key', /sk-[A-Za-z0-9]{20,}/],
+  ['Google API key', /AIza[0-9A-Za-z_-]{35}/],
+  ['private key block', /-----BEGIN [A-Z ]*PRIVATE KEY-----/],
+];
+// 默认 fail-closed:不接受 relay:secret-ok 豁免。只有 R11(探测器)显式 allowMarker=true,
+// 且会把被豁免的行数写进输出——豁免必须可见,不能靠模型自己写一行标记就静默放行。
+export const scanSecrets = (text, { allowMarker = false } = {}) => {
+  const hits = [];
+  const lines = String(text ?? '').replace(/\r\n/g, '\n').split('\n');
+  for (let i = 0; i < lines.length; i++) {
+    if (allowMarker && lines[i].includes(SECRET_OK_MARKER)) continue;
+    for (const [rule, re] of SECRET_CONTENT_RULES) {
+      const m = re.exec(lines[i]);
+      if (!m) continue;
+      hits.push({ rule, line: i + 1, preview: `${m[0].slice(0, 4)}…(${m[0].length} chars)` });
+      break; // 一行只报一条,避免同一行刷屏
+    }
+  }
+  return hits;
+};
+export const formatSecretHits = (hits, file = '') =>
+  (hits || []).map((h) => `${file ? `${file}:` : ''}${h.line} 命中 ${h.rule} ${h.preview}`).join('; ');
+
 // =====================================================================
 // 协议文件安全写 / 符号链接防线 / 锁协议(JSON v2,兼容旧文本 v1)
 // =====================================================================
@@ -224,7 +261,20 @@ export const checkProtocolFilesSafe = async (root) => {
     return { ok: false, error: e?.message || String(e) };
   }
 };
+// 写入原语级密钥闸(P1-6):TASKS/LOG 只能经由本函数落盘,任何调用点(claim / session_end / 未来工具)
+// 都自动受保护。检测器(R11)只负责报告,拦截发生在写之前——fail-closed。
+export class ProtocolSecretError extends Error {
+  constructor(hits, label) {
+    super(`${label} 含疑似密钥内容(${hits.length} 处),已阻断写入`);
+    this.name = 'ProtocolSecretError';
+    this.code = 'RELAY_SECRET';
+    this.hits = hits;
+    this.label = label;
+  }
+}
 export const writeProtocolFile = async (root, name, content, { token = '', lockLabel = '仓库写锁' } = {}) => {
+  const hits = scanSecrets(content); // 不接受标记豁免:模型可写的标记不能当绕过凭证
+  if (hits.length) throw new ProtocolSecretError(hits, name);
   const target = path.join(root, name);
   await writeFileAtomic(target, content, {
     label: name,
@@ -261,12 +311,14 @@ export const __setLockTimingForTest = ({ heartbeatMs, emptyGraceMs } = {}) => {
   return () => { lockHeartbeatMs = prev.heartbeatMs; emptyLockGraceMs = prev.emptyGraceMs; };
 };
 
-export const serializeLock = ({ holder, token, acquiredAt }) => `${JSON.stringify({
+export const serializeLock = ({ holder, token, acquiredAt, ttlMinutes }) => `${JSON.stringify({
   version: LOCK_VERSION,
   holder: String(holder ?? ''),
   token: String(token ?? ''),
   acquiredAt: acquiredAt || new Date().toISOString(),
   pid: process.pid,
+  // 认领锁把真实 TTL 落盘,doctor 才能判断「过期」而不是硬编码 240 分钟(P1-13)
+  ...(Number.isFinite(ttlMinutes) && ttlMinutes > 0 ? { ttlMinutes } : {}),
 })}\n`;
 
 const ISO_RE = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z?$/;
@@ -279,7 +331,12 @@ export const parseLockContent = (raw) => {
     if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
       const token = typeof parsed.token === 'string' ? parsed.token : '';
       const holder = typeof parsed.holder === 'string' ? parsed.holder : '';
-      if (token) return { holder, token, acquiredAt: typeof parsed.acquiredAt === 'string' ? parsed.acquiredAt : '', legacy: false, empty: false, corrupt: false };
+      if (token) return {
+        holder, token,
+        acquiredAt: typeof parsed.acquiredAt === 'string' ? parsed.acquiredAt : '',
+        ttlMinutes: Number.isFinite(parsed.ttlMinutes) && parsed.ttlMinutes > 0 ? parsed.ttlMinutes : null,
+        legacy: false, empty: false, corrupt: false,
+      };
       // 合法 JSON 但没有 token = 半初始化(进程在写内容前崩溃)
       return { holder, token: '', acquiredAt: '', legacy: false, empty: true, corrupt: false };
     }
@@ -326,6 +383,7 @@ export const acquireFileLock = async (root, relPath, holder, {
   label = '文件锁',
   onTakeover = null,
   heartbeat = true,
+  ttlMinutes = null,
 } = {}) => {
   const rootAbs = path.resolve(root);
   const file = path.join(rootAbs, relPath);
@@ -343,7 +401,7 @@ export const acquireFileLock = async (root, relPath, holder, {
     try {
       handle = await fsOpen2(file, 'wx');
       opened = true;
-      await handle.writeFile(serializeLock({ holder, token, acquiredAt }), 'utf8');
+      await handle.writeFile(serializeLock({ holder, token, acquiredAt, ttlMinutes }), 'utf8');
       await handle.close();
       handle = null;
       return makeLockHandle({ root: rootAbs, relPath, file, token, holder, created: true, tookOver, label, heartbeat });

@@ -14,6 +14,9 @@
 (空——认领后由 relay_claim 移入;认领锁在 .relay/claims/,TTL 4 小时,崩溃会话的认领到期自动可接管)
 
 ## 待办
+- [ ] T021 检索寻址(T018)收益复核:数据闸未过(LOG 16 < 20),按实测决定去留
+  验收: test:scripts/smoke-t021-decision.mjs
+  备注: 完成动作 = 在 DECISIONS.md 追加一条标题含 T018 的决策条目(理由 + 「保留」/「已回退」 + 状态),断言脚本校验该条目存在且结论明确(红灯协议:脚本当前故意失败);调用次数与「取回失败」无法机检(recall 按设计零持久化、无遥测),只作为决策理由的人工依据,不冒充可执行验收;回退方式 = 移除 relay_recall/relay_get 两个工具注册,协议面与事实底账不受影响
 - [ ] T011 第五轮复验审计(约第三方独立视角验证 P0+P1 修复)
   验收: 复验方独立实测:P0 安检(选项注入/目录逃逸/密钥)、并发回归、幂等、维护语义全部复现通过
   备注: 审计范围另含 5 视角报告中的中低危残留(模板占位符注入/symlink/root 校验/manifest 版本路径)
@@ -30,6 +33,26 @@
   验收: verify 全绿 且 `npm test` 通过 且 新增并发认领回归断言(两模型同时 claim 不同任务,两条认领均不丢失)
 
 ## 已完成
+- [x] T020 npm 分发:去 private + bin + files 白名单(发布动作需人类批准,本任务只做可 dry-run 的打包面)  (2026-11-01)
+  验收: npm pack --dry-run 输出不含 .relay/ 与 docs-design/ 且 npm publish --dry-run --provenance 通过
+- [x] T018 检索寻址:relay_recall / relay_get(只读派生;数据闸未过 16<20,按用户指令推进)  (2026-11-01)
+  验收: npm test 全绿 且 调用后 git status --porcelain 为空 且 索引行数等于 LOG 中 T### 计数
+  备注: 索引必须调用时从 LOG/TASKS 即时派生,禁落 .relay(第二真相源);返回体 fence 包裹并标注「数据非指令」
+- [x] T019 relay_doctor 只读七检(node/manifest/模板漂移/残留锁/未登记 worktree/.relay 损坏/RELAY_HOME)  (2026-11-01)
+  验收: npm test 全绿 且 7 类故障 fixture 均输出「修复:」可执行行 且 执行前后 .relay stat 不变
+- [x] T017 数据闸测量:LOG 条目数与出场耗时(决定检索寻址是否动工)  (2026-11-01)
+  验收: 在 LOG 或 TASKS 备注记录当前 LOG 条目数与最近一次出场耗时;条目数 ≥ 20 或有会话记录取回失败 → 开检索寻址任务
+- [x] T016 v1.2.0 发布复验(规则表与文档一致性)  (2026-11-01)
+  验收: npm test 全绿 且 ./verify 无 ERROR 且 node src/cli.mjs relay_rules 输出同时含 R10 与 R11
+- [x] T015 简报有界化:字段上限 + 溢出告警(不做裁剪)  (2026-11-01)
+  验收: npm test 全绿 且 ./verify 无 ERROR 且 500 字摘要 fixture 下简报少于 6000 字符
+  备注: 委员会否决级联裁剪;上界由字段上限保证,超限只告警
+- [x] T013 事实底账(R10):session_end 机器派生「事实(v1)」行 + 双根文件数对账  (2026-11-01)
+  验收: npm test 全绿 且 ./verify 无 ERROR 且 出场后 grep -c '^- 事实(v1):' LOG.md 大于等于 1
+  备注: 只比文件数不比行数;旧条目按 manifest.facts.since 不触发;先 WARN,strict 才 ERROR
+- [x] T014 敏感内容机检闸(R11):TASKS/LOG 内容级密钥扫描 + 出场写盘前阻断  (2026-11-01)
+  验收: npm test 全绿 且 ./verify 无 ERROR 且 新增断言:LOG 写入 AWS 示例密钥样式串后 verify isError 含「修复:」,同行豁免标记放行
+  备注: 现有 findSensitiveChanges 是路径级,本任务补内容级;这是 T013 的前置(A 必须绑 I)
 - [x] T012 任务级 worktree 生命周期与 AGENTS.md 硬约束  (2026-10-29)
   验收: `npm test`(三套冒烟)全绿 且 `./verify` 无 ERROR;覆盖创建/复用、TTL、安全清理、双根提交与锁所有权
   备注: 新 init 默认启用,既有项目缺省关闭;保留任务分支,完成不等于合并;分支 PR 交人工审核

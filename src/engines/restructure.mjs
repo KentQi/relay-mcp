@@ -14,8 +14,16 @@ import { readdir, stat, writeFile } from 'node:fs/promises';
 import { basename, dirname, extname, join, resolve } from 'node:path';
 import {
   acquireRepoLock, backupFile, ensureDir, findSensitiveChanges, gitIdentityArgs, gitRun, isGitRepo, nowIso,
-  readFileSafe, releaseRepoLock, stamp,
+  readFileSafe, releaseRepoLock, stamp, scanSecrets,
 } from '../util.mjs';
+
+// 与 writeProtocolFile 同一口径:restructure 直接写 TASKS/LOG/DECISIONS,不能成为密钥闸的绕过路径。
+const assertNoSecrets = (text, label) => {
+  const hits = scanSecrets(text);
+  if (hits.length) {
+    throw new Error(`${label} 含疑似密钥内容(${hits.length} 处),已阻断写入。修复:先人工清理该内容再重跑 relay_restructure。`);
+  }
+};
 import { ensureGitignoreBaseline } from '../config.mjs';
 
 const ok = (text) => ({ content: [{ type: 'text', text }], isError: false });
@@ -122,7 +130,9 @@ const appendDecisions = async (root, moved) => {
     `- 否决: 保持原状(顶层目录分歧会在接力中持续制造摩擦;本次移动 ${moved.length} 项,git mv 保历史)`,
     '- 状态: 现行',
   ].join('\n');
-  await writeFile(p, `${raw.replace(/\s*$/, '')}\n${entry}\n`, 'utf8');
+  const next = `${raw.replace(/\s*$/, '')}\n${entry}\n`;
+  assertNoSecrets(next, 'DECISIONS.md');
+  await writeFile(p, next, 'utf8');
 };
 
 const insertTask = async (root, movedCount) => {
@@ -139,6 +149,7 @@ const insertTask = async (root, movedCount) => {
   let out;
   if (/^## 待办$/m.test(raw)) out = raw.replace(/^## 待办$/m, `## 待办\n${block}`);
   else out = `${raw.replace(/\s*$/, '')}\n\n## 待办\n${block}\n`;
+  assertNoSecrets(out, 'TASKS.md');
   await writeFile(p, out, 'utf8');
   return id;
 };
@@ -154,7 +165,9 @@ const insertLog = async (root, movedCount, taskId) => {
     `- 留给下一个: 修复 import 引用路径(${taskId}),验收见 TASKS.md`,
   ];
   lines.splice(titleIdx + 1, 0, ...entry);
-  await writeFile(p, lines.join('\n'), 'utf8');
+  const nextLog = lines.join('\n');
+  assertNoSecrets(nextLog, 'LOG.md');
+  await writeFile(p, nextLog, 'utf8');
 };
 
 // ── 主入口 ────────────────────────────────────────────────────────────

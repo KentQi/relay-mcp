@@ -10,7 +10,7 @@
 import {
   acquireFileLock, acquireRepoLock, checkProtocolFilesSafe, parseLockContent, readFileSafe, isGitRepo, gitIdentityArgs,
   gitRun, findSensitiveChanges, releaseFileLock, stamp, nowIso, templatesDir,
-  writeProtocolFile,
+  writeProtocolFile, scanSecrets, SECRET_OK_MARKER,
 } from '../util.mjs';
 import { stat as fsStat } from 'node:fs/promises';
 import { join, resolve, sep } from 'node:path';
@@ -18,6 +18,7 @@ import { execFile, exec } from 'node:child_process';
 import { promisify } from 'node:util';
 import { runChecks, formatChecks, runTaskTreeChecks, TASK_LINE_RE, LOG_TITLE_RE, parseLogEntries } from './verify.mjs';
 import { readManifestConfig, DEFAULT_COMMIT_TEMPLATE } from '../config.mjs';
+import { deriveFacts, formatFactLine } from './facts.mjs';
 import {
   cleanupWorktrees, ensureTaskWorktree, ensureWorktreeGitignore, findManagedWorktreeEvidence, formatUnmergedBranchesNote,
   listUnmergedTaskBranches, readWorktreeConfig, readWorktreeConfigRaw, readWorktreeRegistryState, registryRecoveryHint,
@@ -48,6 +49,26 @@ const hasControlChars = (value) => CONTROL_CHAR_RE.test(String(value ?? ''));
 const controlCharError = (label) =>
   `\`${label}\` 含换行/控制字符(可伪造协议行或破坏锁文件结构),已拒绝。修复:改为单行纯文本后重试。`;
 const flattenText = (value) => String(value ?? '').replace(/[\u0000-\u001f\u007f]+/g, ' ').replace(/\s+/g, ' ').trim();
+
+// —— 敏感内容闸(T014/R11)——
+// 协议文件写盘前扫描:summary/next/负结果 是模型自由文本,一旦写入就进 git 历史,事后不可撤回。
+// 命中即阻断本次出场(不写、不提交、不释放认领锁),输出只含前 4 字符预览。
+const secretGateBlock = (label, text) => {
+  const hits = scanSecrets(text);
+  if (!hits.length) return null;
+  return [
+    '## 敏感内容闸:已阻断 — 未写入',
+    '',
+    `${label} 含疑似密钥内容(${hits.length} 处):`,
+    ...hits.slice(0, 5).map((h) => `- 第 ${h.line} 行 命中 ${h.rule} ${h.preview}`),
+    ...(hits.length > 5 ? [`- 等 ${hits.length} 处`] : []),
+    '',
+    '修复:把该串替换为 [REDACTED](或移出协议文件);若该串曾进入 git 历史,立即轮换该密钥。',
+    `确属误报可在同一行标注 ${SECRET_OK_MARKER} 豁免。`,
+    '',
+    '本次未写入任何文件、未提交、未释放认领锁。',
+  ].join('\n');
+};
 
 const parseTaskLine = (line) => {
   const m = String(line).match(TASK_LINE_RE);
@@ -377,6 +398,7 @@ const acquireClaimLock = async (root, task, model, ttlMin = CLAIM_TTL_MIN) => {
       sameHolder: (holder) => holder === model,
       label: `任务 ${task} 认领锁`,
       heartbeat: false,
+      ttlMinutes: ttlMin,
     });
   } catch (e) {
     return { ok: false, holder: '(锁路径异常)', ageMin: 0, ttlMin, warning: e?.message || String(e) };
@@ -405,6 +427,12 @@ export const relaySessionStart = async (args = {}) => {
   const roots = await resolveRelayRoots(args.root || process.cwd());
   const root = roots.controlRoot;
   const executionRoot = roots.executionRoot;
+  // 简报预算(T015):只读配置,用于「字段上限 + 溢出显式告警」;绝不裁剪段落。
+  const briefCfg = await readManifestConfig(root);
+  // 生效配置回显(P2-23):worktree 由 worktree.mjs 单独解析,必须回显真实生效值,
+  // 否则 manifest 写成字符串 "true"(静默失效)时简报会误导 agent 以为 worktree 已开启。
+  let briefWt = null;
+  try { briefWt = await readWorktreeConfig(root); } catch { briefWt = null; }
   const startText = await readText(join(root, 'START.md'));
   if (startText == null) {
     return {
@@ -492,6 +520,13 @@ export const relaySessionStart = async (args = {}) => {
   const firstTodo = todos[0] || null;
 
   // LOG 最近 3 条(标题 + 摘要)
+  // T015:摘要有硬上限——单条超长摘要不得把简报撑爆;完整内容仍在 LOG.md,可取回。
+  const SUMMARY_CAP = 200;
+  // 按码点截断(Array.from),避免 slice 把代理对劈成半个高代理渲染成 U+FFFD。
+  const clip = (s, n) => {
+    const cps = Array.from(String(s));
+    return cps.length > n ? `${cps.slice(0, n).join('')}…[截断 ${cps.length - n} 字,全文见 LOG.md]` : String(s);
+  };
   const logBrief = () => {
     if (logText == null) return ['(LOG.md 缺失)'];
     const entries = parseLogEntries(logText);
@@ -517,7 +552,7 @@ export const relaySessionStart = async (args = {}) => {
         const hf = lines[j].match(/^- 留给下一个:\s*(.*)$/);
         if (hf && !handoff) handoff = hf[1];
       }
-      out.push(`- ${m[1]} | ${m[2]} | ${m[3]}${summary ? ` — ${summary}` : ''}`);
+      out.push(`- ${m[1]} | ${m[2]} | ${m[3]}${summary ? ` — ${clip(summary, SUMMARY_CAP)}` : ''}`);
       if (neg) out.push(`  ⚠ 负结果: ${neg.slice(0, 120)}`);
       if (handoff) out.push(`  → 留给下一个: ${handoff.slice(0, 120)}`);
     }
@@ -597,6 +632,8 @@ export const relaySessionStart = async (args = {}) => {
     `生成于 ${stamp()}`,
     `- controlRoot: ${root}`,
     `- executionRoot: ${executionRoot}`,
+    // 生效配置回显(T015):manifest 未知字段静默忽略是已文档化的漂移陷阱,一行回显让配置错误当场可见。
+    `- 生效配置: worktree=${briefWt ? `enabled=${briefWt.enabled},cacheDir=${briefWt.cacheDir},ttl=${briefWt.ttlHours}h,autoCleanup=${briefWt.autoCleanup}` : '不可读'} facts=${briefCfg.facts.enabled ? `on(since=${briefCfg.facts.since || '未设'},strict=${briefCfg.facts.strict})` : 'off'} contextBudget=${briefCfg.contextBudget}`,
     ...lifecycleNotes,
     '',
     '## 目标',
@@ -635,6 +672,12 @@ export const relaySessionStart = async (args = {}) => {
     '',
     '入场即核对了 git 与 verify;改代码前先认领,出场前必过绿闸。',
   ];
+  // T015:超预算只告警、不裁剪(裁剪=静默降级,违反公理);上界由字段上限保证。
+  const briefText = out.join('\n');
+  if (briefText.length > briefCfg.contextBudget) {
+    out.push('', `> ⚠ 简报 ${briefText.length} 字符超出预算 ${briefCfg.contextBudget}(manifest.contextBudget):`
+      + '已按字段上限截断日志摘要;完整内容请读 LOG.md / TASKS.md,不要据此省略交接。');
+  }
   return { content: [{ type: 'text', text: out.join('\n') }], isError: false };
 };
 
@@ -880,6 +923,7 @@ const completionOwnershipError = async (root, doneTask, model) => {
 // relay_session_end — 出场协议(绿闸铁律)
 // ============================================================
 export const relaySessionEnd = async (args = {}) => {
+  const startedAt = Date.now(); // 事实行的「耗时」:从进场到出场的墙钟时间
   const roots = await resolveRelayRoots(args.root || process.cwd());
   const root = roots.controlRoot;
   const executionRoot = roots.executionRoot;
@@ -924,6 +968,17 @@ export const relaySessionEnd = async (args = {}) => {
   const negatives = Array.isArray(args.negative_results)
     ? args.negative_results.map((s) => String(s).trim()).filter(Boolean)
     : [];
+  // 敏感内容前置闸(T014/R11 + P0-1):summary/next/负结果 是模型自由文本,必须在**任何提交或写入之前**拦截。
+  // managed 模式的代码提交消息会内嵌 summary 首行,闸门若放在提交之后,密钥会先进入 git 历史(不可撤回)。
+  {
+    const modelText = [model, summary, blocked, doneTask, next && next.title, next && next.acceptance, next && next.notes, ...(negatives || [])]
+      .filter((x) => typeof x === 'string' && x).join('\n');
+    const inputSecret = secretGateBlock('本次出场输入(summary / next / 负结果)', modelText);
+    if (inputSecret) {
+      out.push(inputSecret);
+      return { content: [{ type: 'text', text: out.join('\n') }], isError: true };
+    }
+  }
   const badNegative = negatives.find((s) => hasControlChars(s));
   if (badNegative != null) {
     out.push('## 参数校验失败', '', controlCharError('negative_results 条目'));
@@ -1264,7 +1319,13 @@ export const relaySessionEnd = async (args = {}) => {
     out.push('## 并发出场:被拒 — 未提交', '', `仓库写锁在出场期间被接管(${fenceBeforeTasks.warning || '锁已不属于当前会话'}),未更新 TASKS/LOG;请重试。`);
     return { content: [{ type: 'text', text: out.join('\n') }], isError: true };
   }
-  await writeProtocolFile(root, 'TASKS.md', tidy(tLines), { token: exitLock.token, lockLabel: '仓库写锁' });
+  const tasksText = tidy(tLines);
+  const tasksSecret = secretGateBlock('TASKS.md', tasksText);
+  if (tasksSecret) {
+    out.push(tasksSecret);
+    return { content: [{ type: 'text', text: out.join('\n') }], isError: true };
+  }
+  await writeProtocolFile(root, 'TASKS.md', tasksText, { token: exitLock.token, lockLabel: '仓库写锁' });
 
   // 4. 更新 LOG.md(顶部、标题行之后)
   const logPath = join(root, 'LOG.md');
@@ -1276,9 +1337,26 @@ export const relaySessionEnd = async (args = {}) => {
   const maintenance = args.maintenance === true;
   const taskField = doneTask ? `${doneTask} 完成` : (maintenance ? '维护' : '无');
   const summaryFlat = summary.split('\n').map((s) => s.trim()).filter(Boolean).join('; ');
+  // 事实底账(T013/R10):由引擎确定性派生并写入,模型不得手写/改写。
+  // managed 用 baseSha..HEAD(任务分支);单根用工作区 vs HEAD;非 git 退化为 statusLines 文件数。
+  const factsEnabled = !!(cfg && cfg.facts && cfg.facts.enabled);
+  const factLine = factsEnabled ? formatFactLine(await deriveFacts({
+    executionRoot,
+    managed,
+    baseSha: (roots.record && roots.record.baseSha) || '',
+    statusLines,
+    verifyResults: [...controlResults, ...taskResults],
+    acceptance: acc,
+    branch: managedCommit
+      ? managedCommit.branch
+      : (isRepo ? (await gitRun(executionRoot, 'branch', '--show-current')).stdout.trim() : ''),
+    codeSha: managedCommit ? managedCommit.sha : '',
+    startedAt,
+  })) : null;
   const entry = [
     `## ${stamp()} | model=${model} | task=${taskField}`,
     `- 摘要: ${summaryFlat}`,
+    ...(factLine ? [factLine] : []),
   ];
   if (managedCommit && doneTask) entry.push(`- worktree: branch=${managedCommit.branch}; sha=${managedCommit.sha}; 已验收,未合并(是否合并由人工决定)`);
   for (const n of negatives) entry.push(`- 负结果: ${n}`);
@@ -1292,7 +1370,13 @@ export const relaySessionEnd = async (args = {}) => {
   if (!dupLog) {
     if (lLines[titleIdx + 1] === '') lLines.splice(titleIdx + 2, 0, ...entry, '');
     else lLines.splice(titleIdx + 1, 0, '', ...entry, '');
-    await writeProtocolFile(root, 'LOG.md', tidy(lLines), { token: exitLock.token, lockLabel: '仓库写锁' });
+    const logTextOut = tidy(lLines);
+    const logSecret = secretGateBlock('LOG.md', logTextOut);
+    if (logSecret) {
+      out.push(logSecret);
+      return { content: [{ type: 'text', text: out.join('\n') }], isError: true };
+    }
+    await writeProtocolFile(root, 'LOG.md', logTextOut, { token: exitLock.token, lockLabel: '仓库写锁' });
     changes.push(`LOG.md: 顶部新增条目「${entry[0]}」`);
   } else {
     changes.push('LOG.md: 最新条目即本次出场(幂等跳过,不重复记录)');
