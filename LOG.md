@@ -1,5 +1,16 @@
 # 会话日志(最新在上)
 
+## 2026-11-01 23:43 | model=dsh-lead-deepseek-v4.1 | task=T024 完成
+- 摘要: T024 LOG 边界规则 R12:活跃区(归档指针之前的行)>150 或完成条目 >20 → WARN(manifest.logBoundary.strict=true 升 ERROR),只报警不自动归档;归档指针语义与落地硬约束写入 CONTRACT;CONTRACT/relay_rules/AGENTS 模板三处一致;新增 13 断言冒烟并接入 npm test;perf 规模不变量改为 R12 单列断言
+- 事实(v2): mode=managed | 文件 12 | ± +159/-19 | base=56cfed8d9983946703b2c0aceefa07f32dc06b54 | sha=aff8eeb950e23877dffc9db6f5ca5f3fb4db4ab5 | branch=relay/T024 || 验收: 通过 | verify: PASS 15·WARN 0·ERROR 0 | 耗时: 28s
+- worktree: branch=relay/T024; sha=aff8eeb950e23877dffc9db6f5ca5f3fb4db4ab5; 已验收,未合并(是否合并由人工决定)
+- 负结果: R12 与 T022 的「规模不变量」天然冲突:边界规则按设计随 LOG 规模变化,perf 冒烟必须把 R12 从全规则一致性比较中剔除、单独断言(20 条≈62 行 PASS / 100 条≈302 行 WARN)
+- 负结果: fillLog(n) 是 3n+2 行而不是 n 行:按「100 条 LOG」直觉设阈值会在 302 行时误判,阈值断言必须用真实行数
+- 负结果: R12 只在 controlRoot 跑:executionRoot 的 LOG 是 baseSha 快照,拿它判边界会得到陈旧结论(同 R7/R9/R10/R11 边界)
+- 负结果: 归档指针必须让 R12 停止计数:没有指针语义时「活跃区」= 全文,归档后规则仍会响,归档等于白做
+- 负结果: 阈值不做 manifest 可配置:否则「把阈值调大」会成为消音手段;只留 strict 升级开关
+- 留给下一个: 在 scripts/smoke-pack.mjs 增加断言:package.json 含 repository(url 指向 github.com/KentQi/relay-mcp)与 bugs(url/issues),并保留现有 46 文件/129kB 打包断言
+
 ## 2026-11-01 23:36 | model=dsh-lead-deepseek-v4.1 | task=T023 完成
 - 摘要: T023 事实行 v2 + R10 去 fail-open:机检段(mode/文件数/±/base/sha/branch)与叙述段(验收/verify/耗时)以 || 分隔;机检段逐字段对账 + 结构自洽(mode/branch 篡改直接 ERROR),无法定位提交 → WARN 永不 PASS;v1 旧行向后兼容;CONTRACT/relay_rules/AGENTS 模板三处同步,冒烟 33 断言
 - 事实(v2): mode=managed | 文件 12 | ± +226/-65 | base=baf2e87ac5bf5cb1fad91f0b725f7489116906cc | sha=dd816d6939459a077951d94f369d7d7b45026d12 | branch=relay/T023 || 验收: 通过 | verify: PASS 14·WARN 0·ERROR 0 | 耗时: 28s
