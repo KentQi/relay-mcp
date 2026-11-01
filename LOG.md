@@ -1,5 +1,13 @@
 # 会话日志(最新在上)
 
+## 2026-11-01 14:10 | model=dsh-lead-deepseek-v4.1 | task=T015 完成
+- 摘要: T015 简报有界化:LOG 摘要硬上限 200 字符(超长标注全文见 LOG.md);简报总长超 manifest.contextBudget(默认6000)追加显式告警而不裁剪任何段落;头部回显生效配置;新增 smoke-brief(10 断言);README/CONTRACT/CHANGELOG(1.2.0)与版本号同步。
+- 事实(v1): 改动 6 文件(+101/-4) | 验收: 通过 | verify: PASS 13·WARN 0·ERROR 0 | 分支: relay/T015 @da3c837 | 耗时: 28s
+- worktree: branch=relay/T015; sha=da3c837ced2de6460ede08289e20399f57a0ad1e; 已验收,未合并(是否合并由人工决定)
+- 负结果: 简报预算若做成级联裁剪(按最便宜先丢)会引入静默降级;正确做法是字段上限(结构上界)+ 超限显式告警,不丢弃任何段落
+- 负结果: MCP server 进程内缓存引擎模块(contract.mjs 的 engineModuleCache):worktree 里的引擎改动不会被当前 server 使用,自举时出场绿闸实际跑的是 controlRoot 已合并代码;验证新引擎行为必须用 CLI(冷加载)或重启 server
+- 负结果: T013 的事实行因此在 MCP 出场时未写入;facts.since 必须前移到该条目之后才能豁免,否则下一会话 R10 直接 ERROR
+
 ## 2026-11-01 14:06 | model=dsh-lead-deepseek-v4.1 | task=T013 完成
 - 摘要: T013 事实底账(R10):新增 facts.mjs 确定性派生「事实(v1)」行(文件数/±/验收/verify 汇总/分支 sha/耗时);session_end 写入、verify R10 对账(存在性 ERROR、数字 WARN、strict ERROR、since 豁免);init/onboard 默认开启;新增 smoke-facts(18 断言);模板/README/CONTRACT 同步。
 - worktree: branch=relay/T013; sha=4b3953d1379cd43b6e23953c54327611b98481f1; 已验收,未合并(是否合并由人工决定)
