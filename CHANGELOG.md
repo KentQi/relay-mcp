@@ -15,7 +15,10 @@
 
 ### Added(T024)
 - **R12 LOG 边界**:LOG 活跃区(归档指针之前的行)>150 行 或 完成条目 >20 → WARN(`manifest.logBoundary.strict=true` 升 ERROR);只报警、不自动归档,归档动作留人工;阈值按现状设定(本仓库当前 139 行 / 16 完成条目,落地即绿)
-- `scripts/smoke-r12-boundary.mjs`(11 断言)接入 `npm test`
+- `scripts/smoke-r12-boundary.mjs`(13 断言)接入 `npm test`
+
+### Added(T025)
+- `package.json` 补 `repository` / `bugs`(npm provenance 发布前置);`smoke-pack` 增加 2 条机检断言(28→30),打包边界不回归
 
 ## [1.4.1] - 2026-11-01
 
