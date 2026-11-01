@@ -18,6 +18,7 @@ import { execFile, exec } from 'node:child_process';
 import { promisify } from 'node:util';
 import { runChecks, formatChecks, runTaskTreeChecks, TASK_LINE_RE, LOG_TITLE_RE, parseLogEntries } from './verify.mjs';
 import { readManifestConfig, DEFAULT_COMMIT_TEMPLATE } from '../config.mjs';
+import { deriveFacts, formatFactLine } from './facts.mjs';
 import {
   cleanupWorktrees, ensureTaskWorktree, ensureWorktreeGitignore, findManagedWorktreeEvidence, formatUnmergedBranchesNote,
   listUnmergedTaskBranches, readWorktreeConfig, readWorktreeConfigRaw, readWorktreeRegistryState, registryRecoveryHint,
@@ -900,6 +901,7 @@ const completionOwnershipError = async (root, doneTask, model) => {
 // relay_session_end — 出场协议(绿闸铁律)
 // ============================================================
 export const relaySessionEnd = async (args = {}) => {
+  const startedAt = Date.now(); // 事实行的「耗时」:从进场到出场的墙钟时间
   const roots = await resolveRelayRoots(args.root || process.cwd());
   const root = roots.controlRoot;
   const executionRoot = roots.executionRoot;
@@ -1312,9 +1314,25 @@ export const relaySessionEnd = async (args = {}) => {
   const maintenance = args.maintenance === true;
   const taskField = doneTask ? `${doneTask} 完成` : (maintenance ? '维护' : '无');
   const summaryFlat = summary.split('\n').map((s) => s.trim()).filter(Boolean).join('; ');
+  // 事实底账(T013/R10):由引擎确定性派生并写入,模型不得手写/改写。
+  // managed 用 baseSha..HEAD(任务分支);单根用工作区 vs HEAD;非 git 退化为 statusLines 文件数。
+  const factLine = formatFactLine(await deriveFacts({
+    executionRoot,
+    managed,
+    baseSha: (roots.record && roots.record.baseSha) || '',
+    statusLines,
+    verifyResults: [...controlResults, ...taskResults],
+    acceptance: acc,
+    branch: managedCommit
+      ? managedCommit.branch
+      : (isRepo ? (await gitRun(executionRoot, 'branch', '--show-current')).stdout.trim() : ''),
+    codeSha: managedCommit ? managedCommit.sha : '',
+    startedAt,
+  }));
   const entry = [
     `## ${stamp()} | model=${model} | task=${taskField}`,
     `- 摘要: ${summaryFlat}`,
+    factLine,
   ];
   if (managedCommit && doneTask) entry.push(`- worktree: branch=${managedCommit.branch}; sha=${managedCommit.sha}; 已验收,未合并(是否合并由人工决定)`);
   for (const n of negatives) entry.push(`- 负结果: ${n}`);

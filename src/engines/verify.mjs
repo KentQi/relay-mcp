@@ -3,6 +3,7 @@
 // TASKS 任务行与 LOG 条目标题的正则与契约逐字符一致,绝不改动;
 // 每条非 PASS 结果都附一条以「修复:」开头的可执行指令。
 import { readFileSafe, isGitRepo, gitRun, scanSecrets, formatSecretHits } from '../util.mjs';
+import { FACT_LINE_RE, parseFactLine, recomputeCommitFileCount } from './facts.mjs';
 import { readManifestConfig, underRoots, matchesIgnore, DEFAULT_CODE_ROOTS, DEFAULT_DOCS_ROOTS } from '../config.mjs';
 import { readdir } from 'node:fs/promises';
 import { join } from 'node:path';
@@ -327,6 +328,63 @@ const checkR9 = async (root) => {
   return pass('R9', `LOG/TASKS 一致(${id} 已标 [x])`);
 };
 
+// —— R10 事实对账(T013)——
+// 事实行由 relay_session_end 的引擎确定性写入,模型不得手写/改写;本检查负责:
+//   10.1 存在性:最新完成条目必须有「事实(v1)」行(防手写伪造完成条目);
+//   10.2 可解析性:格式坏了即 ERROR(说明被手改或引擎回退);
+//   10.3 数字对账:可定位提交时只比**文件数**(--no-renames);不一致 → WARN,strict 才 ERROR。
+// 只跑 controlRoot(executionRoot 里的 LOG 是 baseSha 快照,同 R7/R9 边界)。
+// 向后兼容:manifest.facts.enabled 未开 / since 未设 / 条目早于 since → SKIP。
+const checkR10 = async (root, cfg) => {
+  const facts = (cfg && cfg.facts) || { enabled: false, since: null, strict: false };
+  if (!facts.enabled) {
+    return skip('R10', 'manifest.facts.enabled 未开启,跳过事实对账', '新项目由 relay_init/onboard 开启;旧项目在 .relay/manifest.json 写入 facts.enabled=true 与 facts.since 后生效');
+  }
+  if (!facts.since) {
+    return skip('R10', 'manifest.facts.since 未设置,跳过(避免旧条目误报)', '在 manifest.facts.since 写入启用时刻(YYYY-MM-DD HH:mm)后本检查生效');
+  }
+  const t = await readText(join(root, 'LOG.md'));
+  if (t == null) return skip('R10', 'LOG.md 不存在', '出场会写入首条日志');
+  const lines = t.replace(/\r\n/g, '\n').split('\n');
+  let start = -1;
+  let end = lines.length;
+  for (let i = 0; i < lines.length; i++) {
+    if (LOG_TITLE_RE.test(lines[i])) { start = i; break; }
+  }
+  if (start < 0) return skip('R10', 'LOG.md 无条目', '出场后自动产生');
+  for (let i = start + 1; i < lines.length; i++) {
+    if (LOG_TITLE_RE.test(lines[i])) { end = i; break; }
+  }
+  const m = lines[start].match(LOG_TITLE_RE);
+  const entry = { time: m[1], model: m[2], task: m[3] };
+  if (!isDoneTaskField(entry.task)) return pass('R10', `最新条目未声明完成(task=${entry.task}),无需事实对账`);
+  if (entry.time < facts.since) {
+    return skip('R10', `最新条目(${entry.time})早于 facts.since(${facts.since}),跳过(升级兼容)`, null);
+  }
+  const block = lines.slice(start + 1, end);
+  const factIdx = block.findIndex((l) => FACT_LINE_RE.test(l));
+  if (factIdx < 0) {
+    return bad('R10', 'ERROR', `最新完成条目(${entry.time} ${entry.task})缺少机器写入的「事实(v1)」行`,
+      '重跑 relay_session_end 由引擎补写(不要手写该行);若该条目确由旧版本引擎生成,把 manifest.facts.since 前移到该条目之后即可豁免');
+  }
+  const parsed = parseFactLine(block[factIdx]);
+  if (!parsed) {
+    return bad('R10', 'ERROR', `「事实(v1)」行格式不可解析:${block[factIdx].slice(0, 80)}`,
+      '删除该行后重跑 relay_session_end 由引擎重写(该行是机器产物,不允许手改)');
+  }
+  const recomputed = await recomputeCommitFileCount(root, parsed);
+  if (recomputed == null) {
+    return pass('R10', `事实行存在(声明 ${parsed.files} 文件);无可定位提交,跳过数字对账`);
+  }
+  if (recomputed !== parsed.files) {
+    const detail = `事实行声明 ${parsed.files} 文件,git 实测 ${recomputed} 文件(只比文件数,--no-renames)`;
+    return facts.strict
+      ? bad('R10', 'ERROR', detail, '事实行必须由引擎写入;删除该行后重跑 relay_session_end 重写')
+      : bad('R10', 'WARN', detail, '先确认不是跨多提交/合并造成的口径差异;确认后可把 manifest.facts.strict 置 true 升级为 ERROR');
+  }
+  return pass('R10', `事实对账一致(${parsed.files} 文件,${parsed.branch || '单根'})`);
+};
+
 // —— R11 协议文件敏感内容 ——
 // 路径级守卫见 findSensitiveChanges(H3);本检查补内容级:密钥写进 LOG 就进了 git 历史,事后不可撤回。
 // 只扫 controlRoot 的协议文件;executionRoot 里的 TASKS/LOG 只是 baseSha 快照(同 R7/R9 的边界)。
@@ -377,6 +435,7 @@ export const runChecks = async (root, { full = false } = {}) => {
     await checkR7(root),
     full ? await checkR8(root) : fastSkip('R8', '(R8 风格归一化)'),
     await checkR9(root),
+    await checkR10(root, cfg),
     await checkR11(root),
   ];
 };

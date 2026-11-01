@@ -39,6 +39,7 @@
 | R7 | 会话日志连续 3 条任务会话(维护不计入)无「T### 完成」→ 停机,人类仲裁 |
 | R8 | 项目配了 format 工具链就跑;没配不硬加 |
 | R9 | LOG 记完成的任务,TASKS 里必须已完成 |
+| R10 | 完成条目必须带引擎写入的「事实(v1)」行;文件数与 git 事实一致(默认 WARN,strict 才 ERROR) |
 | R11 | 协议文件不得含密钥样式内容;出场写盘前阻断,误报同行标注 `relay:secret-ok` 豁免 |
 
 细则与执法点:`relay_rules`;完整规范见 relay-mcp 仓库与全局 CLAUDE-PROJECT-RULES。

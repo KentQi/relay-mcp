@@ -209,3 +209,21 @@ export const startServer = async ({ onInit, onMethod }) => {
 - **写盘二次扫描**:TASKS/LOG 序列化后的全文在 `writeProtocolFile` 前再扫一次(兜住既有条目里已存在的密钥),命中同样阻断。
 - **不可逆语义**:密钥一旦进入 git 历史即不可撤回;R11 只防「未来写入」,不救已提交内容——修复指令明确要求轮换密钥。
 - **冒烟**:`scripts/smoke-content-guard.mjs` 覆盖命中/豁免/阻断/无半写四类断言,已接入 `npm test` 链。
+## 2026-11-01 T013 补充契约(事实底账 / R10)
+
+- **写入**:`relay_session_end` 在 LOG 条目「摘要」之后追加一行 `- 事实(v1): …`,内容由引擎确定性派生,**模型不得手写或改写**。字段:改动文件数与 ± 行数、验收执行结果、verify 汇总(PASS/WARN/ERROR 计数)、分支与代码 SHA(单根未提交时标 `@未提交`)、耗时。
+- **口径**:
+  - managed(受管 worktree):`git diff --name-only --no-renames <baseSha>..HEAD`(executionRoot 任务分支)。
+  - 单根:工作区 vs HEAD(`git diff HEAD`),此时代码尚未提交,故不写 SHA。
+  - 非 git / git 不可读:退化为 `git status` 文件数,± 记 0(不假装知道)。
+  - 协议文件 `TASKS.md`/`LOG.md` 恒不计入改动文件数。
+- **校验 R10**(仅 controlRoot,同 R7/R9 边界):
+  - 10.1 最新完成条目缺「事实(v1)」行 → **ERROR**(防手写伪造完成条目);
+  - 10.2 行格式不可解析 → **ERROR**(说明被手改或引擎回退);
+  - 10.3 可定位提交时重算文件数,不一致 → **WARN**;`manifest.facts.strict=true` → **ERROR**;
+  - 10.4 `manifest.facts.enabled` 未开 / `since` 未设 / 条目早于 `since` → **SKIP**(升级兼容)。
+- **配置**(`.relay/manifest.json`):
+  `"facts": { "enabled": true, "since": "YYYY-MM-DD HH:mm", "strict": false }`。
+  `relay_init` / `relay_onboard` 默认写入 `enabled:true` 与启用时刻 `since`;旧项目缺席即旧行为(不写事实行、R10 跳过),`relay_sync` 输出升级提示但不改写 manifest(非破坏)。
+- **为何只比文件数**:行级 ±x/-y 会被 CRLF、重命名、合并与跨多提交污染,成为恒过或恒错的假裁判;文件数在同一 `--no-renames` 口径下稳定可复现。
+- **冒烟**:`scripts/smoke-facts.mjs` 覆盖写入/存在性/数字 WARN/strict ERROR/升级 SKIP 五类断言,已接入 `npm test` 链。
