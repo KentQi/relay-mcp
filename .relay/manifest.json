@@ -48,5 +48,10 @@
     "ttlHours": 24,
     "autoCleanup": true
   },
+  "facts": {
+    "enabled": true,
+    "since": "2026-11-01 14:06",
+    "strict": false
+  },
   "onboardedAt": "2026-09-29T03:38:22.077Z"
 }
