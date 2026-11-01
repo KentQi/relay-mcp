@@ -247,7 +247,7 @@ export const relaySync = async (args = {}) => {
     const factsEnabled = !!(manifest.facts && manifest.facts.enabled === true);
     const factsHint = factsEnabled
       ? []
-      : ['', '- 事实底账未启用(manifest.facts.enabled 缺失):出场不会写「事实(v1)」行,R10 会一直 SKIP。',
+      : ['', '- 事实底账未启用(manifest.facts.enabled 缺失):出场不会写「事实(v2)」行,R10 会一直 SKIP。',
         '  - 如需启用:在 .relay/manifest.json 写入 \"facts\": {\"enabled\": true, \"since\": \"' + stamp() + '\", \"strict\": false} 后重跑 relay_verify。'];
 
     const lines = [

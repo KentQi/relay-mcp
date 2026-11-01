@@ -1,8 +1,8 @@
 #!/usr/bin/env node
-// T013/R10 冒烟:事实底账(引擎写入「事实(v1)」行 + 文件数对账)。
+// T013/T023 冒烟:事实底账 v2(机检段/叙述段)+ R10 对账 + fail-open 修复。
 // 用 CLI 而非 MCP 客户端:验证引擎判定;传输层由 smoke.mjs 覆盖。
 import { spawnSync } from 'node:child_process';
-import { mkdtempSync, rmSync, readFileSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, rmSync, readFileSync, writeFileSync, mkdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -19,10 +19,13 @@ const ok = (cond, label, extra = '') => {
 const tmp = mkdtempSync(path.join(tmpdir(), 'relay-facts-'));
 const logPath = path.join(tmp, 'LOG.md');
 const mfPath = path.join(tmp, '.relay', 'manifest.json');
-const cli = (tool, args = {}) => spawnSync('node', [CLI, tool, '--root', tmp, '--json', JSON.stringify(args)], { encoding: 'utf8' });
+const cliAt = (root, tool, args = {}) => spawnSync('node', [CLI, tool, '--root', root, '--json', JSON.stringify(args)], { encoding: 'utf8' });
+const cli = (tool, args = {}) => cliAt(tmp, tool, args);
 const out = (r) => `${r.stdout || ''}${r.stderr || ''}`;
 const readMf = () => JSON.parse(readFileSync(mfPath, 'utf8'));
 const writeMf = (m) => writeFileSync(mfPath, JSON.stringify(m, null, 2) + '\n');
+const gitAt = (root, ...args) => spawnSync('git', ['-C', root, ...args], { encoding: 'utf8' });
+const r10Row = (r) => (out(r).split('\n').find((l) => /^\| R10 \|/.test(l)) || '');
 
 try {
   console.log('== init 写入 facts 配置 ==');
@@ -32,47 +35,104 @@ try {
   ok(mf0.facts && mf0.facts.enabled === true, 'init 写入 facts.enabled=true');
   ok(typeof mf0.facts.since === 'string' && mf0.facts.since.length >= 16, 'init 写入 facts.since(YYYY-MM-DD HH:mm)');
 
-  console.log('\n== 出场由引擎写入事实行 ==');
+  console.log('\n== 出场由引擎写入 v2 事实行(机检段 || 叙述段) ==');
   const claim = cli('relay_claim', { task: 'T003', model: 'smoke-facts', worktree: false });
   ok(claim.status === 0, '认领 T003', out(claim).slice(0, 200));
   const end = cli('relay_session_end', { model: 'smoke-facts', summary: '事实底账冒烟:只改协议文件', done_task: 'T003' });
   ok(end.status === 0, 'session_end 成功', out(end).slice(0, 400));
   const log = readFileSync(logPath, 'utf8');
-  const fact = log.match(/^- 事实\(v1\): .*$/m);
-  ok(!!fact, 'LOG 含「事实(v1)」行', log.slice(0, 300));
-  ok(/改动 \d+ 文件\(\+\d+\/-\d+\)/.test(fact[0]), '事实行含文件数与增删行数');
-  ok(/验收: 通过/.test(fact[0]), '事实行记录验收执行结果');
-  ok(/verify: PASS \d+/.test(fact[0]), '事实行记录 verify 汇总');
+  const fact = log.match(/^- 事实\(v2\): .*$/m);
+  ok(!!fact, 'LOG 含「事实(v2)」行', log.slice(0, 300));
+  ok(/mode=single/.test(fact[0]), '机检段含 mode=single(单根)');
+  ok(/文件 \d+/.test(fact[0]) && /± \+\d+\/-\d+/.test(fact[0]), '机检段含文件数与 ± 行数');
+  ok(/base=- \| sha=- \| branch=/.test(fact[0]), '机检段含 base/sha/branch(单根无提交时为 -)');
+  ok(/\|\| 验收: 通过/.test(fact[0]), '叙述段以 || 分隔并记录验收结果');
+  ok(/verify: PASS \d+/.test(fact[0]), '叙述段记录 verify 汇总');
 
-  console.log('\n== R10 存在性:删除事实行 → WARN(P1-14:不锁死出场) ==');
-  writeFileSync(logPath, log.replace(/^- 事实\(v1\): .*\n/m, ''));
+  console.log('\n== R10 存在性:删除事实行 → WARN(不锁死出场) ==');
+  writeFileSync(logPath, log.replace(/^- 事实\(v2\): .*\n/m, ''));
   const v1 = cli('relay_verify', { full: true });
-  ok(v1.status === 0, 'WARN 不阻断(退出码 0,避免 R10 死锁出场)', out(v1).slice(0, 300));
+  ok(v1.status === 0, 'WARN 不阻断(退出码 0)', out(v1).slice(0, 300));
   ok(/R10\s*\|\s*WARN/.test(out(v1)), '输出为 R10 WARN(缺事实行)');
   ok(/修复:/.test(out(v1)), '输出含可执行「修复:」');
 
-  console.log('\n== R10 数字对账:篡改文件数 → WARN(strict 前) ==');
-  writeFileSync(logPath, log.replace(/改动 (\d+) 文件/, (_, n) => `改动 ${Number(n) + 7} 文件`));
+  console.log('\n== 机检段篡改 → R10 ERROR ==');
+  writeFileSync(logPath, log.replace(/文件 (\d+)/, (_, n) => `文件 ${Number(n) + 7}`));
   const v2 = cli('relay_verify', { full: true });
-  ok(v2.status === 0, 'WARN 不阻断出场(退出码 0)', out(v2).slice(0, 300));
-  ok(/R10\s*\|\s*WARN/.test(out(v2)), '输出为 R10 WARN');
+  ok(v2.status === 1, '文件数不一致 → 退出码 1', out(v2).slice(0, 300));
+  ok(/R10\s*\|\s*ERROR/.test(out(v2)), '输出为 R10 ERROR');
 
-  console.log('\n== R10 strict:数字不一致 → ERROR ==');
-  const mf1 = readMf();
-  mf1.facts.strict = true;
-  writeMf(mf1);
+  console.log('\n== 叙述段篡改 → 不误红 ==');
+  writeFileSync(logPath, log.replace('验收: 通过', '验收: 未通过'));
   const v3 = cli('relay_verify', { full: true });
-  ok(v3.status === 1, 'strict 模式下退出码 1', out(v3).slice(0, 300));
-  ok(/R10\s*\|\s*ERROR/.test(out(v3)), '输出为 R10 ERROR');
+  ok(v3.status === 0, '改叙述段不影响判定(退出码 0)', out(v3).slice(0, 300));
+  ok(/R10\s*\|\s*PASS/.test(out(v3)), 'R10 仍 PASS(叙述段不参与对账)');
+
+  console.log('\n== 单根行被注入 base/sha → 机检段自相矛盾 ERROR ==');
+  writeFileSync(logPath, log.replace('sha=-', 'sha=deadbeefdeadbeefdeadbeefdeadbeefdeadbeef'));
+  const v4 = cli('relay_verify', { full: true });
+  ok(v4.status === 1, '单根行带 sha → 退出码 1', out(v4).slice(0, 300));
+  ok(/R10\s*\|\s*ERROR/.test(out(v4)), 'R10 ERROR(机检段自相矛盾)');
+  ok(/自相矛盾/.test(out(v4)), '文案指明机检段自相矛盾(不靠 git 也能发现篡改)');
+
+  console.log('\n== managed 夹具:± 行数属机检段 ==');
+  const mtmp = mkdtempSync(path.join(tmpdir(), 'relay-facts-managed-'));
+  try {
+    const g = (...a) => gitAt(mtmp, ...a);
+    g('init', '-q');
+    mkdirSync(path.join(mtmp, 'src'), { recursive: true });
+    writeFileSync(path.join(mtmp, 'src', 'a.mjs'), 'export const a = 1;\n');
+    g('add', '-A');
+    g('-c', 'user.name=t', '-c', 'user.email=t@t', 'commit', '-q', '-m', 'wip a');
+    const sha1 = g('rev-parse', 'HEAD').stdout.trim();
+    writeFileSync(path.join(mtmp, 'src', 'b.mjs'), 'export const b = 1;\nexport const c = 2;\n');
+    g('add', '-A');
+    g('-c', 'user.name=t', '-c', 'user.email=t@t', 'commit', '-q', '-m', 'wip b');
+    const sha2 = g('rev-parse', 'HEAD').stdout.trim();
+    mkdirSync(path.join(mtmp, '.relay'), { recursive: true });
+    writeFileSync(path.join(mtmp, '.relay', 'manifest.json'), JSON.stringify({
+      version: 1, entryFiles: ['AGENTS.md'], allowedTopLevel: ['src', '.relay', 'TASKS.md', 'LOG.md'],
+      facts: { enabled: true, since: '2020-01-01 00:00', strict: false },
+    }, null, 2) + '\n');
+    writeFileSync(path.join(mtmp, 'TASKS.md'), '# 任务队列\n\n## 待办\n\n## 已完成\n- [x] T900 夹具任务  (2026-01-01)\n');
+    const mkFact = (pm) => `- 事实(v2): mode=managed | 文件 1 | ± ${pm} | base=${sha1} | sha=${sha2} | branch=relay/T900 || 验收: 通过 | verify: PASS 0·WARN 0·ERROR 0 | 耗时: 1s`;
+    const logM = (factLine) => writeFileSync(path.join(mtmp, 'LOG.md'), `# 会话日志(最新在上)\n\n## 2026-01-01 00:00 | model=fixture | task=T900 完成\n- 摘要: 夹具\n${factLine}\n`);
+    const mRow = (mut) => { logM(mut(mkFact('+2/-0'))); return r10Row(cliAt(mtmp, 'relay_verify', { full: true })); };
+    logM(mkFact('+2/-0'));
+    const m1 = cliAt(mtmp, 'relay_verify', { full: true });
+    ok(/R10\s*\|\s*PASS/.test(r10Row(m1)), 'managed 正确事实行 → R10 PASS', r10Row(m1));
+    logM(mkFact('+9/-9'));
+    const m2 = cliAt(mtmp, 'relay_verify', { full: true });
+    ok(/R10\s*\|\s*ERROR/.test(r10Row(m2)), 'managed ± 行数被篡改 → R10 ERROR', r10Row(m2));
+    const rMode = mRow((l) => l.replace('mode=managed', 'mode=single'));
+    ok(/R10\s*\|\s*ERROR/.test(rMode) && /自相矛盾/.test(rMode), 'mode 被篡改(managed→single)→ R10 ERROR', rMode);
+    const rBranch = mRow((l) => l.replace('branch=relay/T900', 'branch=main'));
+    ok(/R10\s*\|\s*ERROR/.test(rBranch), 'branch 被篡改 → R10 ERROR', rBranch);
+    const rSha = mRow((l) => l.replace(`sha=${sha2}`, 'sha=deadbeefdeadbeefdeadbeefdeadbeefdeadbeef'));
+    ok(/R10\s*\|\s*WARN/.test(rSha) && /无法定位对应提交/.test(rSha), '伪造 sha → R10 WARN(不再 PASS)', rSha);
+    const rBase = mRow((l) => l.replace(`base=${sha1}`, 'base=deadbeefdeadbeefdeadbeefdeadbeefdeadbeef'));
+    ok(/R10\s*\|\s*WARN/.test(rBase), '伪造 base → R10 WARN(不再 PASS)', rBase);
+  } finally {
+    rmSync(mtmp, { recursive: true, force: true });
+  }
 
   console.log('\n== 升级兼容:since 在未来 → SKIP ==');
   const mf2 = readMf();
   mf2.facts.strict = false;
   mf2.facts.since = '2099-01-01 00:00';
   writeMf(mf2);
-  const v4 = cli('relay_verify', { full: true });
-  ok(v4.status === 0, 'since 在未来时 verify 通过', out(v4).slice(0, 300));
-  ok(/R10\s*\|\s*SKIP/.test(out(v4)), '输出为 R10 SKIP(旧条目豁免)');
+  const v5 = cli('relay_verify', { full: true });
+  ok(v5.status === 0, 'since 在未来时 verify 通过', out(v5).slice(0, 300));
+  ok(/R10\s*\|\s*SKIP/.test(out(v5)), '输出为 R10 SKIP(旧条目豁免)');
+
+  console.log('\n== 修宪一致:CONTRACT 记载 v2 拆段 ==');
+  const contract = readFileSync(path.join(RELAY, 'docs-design', 'CONTRACT.md'), 'utf8');
+  ok(/事实\(v2\)/.test(contract), 'CONTRACT 提及 事实(v2)');
+  ok(/机检段/.test(contract) && /叙述段/.test(contract), 'CONTRACT 写明机检段/叙述段');
+  const machineFields = ['mode=', '文件 N', '±', 'base=', 'sha=', 'branch='];
+  ok(machineFields.every((f) => contract.includes(f)), 'CONTRACT 机检段字段清单与 v2 一致(mode/文件/±/base/sha/branch)', machineFields.filter((f) => !contract.includes(f)).join(','));
+  const narrativeFields = ['验收:', 'verify:', '耗时:'];
+  ok(narrativeFields.every((f) => contract.includes(f)), 'CONTRACT 叙述段字段清单与 v2 一致(验收/verify/耗时)', narrativeFields.filter((f) => !contract.includes(f)).join(','));
 } finally {
   rmSync(tmp, { recursive: true, force: true });
 }

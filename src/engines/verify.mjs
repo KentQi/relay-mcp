@@ -3,7 +3,7 @@
 // TASKS 任务行与 LOG 条目标题的正则与契约逐字符一致,绝不改动;
 // 每条非 PASS 结果都附一条以「修复:」开头的可执行指令。
 import { readFileSafe, isGitRepoAsync, gitRun, scanSecrets, formatSecretHits, SECRET_OK_MARKER } from '../util.mjs';
-import { FACT_LINE_RE, parseFactLine, recomputeCommitFileCount } from './facts.mjs';
+import { FACT_LINE_RE, parseFactLine, recomputeCommitStats } from './facts.mjs';
 import { readManifestConfig, underRoots, matchesIgnore, DEFAULT_CODE_ROOTS, DEFAULT_DOCS_ROOTS } from '../config.mjs';
 import { readdir } from 'node:fs/promises';
 import { join } from 'node:path';
@@ -359,9 +359,10 @@ const checkR9 = async (root, snap) => {
 
 // —— R10 事实对账(T013)——
 // 事实行由 relay_session_end 的引擎确定性写入,模型不得手写/改写;本检查负责:
-//   10.1 存在性:最新完成条目必须有「事实(v1)」行(防手写伪造完成条目);
+//   10.1 存在性:最新完成条目必须有事实行(缺 → WARN,ERROR 会锁死出场;防手写伪造完成条目);
 //   10.2 可解析性:格式坏了即 ERROR(说明被手改或引擎回退);
-//   10.3 数字对账:可定位提交时只比**文件数**(--no-renames);不一致 → WARN,strict 才 ERROR。
+//   10.3 机检段对账(v2):mode/文件数/±/base/sha/branch 从 git 重算,不一致 → ERROR;叙述段不参与;
+//   10.4 无法定位提交 → WARN(永不 PASS);v1 旧行只对文件数(不一致 WARN,strict 升 ERROR)。
 // 只跑 controlRoot(executionRoot 里的 LOG 是 baseSha 快照,同 R7/R9 边界)。
 // 向后兼容:manifest.facts.enabled 未开 / since 未设 / 条目早于 since → SKIP。
 const checkR10 = async (root, cfg, snap) => {
@@ -397,29 +398,64 @@ const checkR10 = async (root, cfg, snap) => {
   if (factIdx < 0) {
     // P1-14:这里若判 ERROR,出场绿闸会永久卡死,而唯一的修复动作(重跑 session_end)
     // 正是被阻断的那个调用,且引擎从不回填历史条目 —— 死锁。降为 WARN 并给可执行出路。
-    return bad('R10', 'WARN', `最新完成条目(${entry.time} ${entry.task})缺少机器写入的「事实(v1)」行`,
-      '该条目由旧版本引擎或手工写入,引擎不会回填历史条目;把 .relay/manifest.json 的 facts.since 前移到该条目之后即可豁免,或人工补一行格式正确的 事实(v1) 行');
+    return bad('R10', 'WARN', `最新完成条目(${entry.time} ${entry.task})缺少机器写入的「事实(v2)」行`,
+      '该条目由旧版本引擎或手工写入,引擎不会回填历史条目;把 .relay/manifest.json 的 facts.since 前移到该条目之后即可豁免,或人工补一行格式正确的 事实(v2) 行');
   }
   const parsed = parseFactLine(block[factIdx]);
   if (!parsed) {
-    return bad('R10', 'ERROR', `「事实(v1)」行格式不可解析:${block[factIdx].slice(0, 80)}`,
+    return bad('R10', 'ERROR', `「事实(v1/v2)」行格式不可解析:${block[factIdx].slice(0, 80)}`,
       '删除该行后重跑 relay_session_end 由引擎重写(该行是机器产物,不允许手改)');
   }
+  // T023:机检段结构自洽(mode 决定 base/sha 是否必须存在;managed 分支恒为 relay/T###)。
+  // 这条不依赖 git —— 篡改 mode/branch 会直接暴露,而不是靠「± 恰好没被检查」的偶然性。
+  if (parsed.version === 2) {
+    const struct = [];
+    if (parsed.mode === 'managed') {
+      if (!parsed.base) struct.push('mode=managed 但 base 缺失');
+      if (!parsed.sha) struct.push('mode=managed 但 sha 缺失');
+      if (!/^relay\//.test(parsed.branch)) struct.push(`mode=managed 但 branch=${parsed.branch || '(空)'} 不是 relay/T### 任务分支`);
+    } else {
+      if (parsed.base) struct.push('mode=single 却带 base(单根出场时代码尚未提交)');
+      if (parsed.sha) struct.push('mode=single 却带 sha(单根出场时代码尚未提交)');
+      if (!parsed.branch) struct.push('branch 缺失');
+    }
+    if (struct.length) {
+      return bad('R10', 'ERROR', `事实行机检段自相矛盾:${struct.join('; ')}`,
+        '事实行是引擎产物,不允许手改;删除该行后重跑 relay_session_end 重写(机检段=mode/文件数/±/base/sha/branch)');
+    }
+  }
   // 复用快照里的 git 结果:不再单独起 isGitRepo / git log(R10 只需一次 diff)
-  const recomputed = await recomputeCommitFileCount(root, parsed, {
+  const stats = await recomputeCommitStats(root, parsed, {
     isRepo: snap && snap.git ? snap.git.isRepo : undefined,
     headSubject: snap && snap.git && snap.git.commits[0] ? snap.git.commits[0].subject : null,
   });
-  if (recomputed == null) {
-    return pass('R10', `事实行存在(声明 ${parsed.files} 文件);无可定位提交,跳过数字对账`);
+  if (!stats) {
+    // T023:fail-open 修复 —— 「算不了」绝不能 PASS(未验证的确信比空白更危险);
+    // 伪造 sha / 提交被重写 / 历史被裁剪都会走到这里,降 WARN 并给出可执行出路。
+    return bad('R10', 'WARN', `事实行存在(声明 ${parsed.files} 文件),但无法定位对应提交,数字对账无法完成`,
+      '确认该条目引用的 base/sha 仍在仓库历史中;若是旧版本引擎写入或历史被重写,把 manifest.facts.since 前移到该条目之后豁免');
   }
-  if (recomputed !== parsed.files) {
-    const detail = `事实行声明 ${parsed.files} 文件,git 实测 ${recomputed} 文件(只比文件数,--no-renames)`;
+  if (parsed.version === 2) {
+    // 机检段逐字段对账(叙述段=验收/verify/耗时,写时快照不可重算,刻意不校验)
+    const fails = [];
+    if (stats.files !== parsed.files) fails.push(`文件数 声明 ${parsed.files} / 实测 ${stats.files}`);
+    if (parsed.mode === 'managed' && (stats.insertions !== parsed.insertions || stats.deletions !== parsed.deletions)) {
+      fails.push(`±行数 声明 +${parsed.insertions}/-${parsed.deletions} / 实测 +${stats.insertions}/-${stats.deletions}`);
+    }
+    if (fails.length) {
+      return bad('R10', 'ERROR', `事实行机检段与 git 事实不一致:${fails.join('; ')}`,
+        '事实行是引擎产物,不允许手改;删除该行后重跑 relay_session_end 重写(机检段=mode/文件数/±/base/sha/branch,叙述段=验收/verify/耗时)');
+    }
+    return pass('R10', `事实对账一致(v2 机检段:${parsed.files} 文件${parsed.mode === 'managed' ? `,±+${parsed.insertions}/-${parsed.deletions}` : ''},${parsed.branch || '单根'})`);
+  }
+  // v1 旧格式(向后兼容):只比文件数
+  if (stats.files !== parsed.files) {
+    const detail = `事实行声明 ${parsed.files} 文件,git 实测 ${stats.files} 文件(只比文件数,--no-renames)`;
     return facts.strict
       ? bad('R10', 'ERROR', detail, '事实行必须由引擎写入;删除该行后重跑 relay_session_end 重写')
       : bad('R10', 'WARN', detail, '先确认不是跨多提交/合并造成的口径差异;确认后可把 manifest.facts.strict 置 true 升级为 ERROR');
   }
-  return pass('R10', `事实对账一致(${parsed.files} 文件,${parsed.branch || '单根'})`);
+  return pass('R10', `事实对账一致(v1 旧格式,${parsed.files} 文件,${parsed.branch || '单根'})`);
 };
 
 // —— R11 协议文件敏感内容 ——

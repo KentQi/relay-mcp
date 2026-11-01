@@ -65,8 +65,10 @@ try {
   });
   ok(okExit.status === 0, '干净 managed 出场成功(多提交)', out(okExit).slice(0, 400));
   const logA = readFileSync(path.join(tmpA, 'LOG.md'), 'utf8');
-  const factLine = (logA.match(/^- 事实\(v1\): .*$/m) || [''])[0];
+  const factLine = (logA.match(/^- 事实\(v2\): .*$/m) || [''])[0];
+  ok(/^\s*- 事实\(v2\): .*\|\| .*$/m.test(factLine), '事实行是 v2 两段式(机检段 || 叙述段)', factLine);
   ok(/base=[0-9a-f]{7,40}/.test(factLine), '事实行记录 base sha', factLine);
+  ok(/mode=managed/.test(factLine) && /branch=relay\/T003/.test(factLine), '事实行记录 managed 模式与任务分支', factLine);
   const verifyA = cliAt(tmpA, 'relay_verify', { full: true });
   ok(verifyA.status === 0, 'verify 全绿', out(verifyA).slice(0, 300));
   ok(/R10\s*\|\s*PASS/.test(out(verifyA)), 'R10 多提交对账一致(不因多提交误判)', out(verifyA).slice(0, 400));
