@@ -1,5 +1,15 @@
 # 会话日志(最新在上)
 
+## 2026-11-01 23:21 | model=dsh-lead-deepseek-v4.1 | task=T022 完成
+- 摘要: T022 runChecks 单快照 + git 收敛 + 根解析快路径:LOG/TASKS/manifest 读取 4/2/2→1/1/1;git 子进程 9→2–4 且 async 路径零同步 spawn(isGitRepoAsync);R2 单次 ls-files、R5/R6 共用一次 log-20、R10 复用 HEAD subject;resolveRelayRoots 普通仓库 fs 快路径(recall/get git 2→0);RELAY_TRACE_FILE 计数钩子 + smoke-perf(22 断言);13 套冒烟全绿。
+- 事实(v1): 改动 10 文件(+300/-74) | 验收: 通过 | verify: PASS 14·WARN 0·ERROR 0 | 分支: relay/T022 @6096407 base=e45cc9d | 耗时: 31s
+- worktree: branch=relay/T022; sha=60964079974269d36f3f74a4c2b7f8a5828352be; 已验收,未合并(是否合并由人工决定)
+- 负结果: 验收行写成 test:<路径>(详情) 会被验收门整段当路径,安检直接拒收;test: 路径后不能跟任何说明文字,细节只能进备注/断言行
+- 负结果: RELAY_TRACE_FILE 必须放在夹具目录之外:落在仓库根会成为未跟踪顶层条目,R2 直接报越界
+- 负结果: resolveRelayRoots 的 fs 快路径只对 root/.git 是目录(普通仓库)生效;linked worktree 的 .git 是文件,必须继续走 git 解析,否则丢双根语义
+- 负结果: R7 的详情天然随维护条目数变化,规模不变量只能断言「ID+判定结果」,不能整表逐字比较
+- 负结果: 双根模式下 runChecks 与 runTaskTreeChecks 各自 collectMeta 会把 manifest 读两次;必须把 meta 透传给两者
+
 ## 2026-11-01 14:56 | model=dsh-lead-deepseek-v4.1 | task=T020 完成
 - 摘要: T020 npm 分发面:移除 private,新增 bin(relay-mcp→src/index.mjs,入口自带 shebang)、files 白名单(src/templates/安装器/README/LICENSE)、engines.node>=18;npm pack 46 文件约129kB,协议状态与开发文档不进包;npm publish --dry-run --provenance 通过(发布动作仍需人类批准);新增 smoke-pack(28 断言);README/CONTRACT 同步。
 - 事实(v1): 改动 4 文件(+79/-2) | 验收: 通过 | verify: PASS 13·WARN 1·ERROR 0 | 分支: relay/T020 @efab4fc | 耗时: 30s
