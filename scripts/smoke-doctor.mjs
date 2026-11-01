@@ -16,6 +16,7 @@ const ok = (cond, label, extra = '') => {
 };
 
 const tmp = mkdtempSync(path.join(tmpdir(), 'relay-doctor-'));
+let fixtureWt = ''; // P3-30:异常时也要清理,不能把完整 checkout 遗留在系统 temp
 const cli = (tool, args = {}, env = {}) => spawnSync('node', [CLI, tool, '--root', tmp, '--json', JSON.stringify(args)], { encoding: 'utf8', env: { ...process.env, ...env } });
 const out = (r) => `${r.stdout || ''}${r.stderr || ''}`;
 const mfPath = path.join(tmp, '.relay', 'manifest.json');
@@ -84,6 +85,7 @@ try {
 
   console.log('\n== fixture 5:未登记 relay 任务树 ==');
   const wtPath = path.join(tmp, '..', `doctor-wt-${process.pid}`);
+  fixtureWt = wtPath;
   const add = spawnSync('git', ['-C', tmp, 'worktree', 'add', wtPath, '-b', 'relay/T999'], { encoding: 'utf8' });
   ok(add.status === 0, 'git worktree add 成功', (add.stderr || '').slice(0, 200));
   const d5 = cli('relay_doctor', {});
@@ -105,6 +107,11 @@ try {
   ok(/D6[^\n]*ERROR/.test(out(d7)) && /修复:/.test(out(d7)), 'D6 ERROR + 修复指令');
   rmSync(path.join(tmp, '.relay', 'worktrees.json'));
 } finally {
+  if (fixtureWt) {
+    spawnSync('git', ['-C', tmp, 'worktree', 'remove', '--force', fixtureWt], { encoding: 'utf8' });
+    spawnSync('git', ['-C', tmp, 'branch', '-D', 'relay/T999'], { encoding: 'utf8' });
+    rmSync(fixtureWt, { recursive: true, force: true });
+  }
   rmSync(tmp, { recursive: true, force: true });
 }
 

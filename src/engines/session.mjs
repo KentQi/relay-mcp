@@ -522,7 +522,11 @@ export const relaySessionStart = async (args = {}) => {
   // LOG 最近 3 条(标题 + 摘要)
   // T015:摘要有硬上限——单条超长摘要不得把简报撑爆;完整内容仍在 LOG.md,可取回。
   const SUMMARY_CAP = 200;
-  const clip = (s, n) => (String(s).length > n ? `${String(s).slice(0, n)}…[截断 ${String(s).length - n} 字,全文见 LOG.md]` : String(s));
+  // 按码点截断(Array.from),避免 slice 把代理对劈成半个高代理渲染成 U+FFFD。
+  const clip = (s, n) => {
+    const cps = Array.from(String(s));
+    return cps.length > n ? `${cps.slice(0, n).join('')}…[截断 ${cps.length - n} 字,全文见 LOG.md]` : String(s);
+  };
   const logBrief = () => {
     if (logText == null) return ['(LOG.md 缺失)'];
     const entries = parseLogEntries(logText);

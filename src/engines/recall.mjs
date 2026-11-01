@@ -193,7 +193,11 @@ export const relayGet = async (args = {}) => {
       const wt = field(e.block, 'worktree');
       if (wt) parts.push(`分支: ${wt}`);
       const body = e.block.filter((l) => /^- (摘要|负结果|留给下一个):/.test(String(l))).join('\n');
-      const clipped = body.length > MAX_ENTRY_CHARS ? `${body.slice(0, MAX_ENTRY_CHARS)}\n…[truncated: ${body.length - MAX_ENTRY_CHARS} chars;全文见 LOG.md]` : body;
+      // 码点安全截断(P3-23):body 可能含 emoji/多字节,slice 会劈开代理对。
+      const bodyCps = Array.from(body);
+      const clipped = bodyCps.length > MAX_ENTRY_CHARS
+        ? `${bodyCps.slice(0, MAX_ENTRY_CHARS).join('')}\n…[truncated: ${bodyCps.length - MAX_ENTRY_CHARS} chars;全文见 LOG.md]`
+        : body;
       if (clipped) parts.push('', clipped);
     } else {
       parts.push('日志: (无对应 LOG 条目)');
