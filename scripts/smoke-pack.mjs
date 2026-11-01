@@ -22,6 +22,9 @@ ok(pkg.bin && pkg.bin['relay-mcp'] === 'src/index.mjs', 'bin 指向 src/index.mj
 ok(Array.isArray(pkg.files) && pkg.files.length > 0, 'files 白名单存在');
 ok(!pkg.dependencies || Object.keys(pkg.dependencies).length === 0, '零运行时依赖');
 ok(pkg.engines && pkg.engines.node === '>=18', 'engines.node >= 18');
+// T025:provenance 发布前置——repository/bugs 缺一个,npm 页面就少一条可信来源链路。
+ok(pkg.repository && /github\.com[\/:]KentQi\/relay-mcp(?:\.git)?$/.test(String(pkg.repository.url || pkg.repository)), 'repository 指向 github.com/KentQi/relay-mcp', JSON.stringify(pkg.repository));
+ok(pkg.bugs && /\/issues$/.test(String(pkg.bugs.url || pkg.bugs)), 'bugs 指向仓库 issues', JSON.stringify(pkg.bugs));
 
 const indexText = readFileSync(path.join(RELAY, 'src', 'index.mjs'), 'utf8');
 ok(indexText.startsWith('#!/usr/bin/env node'), 'bin 入口带 shebang(可直接执行)');
