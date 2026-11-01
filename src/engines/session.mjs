@@ -17,7 +17,7 @@ import { join, resolve, sep } from 'node:path';
 import { execFile, exec } from 'node:child_process';
 import { promisify } from 'node:util';
 import { runChecks, formatChecks, runTaskTreeChecks, TASK_LINE_RE, LOG_TITLE_RE, parseLogEntries } from './verify.mjs';
-import { readManifestConfig, DEFAULT_COMMIT_TEMPLATE } from '../config.mjs';
+import { readManifestConfig, DEFAULT_COMMIT_TEMPLATE, DEFAULT_CONTEXT_BUDGET } from '../config.mjs';
 import { deriveFacts, formatFactLine } from './facts.mjs';
 import {
   cleanupWorktrees, ensureTaskWorktree, ensureWorktreeGitignore, findManagedWorktreeEvidence, formatUnmergedBranchesNote,
@@ -426,6 +426,8 @@ export const relaySessionStart = async (args = {}) => {
   const roots = await resolveRelayRoots(args.root || process.cwd());
   const root = roots.controlRoot;
   const executionRoot = roots.executionRoot;
+  // 简报预算(T015):只读配置,用于「字段上限 + 溢出显式告警」;绝不裁剪段落。
+  const briefCfg = await readManifestConfig(root);
   const startText = await readText(join(root, 'START.md'));
   if (startText == null) {
     return {
@@ -513,6 +515,9 @@ export const relaySessionStart = async (args = {}) => {
   const firstTodo = todos[0] || null;
 
   // LOG 最近 3 条(标题 + 摘要)
+  // T015:摘要有硬上限——单条超长摘要不得把简报撑爆;完整内容仍在 LOG.md,可取回。
+  const SUMMARY_CAP = 200;
+  const clip = (s, n) => (String(s).length > n ? `${String(s).slice(0, n)}…[截断 ${String(s).length - n} 字,全文见 LOG.md]` : String(s));
   const logBrief = () => {
     if (logText == null) return ['(LOG.md 缺失)'];
     const entries = parseLogEntries(logText);
@@ -538,7 +543,7 @@ export const relaySessionStart = async (args = {}) => {
         const hf = lines[j].match(/^- 留给下一个:\s*(.*)$/);
         if (hf && !handoff) handoff = hf[1];
       }
-      out.push(`- ${m[1]} | ${m[2]} | ${m[3]}${summary ? ` — ${summary}` : ''}`);
+      out.push(`- ${m[1]} | ${m[2]} | ${m[3]}${summary ? ` — ${clip(summary, SUMMARY_CAP)}` : ''}`);
       if (neg) out.push(`  ⚠ 负结果: ${neg.slice(0, 120)}`);
       if (handoff) out.push(`  → 留给下一个: ${handoff.slice(0, 120)}`);
     }
@@ -618,6 +623,8 @@ export const relaySessionStart = async (args = {}) => {
     `生成于 ${stamp()}`,
     `- controlRoot: ${root}`,
     `- executionRoot: ${executionRoot}`,
+    // 生效配置回显(T015):manifest 未知字段静默忽略是已文档化的漂移陷阱,一行回显让配置错误当场可见。
+    `- 生效配置: worktree=${briefCfg ? '见 manifest' : '?'} facts=${briefCfg.facts.enabled ? `on(since=${briefCfg.facts.since || '未设'},strict=${briefCfg.facts.strict})` : 'off'} contextBudget=${briefCfg.contextBudget}`,
     ...lifecycleNotes,
     '',
     '## 目标',
@@ -656,6 +663,12 @@ export const relaySessionStart = async (args = {}) => {
     '',
     '入场即核对了 git 与 verify;改代码前先认领,出场前必过绿闸。',
   ];
+  // T015:超预算只告警、不裁剪(裁剪=静默降级,违反公理);上界由字段上限保证。
+  const briefText = out.join('\n');
+  if (briefText.length > briefCfg.contextBudget) {
+    out.push('', `> ⚠ 简报 ${briefText.length} 字符超出预算 ${briefCfg.contextBudget}(manifest.contextBudget):`
+      + '已按字段上限截断日志摘要;完整内容请读 LOG.md / TASKS.md,不要据此省略交接。');
+  }
   return { content: [{ type: 'text', text: out.join('\n') }], isError: false };
 };
 

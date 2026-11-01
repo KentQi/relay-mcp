@@ -227,3 +227,11 @@ export const startServer = async ({ onInit, onMethod }) => {
   `relay_init` / `relay_onboard` 默认写入 `enabled:true` 与启用时刻 `since`;旧项目缺席即旧行为(不写事实行、R10 跳过),`relay_sync` 输出升级提示但不改写 manifest(非破坏)。
 - **为何只比文件数**:行级 ±x/-y 会被 CRLF、重命名、合并与跨多提交污染,成为恒过或恒错的假裁判;文件数在同一 `--no-renames` 口径下稳定可复现。
 - **冒烟**:`scripts/smoke-facts.mjs` 覆盖写入/存在性/数字 WARN/strict ERROR/升级 SKIP 五类断言,已接入 `npm test` 链。
+## 2026-11-01 T015 补充契约(简报有界化 / 预算告警)
+
+- **字段上限**:入场简报中每条 LOG 摘要最多 200 字符(负结果、留给下一个仍为 120),超限以 `…[截断 N 字,全文见 LOG.md]` 标注;**只截断展示,不改 LOG 本体**。
+- **结构上界**:简报由固定段落 + 字段上限构成硬上界(3 条 LOG × (200+120+120) + 3 条决策 + 前 3 待办 + git 5 条 + verify 表),因此不存在"越写越大"的无界增长;这是不引入级联裁剪状态机的前提。
+- **预算告警**:渲染完成后统计字符数,超过 `manifest.contextBudget`(默认 6000)时在简报尾部追加 `> ⚠ 简报 N 字符超出预算 M…` 并提示读 LOG.md/TASKS.md;**不丢弃任何段落、不静默降级**(委员会一致否决 claude-mem 式"按最便宜先丢"的级联裁剪)。
+- **生效配置回显**:简报头部新增一行 `- 生效配置: facts=… contextBudget=…`,让 manifest 里被静默忽略的拼错字段当场可见。
+- **配置**:`"contextBudget": 6000`;非有限数或非正数回退默认(不改变既有行为,只影响告警阈值)。
+- **冒烟**:`scripts/smoke-brief.mjs` 覆盖截断/总长/告警/不裁剪段落四类断言,已接入 `npm test` 链。
