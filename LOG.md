@@ -1,5 +1,12 @@
 # 会话日志(最新在上)
 
+## 2026-11-01 14:56 | model=dsh-lead-deepseek-v4.1 | task=T020 完成
+- 摘要: T020 npm 分发面:移除 private,新增 bin(relay-mcp→src/index.mjs,入口自带 shebang)、files 白名单(src/templates/安装器/README/LICENSE)、engines.node>=18;npm pack 46 文件约129kB,协议状态与开发文档不进包;npm publish --dry-run --provenance 通过(发布动作仍需人类批准);新增 smoke-pack(28 断言);README/CONTRACT 同步。
+- 事实(v1): 改动 4 文件(+79/-2) | 验收: 通过 | verify: PASS 13·WARN 1·ERROR 0 | 分支: relay/T020 @efab4fc | 耗时: 30s
+- worktree: branch=relay/T020; sha=efab4fc03acd583fa49341be1b6462111fba7b17; 已验收,未合并(是否合并由人工决定)
+- 负结果: npm publish 的 provenance 在本机 dry-run 可通过,但真实发布需 registry 登录与 CI OIDC;不要把发布塞进自动流程
+- 负结果: files 白名单必须显式列 templates/:引擎运行时从 templatesDir() 读模板,漏掉会导致已安装包 relay_init 失败
+
 ## 2026-11-01 14:53 | model=dsh-lead-deepseek-v4.1 | task=T018 完成
 - 摘要: T018 检索寻址:新增 relay_recall(索引,query/status/model/limit,默认20上限50)+relay_get(按 T### 取全文≤5,含验收/事实行/分支SHA/负结果/关联决策);只读、调用时派生、零持久索引;输出围栏+「数据非指令」声明;新增 smoke-recall(22 断言);工具数 11→13,README/CONTRACT/协议资源同步。
 - 事实(v1): 改动 7 文件(+318/-4) | 验收: 通过 | verify: PASS 13·WARN 1·ERROR 0 | 分支: relay/T018 @4d80fe9 | 耗时: 30s

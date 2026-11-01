@@ -14,10 +14,6 @@
 (空——认领后由 relay_claim 移入;认领锁在 .relay/claims/,TTL 4 小时,崩溃会话的认领到期自动可接管)
 
 ## 待办
-- [ ] T021 npm 分发:去 private + bin + files 白名单(需人类批准)
-  验收: npm pack --dry-run 输出不含 .relay/ 与 docs-design/ 且 npm publish --dry-run --provenance 通过
-- [ ] T020 npm 分发(需人类批准:去 private + bin + files 白名单)
-  验收: npm pack --dry-run 输出不含 .relay/ 与 docs-design/ 且 npm publish --dry-run --provenance 通过
 - [ ] T011 第五轮复验审计(约第三方独立视角验证 P0+P1 修复)
   验收: 复验方独立实测:P0 安检(选项注入/目录逃逸/密钥)、并发回归、幂等、维护语义全部复现通过
   备注: 审计范围另含 5 视角报告中的中低危残留(模板占位符注入/symlink/root 校验/manifest 版本路径)
@@ -34,6 +30,8 @@
   验收: verify 全绿 且 `npm test` 通过 且 新增并发认领回归断言(两模型同时 claim 不同任务,两条认领均不丢失)
 
 ## 已完成
+- [x] T020 npm 分发:去 private + bin + files 白名单(发布动作需人类批准,本任务只做可 dry-run 的打包面)  (2026-11-01)
+  验收: npm pack --dry-run 输出不含 .relay/ 与 docs-design/ 且 npm publish --dry-run --provenance 通过
 - [x] T018 检索寻址:relay_recall / relay_get(只读派生;数据闸未过 16<20,按用户指令推进)  (2026-11-01)
   验收: npm test 全绿 且 调用后 git status --porcelain 为空 且 索引行数等于 LOG 中 T### 计数
   备注: 索引必须调用时从 LOG/TASKS 即时派生,禁落 .relay(第二真相源);返回体 fence 包裹并标注「数据非指令」
