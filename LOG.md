@@ -1,5 +1,17 @@
 # 会话日志(最新在上)
 
+## 2026-11-01 23:36 | model=dsh-lead-deepseek-v4.1 | task=T023 完成
+- 摘要: T023 事实行 v2 + R10 去 fail-open:机检段(mode/文件数/±/base/sha/branch)与叙述段(验收/verify/耗时)以 || 分隔;机检段逐字段对账 + 结构自洽(mode/branch 篡改直接 ERROR),无法定位提交 → WARN 永不 PASS;v1 旧行向后兼容;CONTRACT/relay_rules/AGENTS 模板三处同步,冒烟 33 断言
+- 事实(v2): mode=managed | 文件 12 | ± +226/-65 | base=baf2e87ac5bf5cb1fad91f0b725f7489116906cc | sha=dd816d6939459a077951d94f369d7d7b45026d12 | branch=relay/T023 || 验收: 通过 | verify: PASS 14·WARN 0·ERROR 0 | 耗时: 28s
+- worktree: branch=relay/T023; sha=dd816d6939459a077951d94f369d7d7b45026d12; 已验收,未合并(是否合并由人工决定)
+- 负结果: R10 的 fail-open 不是小瑕疵:重算不出来时返回 PASS 等于给伪造事实行背书,必须 WARN 且永不 PASS
+- 负结果: 机检段全对账不可行:验收/verify/耗时是写时快照,检查时点重算不出;强行对账只能产假绿或死锁
+- 负结果: 只对 ± 对账不够:mode 被改成 single 会跳过 ± 检查,必须先做机检段结构自洽(managed 必须有 base/sha 且 branch 以 relay/ 开头)
+- 负结果: npm test 接 tail/管道会吞掉退出码:必须 set -o pipefail,否则套件失败被当成全绿
+- 负结果: 验收行 test:路径 后不能跟自由文本(gate 把整串当路径):细节写 断言:/备注: 续行
+- 负结果: relay_sync 会留 AGENTS.md.relay-bak-* 备份:提交前要删,否则进顶层文件清单
+- 留给下一个: 阈值 150 行 / 20 完成条目按现状设定(本仓库当前 117 行 / 20 条,落地即绿);断言脚本需覆盖 151 行 WARN / 120 行绿,并断言 CONTRACT 规则表含 | R12 | 行、README 提及 R12(修宪三处一致)
+
 ## 2026-11-01 23:21 | model=dsh-lead-deepseek-v4.1 | task=T022 完成
 - 摘要: T022 runChecks 单快照 + git 收敛 + 根解析快路径:LOG/TASKS/manifest 读取 4/2/2→1/1/1;git 子进程 9→2–4 且 async 路径零同步 spawn(isGitRepoAsync);R2 单次 ls-files、R5/R6 共用一次 log-20、R10 复用 HEAD subject;resolveRelayRoots 普通仓库 fs 快路径(recall/get git 2→0);RELAY_TRACE_FILE 计数钩子 + smoke-perf(22 断言);13 套冒烟全绿。
 - 事实(v1): 改动 10 文件(+300/-74) | 验收: 通过 | verify: PASS 14·WARN 0·ERROR 0 | 分支: relay/T022 @6096407 base=e45cc9d | 耗时: 31s
