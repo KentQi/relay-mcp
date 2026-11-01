@@ -1,5 +1,14 @@
 # 会话日志(最新在上)
 
+## 2026-11-01 14:06 | model=dsh-lead-deepseek-v4.1 | task=T013 完成
+- 摘要: T013 事实底账(R10):新增 facts.mjs 确定性派生「事实(v1)」行(文件数/±/验收/verify 汇总/分支 sha/耗时);session_end 写入、verify R10 对账(存在性 ERROR、数字 WARN、strict ERROR、since 豁免);init/onboard 默认开启;新增 smoke-facts(18 断言);模板/README/CONTRACT 同步。
+- worktree: branch=relay/T013; sha=4b3953d1379cd43b6e23953c54327611b98481f1; 已验收,未合并(是否合并由人工决定)
+- 负结果: R10 存在性检查若扫全部历史会误伤旧条目;必须用 facts.since(YYYY-MM-DD HH:mm,字典序即时间序)做升级豁免,且 since 要晚于最后一条无事实行条目的时间
+- 负结果: 事实行不能包含控制面 SHA(自指无解:LOG 本身在控制面提交里,提交 SHA 依赖 LOG 内容)
+- 负结果: 单根出场时 LOG 写入早于 git commit,拿不到本次 SHA;事实行只能标 @未提交,数字对账改用 HEAD 完成提交反查(消息含「T### 完成」)
+- 负结果: 模板示例 LOG 条目若写 task=T### 完成,新项目首日就会缺事实行触发 R10 误报;示例条目必须是 task=无
+- 留给下一个: 委员会否决级联裁剪;上界由字段上限保证,超限只告警;contextBudget 默认 6000 已在 config.mjs
+
 ## 2026-11-01 14:00 | model=dsh-lead-deepseek-v4.1 | task=T014 完成
 - 摘要: T014 内容级密钥闸(R11):util 新增窄规则 scanSecrets(仅前4字符预览);verify 新增 R11 扫 TASKS/LOG;session_end 在任何写盘前扫描本次输入并阻断,写盘前二次扫描;新增 smoke-content-guard(13 断言);模板/README/CONTRACT 同步,R11 进 relay_rules。
 - worktree: branch=relay/T014; sha=0b485c7d716fbd080c9a8f6c7c14e2eef00362a1; 已验收,未合并(是否合并由人工决定)
