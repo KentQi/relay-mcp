@@ -5,6 +5,13 @@
   "description": "relay — 多模型接力开发 MCP:仓库即交接棒",
   "author": "kent <kirroyu@126.com>",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/KentQi/relay-mcp.git"
+  },
+  "bugs": {
+    "url": "https://github.com/KentQi/relay-mcp/issues"
+  },
   "bin": {
     "relay-mcp": "src/index.mjs"
   },
