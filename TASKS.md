@@ -14,6 +14,17 @@
 (空——认领后由 relay_claim 移入;认领锁在 .relay/claims/,TTL 4 小时,崩溃会话的认领到期自动可接管)
 
 ## 待办
+- [ ] T022 异步 git + 单轮 verify 单一快照(P3-25/26/27):async 路径的 execFileSync 改 promisify(execFile);runChecks 入口读/解析一次 LOG+TASKS,R7/R9/R10/R11 共用同一快照
+  验收: npm test 全绿 且 grep -rn "execFileSync" src/engines/facts.mjs src/engines/verify.mjs 为空 且 新增 smoke 断言单轮 relay_verify 对 LOG.md 与 TASKS.md 各只读 1 次
+  备注: 只换读取结构不改判定语义;sync 版 isGitRepo 保留给 bootstrap 同步场景;价值不在省毫秒(ROI 已判定微优化无收益),而在同一快照——否则 R7 与 R10 可能读到不同版本的 LOG
+- [ ] T023 R10 逐字段对账(P3-31):事实行拆「机检段/叙述段」,文件数、±行数、branch、sha、verify 计数全部与 git 再派生比对,不符 ERROR
+  验收: npm test 全绿 且 新增 smoke:分别篡改事实行的 branch、sha、±行数、验收结果 → relay_verify 退出非 0;未篡改全绿
+  备注: 只对账确定性可派生字段;「负结果是否有价值」这类叙述显式不参与对账(协议守护者:声明为事实就必须可对账,否则降格为叙述)
+- [ ] T024 LOG 边界规则(P3-32 / T001 最小触发):新增 R12,LOG 活跃区 >100 行或完成条目 >30 → WARN(facts.strict 同款 strict 可升 ERROR);归档动作留人工
+  验收: npm test 全绿 且 新增 smoke:101 行 LOG fixture → relay_verify 输出含 R12 WARN;剪回 80 行 → 全绿
+  备注: 不做归档引擎;完整归档的触发条件 = R12 WARN 连续两次或完成条目 >30
+- [ ] T025 补 package.json 的 repository / bugs 字段(provenance 发布前置)
+  验收: node -e "const p=require('./package.json'); if(!p.repository||!p.bugs) process.exit(1)" 退出 0
 - [ ] T021 检索寻址(T018)收益复核:数据闸未过(LOG 16 < 20),按实测决定去留
   验收: test:scripts/smoke-t021-decision.mjs
   备注: 完成动作 = 在 DECISIONS.md 追加一条标题含 T018 的决策条目(理由 + 「保留」/「已回退」 + 状态),断言脚本校验该条目存在且结论明确(红灯协议:脚本当前故意失败);调用次数与「取回失败」无法机检(recall 按设计零持久化、无遥测),只作为决策理由的人工依据,不冒充可执行验收;回退方式 = 移除 relay_recall/relay_get 两个工具注册,协议面与事实底账不受影响
