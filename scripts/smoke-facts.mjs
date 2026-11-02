@@ -83,6 +83,11 @@ try {
   const pNarr = parseFactLine('- 事实(v2): mode=single | 文件 0 | ± +0/-0 | base=- | sha=- | branch=main || 验收: 通过 || 备注: x | verify: PASS 2·WARN 1·ERROR 0 | 耗时: 3s');
   ok(pNarr && pNarr.branch === 'main' && pNarr.verifyPass === 2 && pNarr.verifyWarn === 1, "叙述段含 '||' 时保留其后内容", JSON.stringify(pNarr));
 
+  console.log('\n== single 模式 branch 只校验存在性(P1-3) ==');
+  writeFileSync(logPath, log.replace(/branch=[^|]+/, 'branch=zzz/zzz'));
+  const vBranch = cli('relay_verify', { full: true });
+  ok(/R10\s*\|\s*WARN/.test(out(vBranch)) && /不存在/.test(out(vBranch)), 'single 分支名伪造(zzz/zzz)→ R10 WARN(不再 PASS)', out(vBranch).slice(0, 400));
+
   console.log('\n== single 模式 ± 是写时近似,不参与对账(P1-4 契约化) ==');
   writeFileSync(logPath, log.replace(/± \+\d+\/-\d+/, '± +999/-999'));
   const v6 = cli('relay_verify', { full: true });

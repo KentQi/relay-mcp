@@ -227,7 +227,7 @@ export const startServer = async ({ onInit, onMethod }) => {
   - 10.2 行格式不可解析 → **ERROR**(说明被手改或引擎回退);
   - 10.3 v2 机检段逐字段对账(文件数;managed 另对 ±),不一致 → **ERROR**;叙述段不参与对账;
   - 10.3b 机检段结构自洽(不依赖 git):managed 必须有 base/sha 且 branch 以 `relay/` 开头;single 必须无 base/sha——篡改 mode/branch 直接 **ERROR**;
-  - 10.3c **branch 归属**:`git branch --contains <sha>` 必须包含声明分支——分支存在但不含 → **ERROR**;分支已删除/不可读 → **WARN**(不可验证,绝不 PASS);single 模式不校验(出场后分支可能已切换);
+  - 10.3c **branch 归属**:managed 用 `git branch --contains <sha>` 校验——分支存在但不含 → **ERROR**;分支已删除/不可读 → **WARN**(不可验证,绝不 PASS)。single 代码未提交,只校验分支存在性(伪造分支名 → **WARN**),不校验 sha 归属;
   - 10.4 **v1 旧格式只做结构校验 → WARN**:v1 行自带的 base/sha 由被校验方提供,用它算出的「一致」是自证;数字权威仅 v2 机检段,绝不 PASS;
   - 10.5 **无法定位提交 → WARN,永不 PASS**(fail-open 修复:未验证的确信比空白更危险);
   - 10.6 `manifest.facts.enabled` 未开 / `since` 未设 / 条目早于 `since` → **SKIP**(升级兼容)。
@@ -310,7 +310,7 @@ export const startServer = async ({ onInit, onMethod }) => {
 - 事实行升 **v2**:机检段(可复算)与叙述段(写时快照)以 ` || ` 分隔,详见 T013 修订段;分隔符按「空格||空格」解析(分支名可含 `|`,叙述段可含 `||`)。
 - R10 不再有 fail-open:无法定位提交(伪造 sha、提交被重写、历史被裁剪)→ **WARN**,绝不 PASS。
 - 机检段篡改 → **ERROR**(默认,不再依赖 `facts.strict`);叙述段篡改**不误红**。
-- **branch 归属**(2026-11-02 审计补):声称的分支必须真的包含声明的 sha;分支存在但不含 → ERROR,分支已删除 → WARN。
+- **branch 归属**(2026-11-02 审计补):managed 下声称的分支必须真的包含声明的 sha(存在但不含 → ERROR,已删除 → WARN);single 下代码未提交,只校验分支存在性(伪造分支名 → WARN)。
 - **向后兼容**:v1 旧行继续可解析,但**只做结构校验并 WARN**(数字权威仅 v2)——v1 行自带的 base/sha 由被校验方提供,不能用于自证对账。
 ## 2026-11-01 T024 补充契约(LOG 边界 R12)
 

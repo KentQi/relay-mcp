@@ -25,7 +25,7 @@
 - **HIGH**:v1 事实行不再参与数字对账(行自带的 base/sha 是自证),只做结构校验并 WARN;数字权威仅 v2
 - **MEDIUM**:R10 增加 branch 归属校验(分支存在但不含声明 sha → ERROR,分支已删除 → WARN);single 模式 ± 明确为写时近似、不构成机检字段;三处一致断言升级为内容比对并清掉 README 英文半边与 `src/**` 的 `R1–R11` 残留;同步 `isGitRepo()` 删除、全引擎改 async;R12 归档指针必须指向真实存在的 `docs/archive/*.md`(否则按全文计算),两轴共用同一活跃区
 - **LOW**:v2 分隔符改按「空格||空格」解析(分支名含 `|`、叙述段含 `||` 均不再截断);recall 同时剥离 v1/v2 事实行前缀;任务树检查不再取提交历史(省一次 git);R12 修复文案删除「拆小任务粒度」
-- 回归规模:`npm test` 14 套 / 594 断言;新增 `smoke-session-perf.mjs`(红灯,T026)登记 session_start 读放大残留
+- 回归规模:`npm test` 14 套 / 595 断言;新增 `smoke-session-perf.mjs`(红灯,T026)登记 session_start 读放大残留
 
 ## [1.4.1] - 2026-11-01
 

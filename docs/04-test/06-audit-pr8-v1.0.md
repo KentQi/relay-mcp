@@ -307,7 +307,7 @@ ok(/^\| R12 \|/m.test(tpl),           'AGENTS 模板规则表含 R12 | 行');
 |---|---|---|
 | P0-1 `__COMMIT__` 哨兵伪造 | `collectGit` 改用 NUL 记录前缀(`%x00%H%x09%s`):文件名不可能含 NUL,提交头只可能出现在 chunk 首行 | `smoke-review-regressions` F 段(白名单修宪允许该文件后 R5 仍 WARN,详情含 src 改动) |
 | P0-2 v1 自选 range | v1 分支不再调用重算:只做结构校验 → WARN,数字权威仅 v2 | `smoke-facts` v1 用例(数字恰好对上也只 WARN、绝不 PASS) |
-| P1-3 branch 未比对 | `git branch --contains <sha>`:分支存在但不含 → ERROR,已删除/不可读 → WARN | `smoke-facts` 三分支用例(正确/不存在/存在但不含) |
+| P1-3 branch 未比对 | managed:`git branch --contains <sha>`(存在但不含 → ERROR,已删除/不可读 → WARN);single:代码未提交,只校验分支存在性(伪造分支名 → WARN) | `smoke-facts` 三分支用例 + single 分支伪造用例 |
 | P1-4 single ± 未对账 | 契约与实现统一:文件数恒对账,± 仅 managed 可复算(single 的 ± 是写时近似) | 规则表 + CONTRACT T013 段措辞;`smoke-facts` 保持 managed ± 篡改 ERROR |
 | P1-5 三处一致只查行存在 | 断言升级为内容比对(150/20/warn/`logBoundary.strict`);README 中英文两半 R1–R12、`src/**` 无 R1–R11 残留纳入断言 | `smoke-r12-boundary` 三处内容一致 + README/`src` 静态断言 |
 | P1-6 会话层同步探测 | 删除同步 `isGitRepo()`;session/claim/doctor/bootstrap/restructure 全改 `isGitRepoAsync`;静态检查覆盖整棵 `src/`(15 文件) | `smoke-perf` 静态断言;`smoke-session-perf`(红灯,T026)验证 session_start sync=0 |
@@ -317,6 +317,6 @@ ok(/^\| R12 \|/m.test(tpl),           'AGENTS 模板规则表含 R12 | 行');
 | P2-11 任务树 git 进程 | `runTaskTreeChecks` 只取 `ls-files`(不取提交历史) | `smoke-perf` managed 双根 git=2 ≤ 5 |
 | P2-12 R12 修复文案 | 删除「拆小任务粒度」(与阈值方向相反) | 文案断言(`/归档/`,不含错误指引) |
 
-**复测**:`npm test` 14 套 / 594 断言全绿;`relay_verify --full` = PASS 10 · WARN 1(R12,LOG 159 行 > 150)· ERROR 0;CI(node 22/24/26)全绿。
+**复测**:`npm test` 14 套 / 595 断言全绿;`relay_verify --full` = PASS 10 · WARN 1(R12,LOG 159 行 > 150)· ERROR 0;CI(node 22/24/26)全绿。
 
 **残留(已登记 T026)**:`session_start` 仍有 manifest 读 6 次 / git 7 次的读放大(同步 spawn 已清零);修复需把 manifest 配置沿 session_start 调用链单轮传递,不引入跨调用缓存。

@@ -460,8 +460,9 @@ const checkR10 = async (root, cfg, snap) => {
     return bad('R10', 'WARN', `事实行存在(声明 ${parsed.files} 文件),但无法定位对应提交,数字对账无法完成`,
       '确认该条目引用的 base/sha 仍在仓库历史中;若是旧版本引擎写入或历史被重写,把 manifest.facts.since 前移到该条目之后豁免');
   }
-  // P1-3(审计):branch 必须真的与 git 对得上——声称的分支不存在 → WARN(不可验证,可能已合并删除);
-  // 分支存在但不包含声明的 sha → ERROR(篡改/张冠李戴)。single 模式不校验:出场后分支可能已切换。
+  // P1-3(审计):branch 必须真的与 git 对得上。
+  // managed:声称的分支必须包含声明的 sha(存在但不含 → ERROR;已删除/不可读 → WARN)。
+  // single:代码尚未提交,无法校验 sha 归属;但分支名至少必须真实存在(zzz/zzz、relay/T999 这类伪造 → WARN)。
   if (parsed.mode === 'managed') {
     const bc = await branchContainsSha(root, parsed.sha, parsed.branch);
     if (bc.state === 'not-contains') {
@@ -471,6 +472,12 @@ const checkR10 = async (root, cfg, snap) => {
     if (bc.state === 'missing' || bc.state === 'unverifiable') {
       return bad('R10', 'WARN', `事实行 branch=${parsed.branch} 无法验证(${bc.state === 'missing' ? '分支不存在,可能已合并删除' : bc.detail}),数字对账无法完成`,
         '若分支已按人工流程合并删除,把 manifest.facts.since 前移到该条目之后豁免;若分支仍在,说明事实行被篡改,删除该行后重跑 relay_session_end 重写');
+    }
+  } else if (parsed.branch && parsed.branch !== '无 git' && parsed.branch !== '未知' && (!snap || !snap.git || snap.git.isRepo)) {
+    const exists = await gitRun(root, 'rev-parse', '--verify', '--quiet', `refs/heads/${parsed.branch}`);
+    if (!(exists.ok && exists.stdout.trim())) {
+      return bad('R10', 'WARN', `事实行 branch=${parsed.branch} 在仓库中不存在(单根模式只校验分支存在性,不校验 sha 归属)`,
+        '若该分支已按人工流程删除,把 manifest.facts.since 前移到该条目之后豁免;否则事实行被篡改,删除该行后重跑 relay_session_end 重写');
     }
   }
   // 机检段逐字段对账(叙述段=验收/verify/耗时,写时快照不可重算,刻意不校验;
