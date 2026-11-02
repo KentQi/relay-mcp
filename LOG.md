@@ -1,5 +1,11 @@
 # 会话日志(最新在上)
 
+## 2026-11-02 11:47 | model=dsh-lead-deepseek-v4.1 | task=无
+- 摘要: PR #8 审计修复补充(维护):single 模式补 branch 存在性校验(P1-3 的 zzz/zzz、relay/T999 伪造现在报 WARN 而非 PASS);锁定 single ± 不参与对账的契约(P1-4);回归 smoke-facts 42 断言,npm test 14 套 595 断言全绿;审计复现脚本 bp.txt 已从 PASS 变为 WARN
+- 事实(v2): mode=single | 文件 0 | ± +0/-0 | base=- | sha=- | branch=main || 验收: 通过 | verify: PASS 9·WARN 2·ERROR 0 | 耗时: 26s
+- 负结果: single 模式不能校验 sha 归属(代码未提交),但分支名存在性可以且必须校验——「无法完全验证」不等于「不验证」
+- 负结果: 审计脚本的复现夹具本身可能依赖旧行为(如先 claim 改了 TASKS 导致 R5 基线就是 PASS);复验前先确认基线,否则「未复现」可能只是夹具失效
+
 ## 2026-11-02 11:35 | model=dsh-lead-deepseek-v4.1 | task=无
 - 摘要: PR #8 审计修复(维护会话):2 HIGH + 5 MEDIUM + 5 LOW 全修——__COMMIT__ 文本哨兵改 NUL 前缀(R5 不再可伪造)、v1 事实行降为结构校验 WARN(不自证 range)、R10 增加 branch 归属校验、single ± 契约化、三处一致断言升级为内容比对、删除同步 isGitRepo(全引擎 async,静态扫描整棵 src)、R12 归档指针必须指向真实文件、v2 分隔符按 ' || ' 解析、recall 剥离 v1 前缀、任务树省一次 git;新增/扩展回归后 npm test 14 套 593 断言全绿,verify full PASS 10 WARN 1(R12)ERROR 0
 - 事实(v2): mode=single | 文件 0 | ± +0/-0 | base=- | sha=- | branch=main || 验收: 通过 | verify: PASS 10·WARN 1·ERROR 0 | 耗时: 27s
