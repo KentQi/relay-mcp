@@ -476,7 +476,7 @@ const dshTarget = (opts, name, nodeCmd) => {
   }
   if (added.status !== 0) die(`dsh plugin add 失败；可手动执行: dsh plugin --profile ${profile} add "${bundleDir}"`);
   log(`✓ 已注册到 DSH profile: ${profile}`);
-  log(`  重启 DSH 后新会话可用 mcp__${name}__* 工具（共 10 个 relay_* 工具）。`);
+  log(`  重启 DSH 后新会话可用 mcp__${name}__* 工具。`);
   log(`  验证: 在 DSH 中调用 mcp__${name}__relay_rules {}`);
 };
 

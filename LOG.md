@@ -1,5 +1,12 @@
 # 会话日志(最新在上)
 
+## 2026-11-02 22:31 | model=dsh-lead-deepseek-v4.1 | task=无
+- 摘要: 维护:本机全 harness 的 relay-mcp 更新到当前检出(v1.5.0,14 工具)——Claude Code(移除旧 relay 条目→relay-mcp)、Gemini CLI、Claude Desktop、Claude-3p、Codex(TOML 路径修正)、VS Code(user profile mcp.json)、DSH desktop+web 双 profile、mavis/minimax(relay 条目路径+版本)、copilot/kimi-code(新增 relay-mcp);顺带修复 scripts/install-mcp.mjs 的 DSH 提示语写死「共 10 个 relay_* 工具」(实际 14,已删除写死计数)。配置备份在 ~/.relay-mcp-install-backup-20261102-222357。
+- 事实(v2): mode=single | 文件 1 | ± +1/-1 | base=- | sha=- | branch=main || 验收: 通过 | verify: PASS 11·WARN 0·ERROR 0 | 耗时: 34s
+- 负结果: Gemini CLI 对未信任目录禁用全部 MCP(含 user 级):需在项目内执行 /trust 后才生效,不是配置问题
+- 负结果: WorkBuddy(~/.workbuddy)未找到本地 mcpServers 配置文件,未注册 relay-mcp;旧 relay 痕迹只在 traces 历史里
+- 负结果: Codex CLI 未安装(只有 ~/.codex/config.toml),无法用 codex mcp list 复核,已直接改配置并备份
+
 ## 2026-11-02 22:06 | model=dsh-lead-deepseek-v4.1 | task=T027 完成
 - 摘要: T027 发布 v1.5.0(仅 GitHub,不做 npm):package.json 1.4.1→1.5.0、CHANGELOG 的 Unreleased 定版为 1.5.0(2026-11-02)、DECISIONS 记录「不做 npm 只更新 GitHub」决策与后续 npm 复评条件;T027 认领验收已按用户决策去掉 npm publish。出场通过后创建 tag v1.5.0 指向本完成提交并推送,再创建 GitHub Release(说明引用 docs/04-test/05 与 07);npm registry 保持 1.2.0 不变。
 - 事实(v2): mode=single | 文件 3 | ± +9/-2 | base=- | sha=- | branch=main || 验收: 通过 | verify: PASS 11·WARN 0·ERROR 0 | 耗时: 36s
