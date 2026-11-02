@@ -34,7 +34,15 @@
 - **T026 会话启动读放大收敛**:`relay_session_start` 的 manifest 读 6→1、LOG 2→1、TASKS 3→1(worktree 配置/自动清理/简报回显/verify 快检共用同一份内存快照);git 子进程 7 来自自动清理与未合并分支探测,非读放大;`smoke-session-perf.mjs` 由红灯转绿并接入 `npm test`
 - **LOG 归档(人工执行一次)**:R12 连续 WARN 触发 T001——20 条历史条目搬入 `docs/archive/LOG-2026-09-11.md` 并在 LOG.md 留指针,R12 转 PASS;自动化归档引擎仍推迟(控制面白名单/PROTOCOL_FILES/R11 扫描面需同步扩展)
 - **R10 单根定位**:单根事实行没有 sha 时按「T### 完成」反查完成提交,完成之后的普通维护提交(归档/changelog)不再让 R10 失去定位能力;回归 `smoke-facts`
-- 回归规模:`npm test` 14 套 / 607 断言;新增 `smoke-session-perf.mjs`(红灯,T026)登记 session_start 读放大残留
+### Fixed(第五轮独立复验审计,详见 `docs/04-test/07-audit-round5-v1.5.0.md`)
+- **P0-1 写盘穿越**:`relay_init`/`relay_onboard` 写任何文件前检查 root 与目标目录组件不是符号链接(`assertSafeWriteLayout`);`relay_archive_log` 写归档前过协议布局闸 + 父目录断言——`docs -> 仓库外` 不再能把骨架/归档写到仓库之外
+- **P0-2 项目名注入**:项目名先净化(控制字符 → 空格、丢弃 `{}`、80 字符上限)再过密钥闸;渲染顺序改为 `{{PROJECT_NAME}}` 最后(不再二阶展开 `{{TODAY}}`/`__RELAY_HOME__`),渲染后内容再过密钥闸——伪造任务行/密钥不再随首个提交进入 git 历史
+- **P0-3/P1-1 归档方向与 R7 防线**:LOG「最新在上」→ 保留头部 `keep` 条、归档其余(此前搬反:live 只剩最旧);边界覆盖最新完成条目 → 拒绝执行;归档不再能把发散证据搬进归档来洗绿 R7
+- **P1-2 出场半写**:LOG 条目构造 + 密钥闸 + TASKS/LOG 双文件 CAS 预检全部前移到任何写盘之前;失败时两文件均未变,不再出现「TASKS 已写、LOG 被拦」
+- **P2 裁判面补洞**:R10 单根反查完成提交取最多 10 个候选、按 diff 文件数与事实行一致挑选(防「消息含 T### 完成」的无关提交劫持);R11 扫描面扩到入口/协议 8 文件 + `docs/archive/**/*.md`(快照只复用 TASKS/LOG);R12 指针必须 realpath 仍在仓库内、失效指针 → WARN(不静默 PASS);`next.acceptance` 的 `test:` 路径在写入 TASKS 前校验;无变更提交幂等跳过、同一秒备份加序号、`relay_onboard` 内容一致不重写 manifest/不新建备份;bare 仓库 init 直接拒绝
+- 新增 `scripts/smoke-security.mjs`(25 断言)接入 `npm test`;`smoke-archive-log.mjs` 18→25(方向/R7/符号链接/幂等),`smoke-compat.mjs` C1 期望改为幂等
+
+- 回归规模:`npm test` 18 套 / 677 断言全绿(含第五轮审计新增安全回归)
 
 ## [1.4.1] - 2026-11-01
 

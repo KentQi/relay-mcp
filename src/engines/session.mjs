@@ -13,7 +13,7 @@ import {
   writeProtocolFile, scanSecrets, SECRET_OK_MARKER, sha256Hex,
 } from '../util.mjs';
 import { stat as fsStat, writeFile as fsWriteFile } from 'node:fs/promises';
-import { join, resolve, sep } from 'node:path';
+import { join, resolve, sep, isAbsolute as pathIsAbsolute } from 'node:path';
 import { execFile, exec } from 'node:child_process';
 import { promisify } from 'node:util';
 import { runChecks, formatChecks, runTaskTreeChecks, TASK_LINE_RE, LOG_TITLE_RE, parseLogEntries } from './verify.mjs';
@@ -976,6 +976,17 @@ export const relaySessionEnd = async (args = {}) => {
         return { content: [{ type: 'text', text: out.join('\n') }], isError: true };
       }
     }
+    // 审计 P2:next.acceptance 里的 test: 路径必须在**写入 TASKS 之前**做与出场同款安检,
+    // 否则 -rf、绝对路径、../ 会先被写进任务队列,等下一棒出场才被拒(把危险值持久化)。
+    const accStr = String(next.acceptance ?? '').trim();
+    if (accStr.startsWith('test:')) {
+      const p = accStr.slice(5).trim();
+      if (!p || p.startsWith('-') || p.includes('..') || pathIsAbsolute(p)) {
+        out.push('## 参数校验失败', '', `\`next.acceptance\` 的 test: 路径非法:“${p}”(不得为空/以 - 开头/含 .. /绝对路径)。`, '',
+          '修复: 用项目内相对路径(如 scripts/smoke-x.mjs),或改为自由文本验收。');
+        return { content: [{ type: 'text', text: out.join('\n') }], isError: true };
+      }
+    }
   }
   if (next && (!String(next.title ?? '').trim() || !String(next.acceptance ?? '').trim())) {
     out.push('## 参数校验失败', '', '`next` 需同时提供 `title` 与 `acceptance`(验收是下一任务的完成判定,不可为空)。');
@@ -1371,9 +1382,8 @@ export const relaySessionEnd = async (args = {}) => {
       '修复:重新运行 relay_session_end(会重读 TASKS/LOG 后重建本次更新);不要手工合并或覆盖对方改动。');
     return { content: [{ type: 'text', text: out.join('\n') }], isError: true };
   }
-  await writeProtocolFile(root, 'TASKS.md', tasksText, { token: exitLock.token, lockLabel: '仓库写锁', expectedHash: tasksHashBefore });
-
-  // 5. 写入 LOG.md(顶部、标题行之后;lLines 已在上面读取)
+  // 5. 构造 LOG 条目:必须在写任何文件之前完成,且与 TASKS 一起过密钥闸——
+  //    否则「TASKS 已写、LOG 被密钥闸拦」会留下半写状态(审计 P1:实测 TASKS 被改而 LOG 未写)。
   // 注意:未完成时的 task 字段不得包含「完成」子串,否则会干扰 R7/R9 的判定
   // 维护会话(onboard/开源化/引擎迁移等基础设施工作)不对应 TASKS 任务:
   // task=维护 且不计入 R7 发散窗口(否则探测类会话挂 task=无 会被误判为停滞)
@@ -1410,21 +1420,25 @@ export const relaySessionEnd = async (args = {}) => {
   // 幂等(B5):同一会话重复出场(同 model + 同「T### 完成」)不重复记日志;
   // 查重键扫全表——最新条目可能是其他会话的
   const dupLog = alreadyDone && parseLogEntries(lLines.join('\n')).some((e) => e.model === model && e.task === taskField);
+  let logTextOut = null;
   if (!dupLog) {
     if (lLines[titleIdx + 1] === '') lLines.splice(titleIdx + 2, 0, ...entry, '');
     else lLines.splice(titleIdx + 1, 0, '', ...entry, '');
-    const logTextOut = tidy(lLines);
+    logTextOut = tidy(lLines);
     const logSecret = secretGateBlock('LOG.md', logTextOut);
     if (logSecret) {
       out.push(logSecret);
       return { content: [{ type: 'text', text: out.join('\n') }], isError: true };
     }
-    await writeProtocolFile(root, 'LOG.md', logTextOut, { token: exitLock.token, lockLabel: '仓库写锁', expectedHash: logHashBefore });
     changes.push(`LOG.md: 顶部新增条目「${entry[0]}」`);
   } else {
     changes.push('LOG.md: 最新条目即本次出场(幂等跳过,不重复记录)');
   }
-
+  // 两个文件都通过密钥闸 + CAS 预检后才落盘:先 TASKS,后 LOG。
+  await writeProtocolFile(root, 'TASKS.md', tasksText, { token: exitLock.token, lockLabel: '仓库写锁', expectedHash: tasksHashBefore });
+  if (logTextOut != null) {
+    await writeProtocolFile(root, 'LOG.md', logTextOut, { token: exitLock.token, lockLabel: '仓库写锁', expectedHash: logHashBefore });
+  }
   // 5/6. 提交分支:护栏 → 不提交;否则 add -A + commit;失败 → 降级
   // 提交消息携带「T### 完成」token:TASKS 完成行不记 sha(自指无解),考古靠 git log --grep
   const firstLine = summary.split('\n')[0].trim();
@@ -1562,6 +1576,12 @@ export const relaySessionEnd = async (args = {}) => {
     if (!addR.ok) {
       degradeReason = `git add 失败: ${(addR.stderr || addR.stdout || '').split('\n').find(Boolean) || '未知原因'}`;
     } else {
+      // 幂等(审计 P2):重复出场或本次没有实际改动时没有可提交内容,这不是失败,不降级报错。
+      const pendingR = await gitRun(executionRoot, '-c', 'core.quotePath=false', 'status', '--porcelain');
+      const pendingLines = pendingR.ok ? pendingR.stdout.split('\n').map((s) => s.trim()).filter(Boolean) : [];
+      if (!pendingLines.length) {
+        commitSection = ['- (无变更可提交:重复出场或本次未产生改动,幂等跳过)'];
+      } else {
       const cR = await gitRun(executionRoot, ...(await gitIdentityArgs(executionRoot)), 'commit', '-m', commitMsg);
       if (!cR.ok) {
         degradeReason = `git commit 失败: ${(cR.stderr || cR.stdout || '').split('\n').find(Boolean) || '未知原因'}`;
@@ -1588,6 +1608,7 @@ export const relaySessionEnd = async (args = {}) => {
             }
           }
         }
+      }
       }
     }
   }

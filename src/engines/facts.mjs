@@ -19,7 +19,8 @@ const PROTOCOL_FILES = new Set(['TASKS.md', 'LOG.md']);
 const isProtocolFile = (p) => PROTOCOL_FILES.has(p) || /^docs\/archive\/LOG-[^/\\]+\.md$/.test(p);
 
 // 一次 git 调用同时拿到文件数与 ±(--numstat 每行自带路径);两侧共用本函数。
-const diffStat = async (root, range) => {
+// 导出供 R10 使用:按候选提交逐个算 numstat,选「与事实行声明一致」的完成提交(防 grep 劫持)。
+export const diffStat = async (root, range) => {
   const nums = await gitRun(root, '-c', 'core.quotePath=false', 'diff', '--numstat', '--no-renames', ...range);
   if (!nums.ok) return null;
   let files = 0;

@@ -28,6 +28,6 @@
   "scripts": {
     "install:mcp": "node scripts/install-mcp.mjs",
     "prepublishOnly": "node scripts/check-publish-guard.mjs",
-    "test": "node scripts/smoke.mjs && node scripts/smoke-patches.mjs && node scripts/smoke-worktrees.mjs && node scripts/smoke-compat.mjs && node scripts/smoke-install-mcp.mjs && node scripts/smoke-content-guard.mjs && node scripts/smoke-facts.mjs && node scripts/smoke-brief.mjs && node scripts/smoke-doctor.mjs && node scripts/smoke-recall.mjs && node scripts/smoke-pack.mjs && node scripts/smoke-review-regressions.mjs && node scripts/smoke-perf.mjs && node scripts/smoke-r12-boundary.mjs && node scripts/smoke-session-perf.mjs && node scripts/smoke-concurrency.mjs && node scripts/smoke-archive-log.mjs"
+    "test": "node scripts/smoke.mjs && node scripts/smoke-patches.mjs && node scripts/smoke-worktrees.mjs && node scripts/smoke-compat.mjs && node scripts/smoke-install-mcp.mjs && node scripts/smoke-content-guard.mjs && node scripts/smoke-facts.mjs && node scripts/smoke-brief.mjs && node scripts/smoke-doctor.mjs && node scripts/smoke-recall.mjs && node scripts/smoke-pack.mjs && node scripts/smoke-review-regressions.mjs && node scripts/smoke-perf.mjs && node scripts/smoke-r12-boundary.mjs && node scripts/smoke-session-perf.mjs && node scripts/smoke-concurrency.mjs && node scripts/smoke-archive-log.mjs && node scripts/smoke-security.mjs"
   }
 }

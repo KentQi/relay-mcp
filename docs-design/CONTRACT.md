@@ -185,8 +185,8 @@ export const startServer = async ({ onInit, onMethod }) => {
 | R8 | 风格归一化 | 项目存在 prettier/eslint 配置或 package.json scripts.format → 提示运行;不存在 → skip(不强加工具链) |
 | R9 | LOG/TASKS 一致性 | LOG 最新条目里 task=Txxx 完成 而 TASKS 中 Txxx 仍为未完成 → error |
 | R10 | 事实对账 | LOG **最新完成条目**必须含引擎写入的「事实(v2)」行;机检段(mode/文件数/base/sha/branch)与 git 重算逐字段一致(managed 另含 ±),不一致 → error;**branch 必须真实包含声明的 sha**(存在但不含 → error;已删除时若完成提交仍在当前分支历史 → pass 带注记,否则 warn);叙述段(验收/verify/耗时)不参与对账;无法定位提交 → warn(**永不 PASS**);v1 旧格式只做结构校验 → warn(数字权威仅 v2);缺事实行 → warn |
-| R11 | 协议文件敏感内容 | TASKS.md/LOG.md 内容级扫描(AWS/GitHub/Slack/OpenAI/Google 密钥样式 + PEM 私钥块);同行 `relay:secret-ok` 豁免;命中 → error,`relay_session_end` 在任何写盘前阻断 |
-| R12 | LOG 边界 | 活跃区(归档指针之前的行)>150 行 或 活跃区内完成条目 >20 → warn(`manifest.logBoundary.strict=true` 升 error);归档指针必须指向真实存在的 `docs/archive/*.md` 才被承认(否则按全文计算);只报警不自动归档 |
+| R11 | 协议面敏感内容 | 协议面 8 个文件(TASKS/LOG/AGENTS/CLAUDE/GEMINI/START/SPEC/DECISIONS)+ `docs/archive/**/*.md` 内容级扫描(AWS/GitHub/Slack/OpenAI/Google 密钥样式 + PEM 私钥块);同行 `relay:secret-ok` 豁免;命中 → error,`relay_session_end` 在任何写盘前阻断 |
+| R12 | LOG 边界 | 活跃区(归档指针之前的行)>150 行 或 活跃区内完成条目 >20 → warn(`manifest.logBoundary.strict=true` 升 error);归档指针必须指向真实存在、非空且 realpath 仍在仓库内的 `docs/archive/*.md` 才被承认(否则 R12 报 WARN 并说明未被承认,不静默 PASS);只报警不自动归档 |
 
 - 检查输出:`| ID | 结果 | 详情 |` 表格 + 末尾汇总;任一 error → isError:true(fast 模式跳过 R5/R6/R8,session_end 默认 fast=false 全量)
 - **受保护路径**:`verify`(脚本)、`.relay/**`、`*/tests/**`、`*.test.*`、`*.spec.*` —— relay_session_end 若检测到本会话改动了这些文件,则**不自动 commit**,输出"涉及受保护路径(护栏),需人类批准后手动提交"并列出文件
@@ -352,3 +352,16 @@ export const startServer = async ({ onInit, onMethod }) => {
 - **R11 扫描面**:归档文件纳入密钥扫描(兜住人工 `git mv` / 手改归档文件的路径)。
 - **否决 session_end 自动归档**(钢人论证):归档是全仓唯一不可逆的「移动历史」动作,写进绿闸=不可逆操作与人类决策权旁落;改为显式工具 + 默认 dry-run,保留人工确认。
 - **冒烟**:`scripts/smoke-archive-log.mjs`(dry-run 不写盘、confirm 后 R12 PASS、指针存在、条目守恒、live≥3、幂等 no-op),已接入 `npm test`。
+## 2026-11-02 第五轮复验审计修复(P0×3 / P1×2 / P2×6)
+
+- **P0-1 写盘布局闸**:`assertSafeWriteLayout(root, relPaths, label)` —— init/onboard 在写任何文件之前,检查 root 本身与「将要写入的每个路径」的既有目录组件都不是符号链接(ENOENT 视为可创建,非目录拒绝);`relay_archive_log` 写归档文件前过 `checkProtocolFilesSafe`,并只对父目录组件做 `assertNoSymlinkComponents`(文件叶子由原子写负责)。拒绝文案必须说明「会把文件写到仓库之外」。已知边界:只拦已存在组件,写入瞬间换链(TOCTOU)不在本层解决。
+- **P0-2 项目名防线**:`sanitizeProjectName`(控制字符 → 空格、丢弃 `{}`、折叠空白、80 字符上限,空则回落 basename)+ `scanSecrets` fail-closed;模板渲染占位符顺序固定为 `{{TODAY}}` / `__RELAY_HOME__` 在前、`{{PROJECT_NAME}}` **最后**(否则项目名里的占位符被二阶展开),渲染结果再过 `scanSecrets` —— 变量夹带密钥时整次 init/onboard 拒绝。onboard 的项目名取目录 basename,净化 + 密钥闸同上。
+- **P0-3/P1-1 归档方向与 R7 防线**:LOG 是「最新在上」——`kept = entries.slice(0, keep)`、`moved = entries.slice(keep)`(修复此前反向搬移:live 只剩最旧、归档含最新);边界硬约束改为 `newestDoneIdx >= keep` → 返回 isError「拒绝执行」并给「增大 keep」指令;keep 下限 3 保证 R7「最近 3 条任务会话」窗口不退化。归档工具因此不能把发散证据搬进归档来洗绿 R7。
+- **P1-2 出场无半写**:LOG 条目构造、密钥闸、TASKS/LOG 双文件内容 CAS 预检全部前移到**任何写盘之前**;全部通过后才写 TASKS、再写 LOG;任一步失败时两文件均未变。修复前实测:既有 LOG 含 `relay:secret-ok` 豁免行(R11 探测器放行、写盘闸不放行)时,TASKS 已被写而 LOG 被拦。
+- **P2-1 next.acceptance 预检**:`test:` 路径在写入 TASKS **之前**按出场同款规则校验(非空、不以 `-` 开头、不含 `..`、非绝对路径);非法值不落盘。
+- **P2-2 R11 扫描面**:协议面 = `TASKS.md / LOG.md / AGENTS.md / CLAUDE.md / GEMINI.md / START.md / SPEC.md / DECISIONS.md` + `docs/archive/**/*.md`(不只 `LOG-*.md`);快照里的 TASKS/LOG 只在 `texts[f] !== undefined` 时复用,其余文件必须读盘;命中 → ERROR。
+- **P2-3 R12 指针可验证**:指针目标必须同时满足「命中 `docs/archive/` 正则、stat 为文件且非空、父目录组件非符号链接、realpath 仍在仓库内」;失效指针(悬空/越界/经符号链接指向仓库外)→ **WARN 且文案说明未被承认**,不再静默 PASS。
+- **P2-4 R10 反查防劫持**:单根事实行没有 sha 时,取最多 10 个消息含「T### 完成」的候选提交,按 `git diff --numstat` 的文件数与事实行机检段一致来挑选(消息 token 只是索引,不是证据);grep 命中后直接取第一条会被无关提交劫持。
+- **P2-5 幂等与备份**:重复出场/本次无改动时,提交段输出「无变更可提交(幂等跳过)」而不是降级报「git commit 失败」;`backupFile` 同一秒内多次备份加序号,不再互相覆盖;`relay_onboard` 生成内容与既有文件一致时不重写 manifest、不新建备份、不刷新 `onboardedAt`。
+- **P2-6 bare 仓库**:`relay_init` 初始化前 `git rev-parse --is-bare-repository` 为 true → 直接拒绝并给 `git clone <bare> <dir>` 修复指令(裸仓库无工作区,init 会留下嵌套 `.git` 与无法提交的文件)。
+- **回归**:新增 `scripts/smoke-security.mjs`(25 断言:符号链接写穿/项目名注入/半写/acceptance 注入/R11 扫描面/R12 指针/R10 劫持/备份/幂等/bare)并接入 `npm test`;`smoke-archive-log.mjs` 18→25(方向、R7 洗绿、符号链接、幂等 no-op);`smoke-compat.mjs` C1 期望改为幂等(onboardedAt 保持、无新备份)。

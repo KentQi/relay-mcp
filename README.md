@@ -123,8 +123,8 @@ worktree 清理默认 dry-run：只删除已登记、已过期、非活跃、干
 ### 安全与边界
 
 - 密钥守卫：`.env*`、`*secret*`、`*credential*`、`*.key`、`*.pem`、`id_rsa` 不自动提交。
-- LOG 边界（R12）：LOG 活跃区（归档指针之前的行）超过 150 行、或完成条目超过 20 条 → `relay_verify` 报 WARN（`manifest.logBoundary.strict=true` 升 ERROR）；只报警不自动归档，归档动作由人工决定（`docs/archive/` + 指针）。
-- 内容级密钥闸（R11）：`TASKS.md` / `LOG.md` 命中 AWS / GitHub / Slack / OpenAI / Google 密钥样式或 PEM 私钥块 → `relay_verify` 报 ERROR，出场写盘前直接阻断（不写、不提交）；误报可在同一行标注 `relay:secret-ok` 豁免。扫描输出只给前 4 字符预览，绝不回显完整密钥。
+- LOG 边界（R12）：LOG 活跃区（归档指针之前的行）超过 150 行、或完成条目超过 20 条 → `relay_verify` 报 WARN（`manifest.logBoundary.strict=true` 升 ERROR）；只报警不自动归档，归档动作由人工决定（`docs/archive/` + 指针）；指针必须指向仓库内真实存在的归档文件，失效指针 → WARN 而非静默 PASS。
+- 内容级密钥闸（R11）：协议面 8 个文件（`TASKS.md` / `LOG.md` / `AGENTS.md` / `CLAUDE.md` / `GEMINI.md` / `START.md` / `SPEC.md` / `DECISIONS.md`）与 `docs/archive/**/*.md` 命中 AWS / GitHub / Slack / OpenAI / Google 密钥样式或 PEM 私钥块 → `relay_verify` 报 ERROR，出场写盘前直接阻断（不写、不提交）；误报可在同一行标注 `relay:secret-ok` 豁免。扫描输出只给前 4 字符预览，绝不回显完整密钥。
 - 受保护路径：`verify`、`.relay/**`、`tests/**` 与测试文件改动不自动提交；最终防线是 CI 与人工审核。
 - 锁：仓库写锁带心跳与写前 fencing；任务认领锁刻意关闭心跳，保留 240 分钟 TTL 崩溃恢复。并发会话必须使用不同 `model` 标识（同名 model 无法区分持有者）。
 - 当前不提供 abort/release、任务 status 工具或 sessionId；恢复方式为 TTL 接管、出场释放或 cleanup。
@@ -168,7 +168,7 @@ node src/cli.mjs relay_worktree_cleanup --root /path/to/project --json confirm=t
 
 ### 自举
 
-本仓库使用自身协议开发：`START.md` 是入口，`TASKS.md` 是 backlog，`LOG.md` 记录会话。`npm test` 覆盖 13 套端到端冒烟（协议、补丁、worktree、升级兼容、安装器、密钥闸、事实底账、简报、doctor、检索、打包、评审回归、性能计数），CI 覆盖 Node 22/24/26。
+本仓库使用自身协议开发：`START.md` 是入口，`TASKS.md` 是 backlog，`LOG.md` 记录会话。`npm test` 覆盖 18 套端到端冒烟（协议、补丁、worktree、升级兼容、安装器、密钥闸、事实底账、简报、doctor、检索、打包、评审回归、性能计数、LOG 边界、会话性能、并发、归档、安全），CI 覆盖 Node 22/24/26。
 
 `relay_verify` 的单轮成本是可观测的：只读一次 LOG/TASKS/manifest，git 子进程收敛到必要数量；设 `RELAY_TRACE_FILE=<path>` 可让进程退出时写出 `{reads, git, sync}` 计数（测试用，生产无行为变化）。
 

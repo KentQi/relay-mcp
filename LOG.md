@@ -1,5 +1,13 @@
 # 会话日志(最新在上)
 
+## 2026-11-02 17:27 | model=dsh-lead-deepseek-v4.1 | task=T011 完成
+- 摘要: T011 第五轮复验审计:独立复验实测 P0×3(init/onboard/archive 符号链接写穿、项目名与密钥随首个提交入史、归档方向反)+P1×2(归档可洗绿 R7、出场半写)+P2×6 残留,已全部修复并 1:1 收编回归;新增 smoke-security(25 断言)、smoke-archive-log 18→25、smoke-compat 幂等期望;CONTRACT/模板/README/CHANGELOG/DECISIONS 同步并 relay_sync 重投影;npm test 18 套/677 断言全绿,verify --full PASS 11·WARN 0·ERROR 0·SKIP 1;证据见 docs/04-test/07-audit-round5-v1.5.0.md
+- 事实(v2): mode=single | 文件 19 | ± +323/-98 | base=- | sha=- | branch=main || 验收: 通过 | verify: PASS 11·WARN 0·ERROR 0 | 耗时: 59s
+- 负结果: TOCTOU(检查与写盘之间换链)不在布局闸覆盖范围,单机模型不做 O_NOFOLLOW 重构
+- 负结果: R10 候选匹配以 diff 文件数为键,两个完成提交文件数相同时取历史更新者
+- 负结果: 归档仍是人工 confirm 动作,R12 只报警
+- 留给下一个: 发布前人工复核 07 报告 §5 已知边界;发布属人类决策,relay 不自动发布
+
 ## 2026-11-02 16:49 | model=dsh-lead-deepseek-v4.1 | task=T005 完成
 - 摘要: T005 CI 矩阵三绿确认与 README badge 补链:复核 ci.yml matrix(node 22/24/26)三个 job 全绿(最近 main push run 41401631868 3/3 success);README 顶部 CI badge 已指向实际 Actions 页(actions/workflows/ci.yml),本地 npm test 17 套全绿;无需代码改动,补记证据后完成
 - 事实(v2): mode=single | 文件 0 | ± +0/-0 | base=- | sha=- | branch=main || 验收: 通过 | verify: PASS 11·WARN 0·ERROR 0 | 耗时: 34s

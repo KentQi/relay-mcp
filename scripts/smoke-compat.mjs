@@ -75,11 +75,12 @@ try {
     ok(Array.isArray(after.protectedPaths) && after.protectedPaths[0] === 'secrets/**', 'C1: protectedPaths 保留');
     ok(after.entryFilesTakeover === true, 'C1: entryFilesTakeover=true 保留');
     ok(JSON.stringify(after.codeRoots) === JSON.stringify(['src', 'app']), 'C1: codeRoots 保留');
-    ok(after.onboardedAt && after.onboardedAt !== beforeOnboardedAt, 'C1: onboardedAt 被刷新');
+    // 审计 P2:onboard 幂等 —— 内容未变时不再刷新 onboardedAt(否则每次重跑都改写 manifest+新建备份+新提交)。
+    ok(after.onboardedAt && after.onboardedAt === beforeOnboardedAt, 'C1: onboardedAt 保持(幂等,不刷新)');
     ok(txt(r).includes('既有 manifest 配置已保留'), 'C1: 报告声明配置已保留', txt(r));
     ok(txt(r).includes('worktree 配置保持不变'), 'C1: 报告点名 worktree 配置未重置', txt(r));
     const backups = readdirSync(path.join(root, '.relay')).filter((f) => f.startsWith('manifest.json.relay-bak-'));
-    ok(backups.length >= 1, 'C1: 旧 manifest 已备份', backups.join(','));
+    ok(backups.length === 0, 'C1: 内容未变时不新建备份(幂等)', backups.join(','));
   }
 
   console.log('\n== C2: relay_sync 输出 AGENTS.md 可执行迁移步骤(P2-04)==');

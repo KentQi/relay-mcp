@@ -71,7 +71,12 @@ export const backupFile = async (p) => {
   const ts =
     `${d.getFullYear()}${pad(d.getMonth() + 1)}${pad(d.getDate())}` +
     `${pad(d.getHours())}${pad(d.getMinutes())}${pad(d.getSeconds())}`;
-  const backup = `${p}.relay-bak-${ts}`;
+  // 同一秒内多次 force/onboard(CI、脚本循环)会撞名:rename 到已存在路径会**覆盖**前一份备份。
+  // 加序号保证每次备份都独立存在(审计 P2:原 LOG 的备份被后一份覆盖丢失)。
+  let backup = `${p}.relay-bak-${ts}`;
+  for (let i = 2; i < 1000; i++) {
+    try { await lstat(backup); backup = `${p}.relay-bak-${ts}-${i}`; } catch { break; }
+  }
   await rename(p, backup);
   return backup;
 };
@@ -217,6 +222,33 @@ export const formatSecretHits = (hits, file = '') =>
 // 校验「root 之下某条相对路径的每一级已存在组件都不是符号链接」。
 // .relay / .relay/claims / 自定义 cacheDir 以及 TASKS/LOG/锁/注册表都必须先过这一关:
 // 否则一条指向仓库外的符号链接就能把协议文件写到不该写的地方。
+// 写盘前布局安全闸(init/onboard/archive 用):root 自身与「将要写入的每个路径」的
+// 既有目录组件都不能是符号链接——否则一条 `docs -> /tmp/out` 的链接就能把整棵骨架
+// 或归档文件写到仓库之外(审计 P0-1:init/onboard 不经过 claim/session_end 的协议闸)。
+export const assertSafeWriteLayout = async (root, relPaths = [], label = '写入') => {
+  const rootAbs = path.resolve(root);
+  let rootSt = null;
+  try { rootSt = await lstat(rootAbs); } catch (e) { if (e && e.code === 'ENOENT') return; throw e; }
+  if (rootSt && rootSt.isSymbolicLink()) {
+    throw new Error(`${label} 拒绝执行:root(${rootAbs})是符号链接,可能把文件写到别处;请改用真实目录`);
+  }
+  const dirs = new Set();
+  for (const rel of relPaths) {
+    const parts = String(rel ?? '').split(/[\\/]+/).filter((s) => s && s !== '.' && s !== '..');
+    parts.pop(); // 文件本身不在此检查(写原语另有文件级守卫)
+    let cur = rootAbs;
+    for (const part of parts) { cur = path.join(cur, part); dirs.add(cur); }
+  }
+  for (const dir of dirs) {
+    let st = null;
+    try { st = await lstat(dir); } catch (e) { if (e && e.code === 'ENOENT') continue; throw e; }
+    if (st.isSymbolicLink()) {
+      throw new Error(`${label} 拒绝写入:${path.relative(rootAbs, dir) || '(root)'} 是符号链接,会把文件写到仓库之外;请移除该符号链接或改用仓库内真实目录后重试`);
+    }
+    if (!st.isDirectory()) throw new Error(`${label} 拒绝写入:${path.relative(rootAbs, dir)} 不是目录`);
+  }
+};
+
 export const assertNoSymlinkComponents = async (root, relPath, label = '') => {
   const rootAbs = path.resolve(root);
   const parts = String(relPath ?? '').split(/[\\/]+/).filter((s) => s && s !== '.');

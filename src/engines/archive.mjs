@@ -5,8 +5,11 @@
 //   3) live 至少保留 keep 条(默认 8,下限 3),保证 R7 的「最近 3 条任务会话」窗口不退化。
 //   4) 归档文件只在 docs/archive/ 下、只追加不改写;指针格式与 R12 一致,目标必须真实存在。
 //   5) 写入走协议原语(密钥闸 + 内容 CAS + fencing),不裸写 LOG.md。
-import { readFileSafe, writeFileAtomic, writeProtocolFile, scanSecrets, acquireRepoLock, sha256Hex, stamp } from '../util.mjs';
-import { join } from 'node:path';
+import {
+  readFileSafe, writeFileAtomic, writeProtocolFile, scanSecrets, acquireRepoLock, sha256Hex, stamp,
+  ensureDir, assertNoSymlinkComponents, checkProtocolFilesSafe,
+} from '../util.mjs';
+import { join, dirname } from 'node:path';
 import { resolveRelayRoots } from './worktree.mjs';
 import { LOG_TITLE_RE } from './verify.mjs';
 
@@ -59,16 +62,17 @@ export const relayArchiveLog = async (args = {}) => {
       ...notes,
     ].join('\n'), false);
   }
-  const moveCount = entries.length - keep;
-  const moved = entries.slice(0, moveCount);
-  const kept = entries.slice(moveCount);
+  // LOG 是「最新在上」:保留前 keep 条(最新),归档其余(更旧)。
+  // 方向绝不能反:搬走最新历史 = 把 live 变成最旧的一批,指针语义与人类预期完全相反。
+  const kept = entries.slice(0, keep);
+  const moved = entries.slice(keep);
   // 安全线:最新完成条目必须留在 live(否则 R10 的「最新完成条目」会指向归档区)。
   const newestDoneIdx = entries.findIndex((e) => isDoneTask(e.task));
-  if (newestDoneIdx >= 0 && newestDoneIdx < moveCount) {
+  if (newestDoneIdx >= 0 && newestDoneIdx >= keep) {
     return textResult([
       '# relay_archive_log — 拒绝执行',
       '',
-      `- 归档边界会切到最新完成条目(${entries[newestDoneIdx].time} ${entries[newestDoneIdx].task})之后,`,
+      `- 归档边界会覆盖最新完成条目(${entries[newestDoneIdx].time} ${entries[newestDoneIdx].task}),`,
       '  违反「边界严格早于最新完成条目」的硬约束;请增大 keep 后重试。',
     ].join('\n'), true);
   }
@@ -86,9 +90,13 @@ export const relayArchiveLog = async (args = {}) => {
   if (creating) archiveRel = `docs/archive/LOG-${stamp().slice(0, 10)}.md`;
   const archiveAbs = join(root, archiveRel);
   const existingArchive = creating ? null : await readFileSafe(archiveAbs, null);
+  // 幂等重试(审计 P1 半写):上一次若已写归档文件但 LOG 写失败,重试时不要重复追加同一段。
+  const alreadyArchived = !creating && String(existingArchive || '').includes(movedText);
   const archiveContent = creating
     ? ['# 归档 — 会话日志', '', `> 由 relay_archive_log 于 ${stamp()} 从 LOG.md 尾部搬出;只增不改。`, '', movedText, ''].join('\n')
-    : `${String(existingArchive || '').replace(/\n+$/, '')}\n\n${movedText}\n`;
+    : (alreadyArchived
+      ? String(existingArchive || '')
+      : `${String(existingArchive || '').replace(/\n+$/, '')}\n\n${movedText}\n`);
   const pointer = `<!-- relay:log-archive: ${archiveRel} -->`;
   const newLog = ['# 会话日志(最新在上)', '', keptText, '', pointer, ''].join('\n');
   const header = [
@@ -111,8 +119,24 @@ export const relayArchiveLog = async (args = {}) => {
   try {
     const hits = scanSecrets(archiveContent);
     if (hits.length) return textResult(`归档被拒:搬移内容含疑似密钥(${hits.length} 处),拒绝写盘。`, true);
+    // 写盘前布局安全闸:docs/archive 的既有组件不得是符号链接,否则归档文件会被写到仓库外
+    // (审计 P0:docs -> /tmp/OUT 时,LOG 指针仍指向仓库内路径,而内容其实在仓库外)。
+    const protoSafe = await checkProtocolFilesSafe(root);
+    if (!protoSafe.ok) return textResult(`归档被拒:协议文件布局不安全(${protoSafe.error})。`, true);
+    // 半写防线(审计 P1):写归档文件之前先对 LOG.md 做一次内容 CAS 预检——
+    // LOG 在读取后被外部改过就直接拒绝,避免「归档文件已追加、LOG 未更新」的半写。
+    const logNow = await readFileSafe(logPath, null);
+    if (sha256Hex(logNow == null ? '' : logNow) !== sha256Hex(raw)) {
+      return textResult('归档被拒:LOG.md 在读取后被其他写入者修改(内容 CAS 失败),未写入任何文件;请重试。', true);
+    }
+    // 只查父目录组件:断言函数针对目录链,文件叶子由随后的原子写负责(不存在即新建)。
+    const archiveDirRel = archiveRel.split('/').slice(0, -1).join('/');
+    if (archiveDirRel) await assertNoSymlinkComponents(root, archiveDirRel, '归档文件目录');
+    await ensureDir(dirname(archiveAbs));
     await writeFileAtomic(archiveAbs, archiveContent, { label: archiveRel });
     await writeProtocolFile(root, 'LOG.md', newLog, { token: lock.token, lockLabel: '仓库写锁', expectedHash: sha256Hex(raw) });
+  } catch (e) {
+    return textResult(`归档被拒:${e?.message || String(e)}`, true);
   } finally {
     await lock.release();
   }

@@ -2,11 +2,11 @@
 // 依据 CONTRACT.md「检查器规则表」「仓库文件格式」「安全与降级」。
 // TASKS 任务行与 LOG 条目标题的正则与契约逐字符一致,绝不改动;
 // 每条非 PASS 结果都附一条以「修复:」开头的可执行指令。
-import { readFileSafe, isGitRepoAsync, gitRun, scanSecrets, formatSecretHits, SECRET_OK_MARKER } from '../util.mjs';
-import { FACT_LINE_RE, parseFactLine, recomputeCommitStats } from './facts.mjs';
+import { readFileSafe, isGitRepoAsync, gitRun, scanSecrets, formatSecretHits, SECRET_OK_MARKER, assertNoSymlinkComponents } from '../util.mjs';
+import { FACT_LINE_RE, parseFactLine, recomputeCommitStats, diffStat } from './facts.mjs';
 import { readManifestConfig, underRoots, matchesIgnore, DEFAULT_CODE_ROOTS, DEFAULT_DOCS_ROOTS } from '../config.mjs';
-import { readdir, stat } from 'node:fs/promises';
-import { join } from 'node:path';
+import { readdir, stat, realpath } from 'node:fs/promises';
+import { join, sep } from 'node:path';
 
 // —— 契约正则(逐字符照抄)——
 export const TASK_LINE_RE = /^- \[( |~|x)\] (T\d+) (.*?)(?:  \((.*)\))?$/;
@@ -482,8 +482,14 @@ const checkR10 = async (root, cfg, snap) => {
   if (parsed.mode === 'single' && !parsed.sha) {
     const taskId = (String(entry.task).match(/^T\d+/) || [])[0];
     if (taskId) {
-      const g = await gitRun(root, '-c', 'core.quotePath=false', 'log', '-1', '--fixed-strings', '--format=%H', '--grep', `${taskId} 完成`);
-      if (g.ok && g.stdout.trim()) completionSha = g.stdout.trim().split('\n')[0].trim();
+      // 审计 P2:只取第一条 grep 命中会被「提交消息里恰好含 T### 完成」的无关提交劫持;
+      // 取最多 10 个候选,选「diff 文件数与事实行声明一致」的那一个(真正的完成提交)。
+      const g = await gitRun(root, '-c', 'core.quotePath=false', 'log', '-10', '--fixed-strings', '--format=%H', '--grep', `${taskId} 完成`);
+      const candidates = g.ok ? g.stdout.split('\n').map((s) => s.trim()).filter(Boolean) : [];
+      for (const sha of candidates) {
+        const st = await diffStat(root, [`${sha}^`, sha]);
+        if (st && st.files === parsed.files) { completionSha = sha; break; }
+      }
     }
   }
   const stats = await recomputeCommitStats(root, parsed, {
@@ -545,9 +551,12 @@ const checkR10 = async (root, cfg, snap) => {
 const checkR11 = async (root, snap) => {
   const hits = [];
   let exempted = 0;
+  // 审计 P2:密钥闸不能只扫 TASKS/LOG——入口/协议文档同样是「会进 git 历史」的协议面。
+  const SECRET_SCAN_FILES = ['TASKS.md', 'LOG.md', 'AGENTS.md', 'CLAUDE.md', 'GEMINI.md', 'START.md', 'SPEC.md', 'DECISIONS.md'];
   const texts = { 'TASKS.md': snap ? snap.tasksText : null, 'LOG.md': snap ? snap.logText : null };
-  for (const f of ['TASKS.md', 'LOG.md']) {
-    const t = snap ? texts[f] : await readText(join(root, f));
+  for (const f of SECRET_SCAN_FILES) {
+    // 快照只有 TASKS/LOG;其他协议面文件必须读盘(不能因为 snap 存在就跳过)。
+    const t = snap && texts[f] !== undefined ? texts[f] : await readText(join(root, f));
     if (t == null) continue;
     // 探测器允许 relay:secret-ok 豁免(写入原语不接受),但豁免必须可见:行数写进输出。
     for (const h of scanSecrets(t, { allowMarker: true })) hits.push({ file: f, ...h });
@@ -560,7 +569,8 @@ const checkR11 = async (root, snap) => {
   let archiveFiles = [];
   try {
     const names = await readdir(join(root, 'docs', 'archive'));
-    archiveFiles = names.filter((n) => /^LOG-[^/]+\.md$/.test(n)).sort();
+    // 审计 P2:归档目录里任何 .md 都是协议历史(不只 LOG-*.md),手写 notes.md 同样要扫。
+    archiveFiles = names.filter((n) => /\.md$/.test(n)).sort();
   } catch { /* 无归档目录 → 跳过 */ }
   for (const name of archiveFiles) {
     const t = await readText(join(root, 'docs', 'archive', name));
@@ -573,7 +583,7 @@ const checkR11 = async (root, snap) => {
       `协议文件含疑似密钥内容(${hits.length} 处): ${shown}${hits.length > 3 ? ` 等 ${hits.length} 处` : ''}`,
       '删除或替换为 [REDACTED];若该串曾进入 git 历史,立即轮换该密钥。确属误报可在同一行标注 relay:secret-ok 豁免');
   }
-  return pass('R11', `TASKS/LOG/归档文件 无密钥样式内容${archiveFiles.length ? `(已扫归档 ${archiveFiles.length} 个)` : ''}${exempted ? `(另有 ${exempted} 行标注 relay:secret-ok 被豁免,请人工复核)` : ''}`);
+  return pass('R11', `协议面(${SECRET_SCAN_FILES.length + archiveFiles.length} 个文件:入口/协议/归档)无密钥样式内容${archiveFiles.length ? `(含归档 ${archiveFiles.length} 个)` : ''}${exempted ? `(另有 ${exempted} 行标注 relay:secret-ok 被豁免,请人工复核)` : ''}`);
 };
 
 // —— R12 LOG 边界(T024 / T001 最小触发)——
@@ -592,7 +602,15 @@ const findArchiveBoundary = async (root, lines) => {
     if (!ARCHIVE_REL_RE.test(rel)) continue;
     try {
       const st = await stat(join(root, rel));
-      if (st.isFile() && st.size > 0) return i;
+      if (!st.isFile() || st.size <= 0) continue;
+      // 审计 P2:指针目标不得经符号链接逃出仓库(否则「承认」的是仓库外的一行字)。
+      // 只查父目录组件(文件本身由下面的 stat/realpath 判定):断言函数不适用于文件叶子。
+      const relDir = rel.split('/').slice(0, -1).join('/');
+      try { if (relDir) await assertNoSymlinkComponents(root, relDir, '归档文件目录'); } catch { continue; }
+      const rootReal = await realpath(root);
+      const fileReal = await realpath(join(root, rel));
+      if (!(fileReal === rootReal || fileReal.startsWith(rootReal + sep))) continue;
+      return i;
     } catch { /* 指针目标不存在 → 不承认它划定的边界 */ }
   }
   return -1;
@@ -605,21 +623,24 @@ const checkR12 = async (root, cfg, snap) => {
   const area = boundary < 0 ? lines : lines.slice(0, boundary);
   const activeLines = area.filter((l, i) => !(i === area.length - 1 && l === '')).length; // 去掉末尾换行造成的空行
   const doneEntries = parseLogEntries(area.join('\n')).filter((e) => isDoneTaskField(e.task)).length;
-  const dangling = boundary < 0 && lines.some((l) => LOG_ARCHIVE_POINTER_RE.test(l))
-    ? ';归档指针未被承认(目标文件不存在或不在 docs/archive/,活跃区按全文计算)' : '';
+  // 审计 INFO:悬空指针不能静默 PASS —— 失效指针本身就是需要修的漂移(fail-closed 可见化)。
+  if (boundary < 0 && lines.some((l) => LOG_ARCHIVE_POINTER_RE.test(l))) {
+    return bad('R12', 'WARN', '归档指针未被承认(目标文件不存在/为空/越出 docs/archive/ 或经符号链接指向仓库外),活跃区按全文计算',
+      '修复:让指针指向真实存在且非空的 docs/archive/*.md(运行 relay_archive_log 会自动维护),或删除失效指针后重跑 relay_verify');
+  }
   const overLines = activeLines > R12_MAX_LOG_LINES;
   const overDone = doneEntries > R12_MAX_DONE_ENTRIES;
   if (!overLines && !overDone) {
-    return pass('R12', `LOG 活跃区 ${activeLines} 行 / 完成条目 ${doneEntries} 条,在边界内(>${R12_MAX_LOG_LINES} 行或 >${R12_MAX_DONE_ENTRIES} 条才告警)${dangling}`);
+    return pass('R12', `LOG 活跃区 ${activeLines} 行 / 完成条目 ${doneEntries} 条,在边界内(>${R12_MAX_LOG_LINES} 行或 >${R12_MAX_DONE_ENTRIES} 条才告警)`);
   }
   const over = [
     overLines ? `活跃区 ${activeLines} 行 > ${R12_MAX_LOG_LINES}` : '',
     overDone ? `完成条目 ${doneEntries} 条 > ${R12_MAX_DONE_ENTRIES}` : '',
   ].filter(Boolean).join(';');
-  const fix = '归档较早条目:运行 relay_archive_log {confirm:true}(默认 dry-run,只从尾部搬、保留至少 3 条、边界早于最新完成条目;或人工 git move 到 docs/archive/LOG-YYYY.md 并在 LOG.md 留一行指针 <!-- relay:log-archive: docs/archive/LOG-YYYY.md -->,指针目标必须真实存在);manifest.logBoundary.strict=true 可升级为 ERROR';
+  const fix = '归档较早条目:运行 relay_archive_log {confirm:true}(默认 dry-run,只从尾部搬、保留至少 3 条、边界早于最新完成条目;或人工 git move 到 docs/archive/LOG-YYYY.md 并在 LOG.md 留一行指针 <!-- relay:log-archive: docs/archive/LOG-YYYY.md -->,指针目标必须真实存在且位于仓库内);manifest.logBoundary.strict=true 可升级为 ERROR';
   return (cfg && cfg.logBoundary && cfg.logBoundary.strict)
-    ? bad('R12', 'ERROR', `LOG 边界超限:${over}${dangling}`, fix)
-    : bad('R12', 'WARN', `LOG 边界超限:${over}${dangling}`, fix);
+    ? bad('R12', 'ERROR', `LOG 边界超限:${over}`, fix)
+    : bad('R12', 'WARN', `LOG 边界超限:${over}`, fix);
 };
 
 // —— 双根:任务树结构检查(R1/R2/R3/R4/R8)——

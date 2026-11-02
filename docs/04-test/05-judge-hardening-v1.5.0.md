@@ -21,19 +21,19 @@ status: 现行
 ## 验证命令与结果
 
 ```
-npm test   # 17 套冒烟 / 645 断言,全绿(含 PR #8 审计修复、复审 N1/N2 与合并后清理的回归)
-./verify   # fast:PASS 8 · WARN 1 · ERROR 0(唯一 WARN 为 R12,见下)
-node src/cli.mjs relay_verify --root . --json '{"full":true}'   # PASS 10 · WARN 1 · ERROR 0
+npm test   # 18 套冒烟 / 677 断言,全绿(含 PR #8 审计修复、第五轮复验修复与复审 N1/N2、合并后清理的回归)
+./verify   # fast:PASS 9 · WARN 0 · ERROR 0 · SKIP 3
+node src/cli.mjs relay_verify --root . --json '{"full":true}'   # PASS 11 · WARN 0 · ERROR 0 · SKIP 1
 ```
 
 - 每任务出场绿闸:controlRoot 全量 12 项 ERROR 0 + executionRoot 任务树 5 项 ERROR 0;验收 `node --test <任务脚本>` 与 `npm test` 均实际执行通过。
 - 成对证据:每个任务都有代码提交(任务分支)+ 控制面提交(仅 TASKS/LOG),LOG 事实行记录 branch 与代码 SHA。
 
-## 已知 WARN(不阻断)
+## 已知 WARN(不阻断 / 已消除)
 
-- **R12(LOG 边界)**:本批四个会话让 LOG 从 117 行增长到 159 行,越过 150 行阈值 → WARN。这是规则按设计触发,不是回归;WARN 不阻断出场(ERROR 才阻断)。归档动作(T001)的登记触发条件 = R12 WARN 连续两次,当前 1/2。
+- **R12(LOG 边界)**:已消除 —— T001 `relay_archive_log` 落地后执行一次人工归档(20 条历史条目 → `docs/archive/LOG-2026-09-11.md`),活跃区回落到 105 行 / 9 条完成条目。归档工具默认 dry-run,落盘前由 `smoke-archive-log` 覆盖方向/R7 洗绿/符号链接/幂等回归。
 - **R6(文档 staleness)**:本文件即对应动作;提交后近 20 次提交内 docs/ 有改动,R6 转 PASS。
 
 ## 推迟项(触发条件见 DECISIONS)
 
-发布线 / 归档引擎 / harness 抽取 / protocol-text 叶子模块均维持推迟,不在本批实现。R12 只做裁判,不替人归档:归档需人工判断哪些条目算历史,并遵守「只从尾部搬、边界早于最新完成条目、live 保留 ≥3 条任务会话」的硬约束。
+发布线 / harness 抽取 / protocol-text 叶子模块均维持推迟,不在本批实现;归档机制已按 T001 落地(独立工具 + 默认 dry-run)。R12 只做裁判,不替人归档:归档需人工判断哪些条目算历史,并遵守「只从尾部搬、边界早于最新完成条目、live 保留 ≥3 条任务会话」的硬约束。

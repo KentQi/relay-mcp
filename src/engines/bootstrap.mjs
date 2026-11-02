@@ -14,7 +14,7 @@ import { basename, dirname, join, relative, resolve } from 'node:path';
 import { access, chmod, readdir, writeFile } from 'node:fs/promises';
 import {
   backupFile, ensureDir, findSensitiveChanges, gitIdentityArgs, gitRun, isGitRepoAsync, nowIso,
-  readFileSafe, stamp, templatesDir, writeFileIfAbsent,
+  readFileSafe, stamp, templatesDir, writeFileIfAbsent, scanSecrets, assertSafeWriteLayout,
 } from '../util.mjs';
 import { ensureGitignoreBaseline } from '../config.mjs';
 import { generateEntryFiles } from './sync.mjs';
@@ -40,10 +40,32 @@ const firstLine = (s) => (String(s || '').trim().split('\n')[0] || '').slice(0, 
 
 const relOf = (root, p) => (p ? relative(root, p) : '');
 
+// 占位序:PROJECT_NAME 必须**最后**替换 —— 否则项目名里若含 {{TODAY}} / __RELAY_HOME__
+// 会被二次展开(审计 P2:name="P-{{TODAY}}" 变成 "P-2026-11-02")。
 const render = (raw, vars) => raw
-  .replaceAll('{{PROJECT_NAME}}', vars.projectName)
   .replaceAll('{{TODAY}}', vars.today)
-  .replaceAll('__RELAY_HOME__', vars.relayHome);
+  .replaceAll('__RELAY_HOME__', vars.relayHome)
+  .replaceAll('{{PROJECT_NAME}}', vars.projectName);
+
+// 项目名防线(审计 P0-2):控制字符/换行会被写进 AGENTS/SPEC/START/docs 并提交,
+// 等于把伪造行或密钥塞进 git 历史;这里净化控制字符、去掉占位花括号,再做密钥闸。
+const sanitizeProjectName = (raw, fallback) => {
+  const s = String(raw ?? '')
+    .replace(/[\u0000-\u001f\u007f]+/g, ' ')
+    .replace(/[{}]/g, '')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, 80);
+  return s || fallback;
+};
+
+// 写盘前布局安全闸:init/onboard 会把整棵骨架写到 root 下,若 docs/.relay/src 等
+// 已存在组件是符号链接,文件会被写到仓库外(审计 P0-1)。claim/session_end 有
+// checkProtocolFilesSafe,但 init/onboard 不经过那条路径,必须单独拦。
+const guardWriteLayout = async (root, relPaths, label) => {
+  const targets = [...new Set((relPaths || []).filter((p) => typeof p === 'string' && p.trim()))];
+  await assertSafeWriteLayout(root, targets, label);
+};
 
 // 模板相对路径 → 目标相对路径(特殊映射集中在这里)
 const mapTemplatePath = (rel) => {
@@ -157,6 +179,11 @@ const writeTemplatedFile = async ({ tdir, rel, target, root, vars, force, execut
   const raw = await readFileSafe(join(tdir, rel), null);
   if (raw === null) return { status: 'skipped', target };
   const content = render(raw, vars);
+  // 渲染后的内容必须过密钥闸:项目名等变量若夹带密钥,会随脚手架进入首个提交(审计 P0-2)。
+  const contentHits = scanSecrets(content);
+  if (contentHits.length) {
+    throw new Error(`模板 ${target} 渲染后含疑似密钥(${contentHits.length} 处),拒绝写入;请修正 name/模板变量后重试`);
+  }
   const dest = join(root, target);
   if (await writeFileIfAbsent(dest, content)) {
     if (executable) await chmod(dest, 0o755).catch(() => {});
@@ -192,6 +219,11 @@ export const relayInit = async (args = {}) => {
   const root = resolve(a.root || process.cwd());
   const force = a.force === true;
   try {
+    // 0) 裸仓库没有工作区:init 会建出嵌套 .git 与一堆文件却无法正常提交(审计 P2)——直接拒绝。
+    const bareProbe = await gitRun(root, 'rev-parse', '--is-bare-repository');
+    if (bareProbe.ok && bareProbe.stdout.trim() === 'true') {
+      return err('root 是 bare 仓库(无工作区),不能作为项目根初始化。修复:`git clone <bare> <dir>` 落到工作区,或换一个普通目录。');
+    }
     // 1) 非破坏闸门:已有 START.md 且无 force → 拒绝,引导去 relay_onboard
     if (!force && (await pathExists(join(root, 'START.md')))) {
       return err([
@@ -208,8 +240,20 @@ export const relayInit = async (args = {}) => {
       return err(`模板目录不可读:${tdir}(${firstLine(e && e.message)})。relay-mcp 安装不完整(templates/ 缺失)。`);
     }
 
-    const name = typeof a.name === 'string' && a.name.trim() ? a.name.trim() : basename(root);
+    // 项目名会进 AGENTS/SPEC/START/docs 并提交(审计 P0-2):先净化再密钥闸。
+    const name = sanitizeProjectName(typeof a.name === 'string' ? a.name : '', basename(root));
+    const nameHits = scanSecrets(name);
+    if (nameHits.length) {
+      return err('项目名含疑似密钥内容,拒绝初始化(它会写进 AGENTS/SPEC/START/docs 并进入首个提交)。修复:改一个不含密钥样式的 name 后重试。');
+    }
     const vars = { projectName: name, today: stamp().slice(0, 10), relayHome: dirname(tdir) };
+    // 写盘前布局安全闸(审计 P0-1):docs/.relay/src/tests 等既有组件不得是符号链接。
+    const planTargets = plan.filter((i) => !i.isDir && !ENTRY_TPLS.has(i.rel) && i.rel !== 'presets' && !i.rel.startsWith('presets/'))
+      .map((i) => mapTemplatePath(i.rel).target);
+    await guardWriteLayout(root, [
+      ...planTargets, ...DEFAULT_ENTRY_FILES, 'verify', 'README.md', '.relay/manifest.json', '.gitignore',
+      'src/__relay_preset__.mjs', 'tests/__relay_preset__.mjs', 'package.json',
+    ], 'relay_init');
     await ensureDir(root);
 
     // 2) 实例化非入口模板(入口三件交给 generateEntryFiles)
@@ -367,7 +411,16 @@ export const relayOnboard = async (args = {}) => {
       'README.md': await pathExists(join(root, 'README.md')),
       verify: await pathExists(join(root, 'verify')),
     };
-    const vars = { projectName: basename(root), today: stamp().slice(0, 10), relayHome: dirname(tdir) };
+    // 项目名会进入口/协议文件并提交(审计 P0-2):先净化再密钥闸;同时做写盘前布局安全闸(P0-1)。
+    const projectName = sanitizeProjectName(basename(root), 'project');
+    const onboardNameHits = scanSecrets(projectName);
+    if (onboardNameHits.length) {
+      return err('项目目录名含疑似密钥内容,拒绝 onboard(项目名会写进入口/协议文件并提交)。修复:改用不含密钥样式的目录名后重试。');
+    }
+    const vars = { projectName, today: stamp().slice(0, 10), relayHome: dirname(tdir) };
+    await guardWriteLayout(root, [
+      ...CORE_FILES, ...DEFAULT_ENTRY_FILES, 'verify', 'README.md', '.relay/manifest.json', '.gitignore',
+    ], 'relay_onboard');
 
     // 2) 核心五件:writeFileIfAbsent;已存在的一律不碰(提示人工合并)
     const created = [];
@@ -423,13 +476,14 @@ export const relayOnboard = async (args = {}) => {
     const manifest = {
       ...old,
       version: 1,
-      projectName: basename(root),
+      projectName,
       entryFiles,
       allowedTopLevel: mergeAllowed([...(top || []), ...oldAllowed]),
       docsPhases,
       // 事实底账(T013/R10):onboard 也开启,但保留项目既有 facts 配置(不覆盖显式的 strict/since)
       facts: (old && old.facts) || { enabled: true, since: stamp(), strict: false },
-      onboardedAt: nowIso(),
+      // 幂等(审计 P2):保留既有 onboardedAt,重跑 onboard 不再因时间戳变化而重写 manifest/新建备份/新提交。
+      onboardedAt: (typeof old.onboardedAt === 'string' && old.onboardedAt) || nowIso(),
       relayHome: dirname(tdir),
     };
     await ensureDir(join(root, '.relay'));
@@ -438,8 +492,12 @@ export const relayOnboard = async (args = {}) => {
     let manifestBackup = null;
     if (await writeFileIfAbsent(manifestPath, manifestJson)) created.push('.relay/manifest.json');
     else {
-      manifestBackup = await backupFile(manifestPath);
-      await writeFile(manifestPath, manifestJson, 'utf8');
+      const prev = await readFileSafe(manifestPath, null);
+      if (prev === manifestJson) keptCore.push('.relay/manifest.json(内容一致,幂等跳过)');
+      else {
+        manifestBackup = await backupFile(manifestPath);
+        await writeFile(manifestPath, manifestJson, 'utf8');
+      }
     }
 
     // 6) git(仅已是仓库时提交;失败降级)
