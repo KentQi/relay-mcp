@@ -105,7 +105,7 @@ try {
     const sha1 = g('rev-parse', 'HEAD').stdout.trim();
     writeFileSync(path.join(mtmp, 'src', 'b.mjs'), 'export const b = 1;\nexport const c = 2;\n');
     g('add', '-A');
-    g('-c', 'user.name=t', '-c', 'user.email=t@t', 'commit', '-q', '-m', 'wip b');
+    g('-c', 'user.name=t', '-c', 'user.email=t@t', 'commit', '-q', '-m', 'T900 完成');
     const sha2 = g('rev-parse', 'HEAD').stdout.trim();
     mkdirSync(path.join(mtmp, '.relay'), { recursive: true });
     writeFileSync(path.join(mtmp, '.relay', 'manifest.json'), JSON.stringify({
@@ -129,8 +129,14 @@ try {
     ok(/R10\s*\|\s*ERROR/.test(rMode) && /自相矛盾/.test(rMode), 'mode 被篡改(managed→single)→ R10 ERROR', rMode);
     const rBranchShape = mRow((l) => l.replace('branch=relay/T900', 'branch=main'));
     ok(/R10\s*\|\s*ERROR/.test(rBranchShape), 'branch 形状非法(非 relay/)→ R10 ERROR', rBranchShape);
-    const rBranchMissing = mRow((l) => l.replace('branch=relay/T900', 'branch=relay/T901'));
-    ok(/R10\s*\|\s*WARN/.test(rBranchMissing) && /无法验证/.test(rBranchMissing), '分支不存在 → R10 WARN(不可验证,不 PASS)', rBranchMissing);
+    // 分支不存在 + 提交不是该任务的完成提交(sha1 的 message 是 wip a)→ WARN
+    logM(`- 事实(v2): mode=managed | 文件 1 | ± +2/-0 | base=${sha1} | sha=${sha1} | branch=relay/T901 || 验收: 通过 | verify: PASS 0·WARN 0·ERROR 0 | 耗时: 1s`);
+    const rBranchMissing = r10Row(cliAt(mtmp, 'relay_verify', { full: true }));
+    ok(/R10\s*\|\s*WARN/.test(rBranchMissing) && /无法验证/.test(rBranchMissing), '分支不存在且提交非完成提交 → R10 WARN(不 PASS)', rBranchMissing);
+    // 分支不存在 + 完成提交仍在当前分支历史(合并后删分支的正常生命周期)→ PASS(带注记)
+    logM(mkFact('+2/-0').replace('branch=relay/T900', 'branch=relay/T901'));
+    const rMergedDeleted = r10Row(cliAt(mtmp, 'relay_verify', { full: true }));
+    ok(/R10\s*\|\s*PASS/.test(rMergedDeleted) && /已合并删除/.test(rMergedDeleted), '分支已合并删除但完成提交仍在历史 → R10 PASS(带注记)', rMergedDeleted);
     const rBranchWrong = mRow((l) => l.replace('branch=relay/T900', 'branch=relay/T902'));
     ok(/R10\s*\|\s*ERROR/.test(rBranchWrong) && /不包含/.test(rBranchWrong), '分支存在但不含 sha → R10 ERROR(分支与提交不匹配)', rBranchWrong);
     const rSha = mRow((l) => l.replace(`sha=${sha2}`, 'sha=deadbeefdeadbeefdeadbeefdeadbeefdeadbeef'));

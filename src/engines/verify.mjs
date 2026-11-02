@@ -396,6 +396,18 @@ const branchContainsSha = async (root, sha, branch) => {
   const exists = await gitRun(root, 'rev-parse', '--verify', '--quiet', `refs/heads/${branch}`);
   return exists.ok && exists.stdout.trim() ? { state: 'not-contains' } : { state: 'missing' };
 };
+
+// 分支已合并删除是正常生命周期(人工 merge 后删分支;relay 的 cleanup 只保留分支,但人工流程允许删)。
+// 此时分支名无法验证,但可以验证两件事:① 该 sha 的提交信息含「<task> 完成」(session_end 的完成提交);
+// ② 该 sha 仍在当前分支历史里。两者同时成立才降级为 PASS(带注记),否则维持 WARN——
+// 伪造分支名、或引用历史之外的提交,仍然会被拦。
+const isMergedCompletionCommit = async (root, sha, taskId) => {
+  if (!sha || !taskId) return false;
+  const subj = await gitRun(root, '-c', 'core.quotePath=false', 'log', '-1', '--pretty=%s', sha);
+  if (!subj.ok || !new RegExp(`${taskId}\\s*完成`).test(subj.stdout)) return false;
+  const anc = await gitRun(root, 'merge-base', '--is-ancestor', sha, 'HEAD');
+  return anc.ok;
+};
 const checkR10 = async (root, cfg, snap) => {
   const facts = (cfg && cfg.facts) || { enabled: false, since: null, strict: false };
   if (!facts.enabled) {
@@ -473,6 +485,7 @@ const checkR10 = async (root, cfg, snap) => {
   // P1-3(审计):branch 必须真的与 git 对得上。
   // managed:声称的分支必须包含声明的 sha(存在但不含 → ERROR;已删除/不可读 → WARN)。
   // single:代码尚未提交,无法校验 sha 归属;但分支名至少必须真实存在(zzz/zzz、relay/T999 这类伪造 → WARN)。
+  let branchNote = '';
   if (parsed.mode === 'managed') {
     const bc = await branchContainsSha(root, parsed.sha, parsed.branch);
     if (bc.state === 'not-contains') {
@@ -480,8 +493,15 @@ const checkR10 = async (root, cfg, snap) => {
         '事实行是引擎产物,不允许手改;删除该行后重跑 relay_session_end 重写');
     }
     if (bc.state === 'missing' || bc.state === 'unverifiable') {
-      return bad('R10', 'WARN', `事实行 branch=${parsed.branch} 无法验证(${bc.state === 'missing' ? '分支不存在,可能已合并删除' : bc.detail}),数字对账无法完成`,
-        '若分支已按人工流程合并删除,把 manifest.facts.since 前移到该条目之后豁免;若分支仍在,说明事实行被篡改,删除该行后重跑 relay_session_end 重写');
+      // 合并后删分支是正常生命周期:若完成提交仍在当前分支历史且提交信息含「T### 完成」,
+      // 说明分支确实被合并后删除 → 降级为 PASS(带注记);否则维持 WARN(伪造/历史外提交)。
+      const taskId = (String(entry.task).match(/^T\d+/) || [])[0];
+      if (await isMergedCompletionCommit(root, parsed.sha, taskId)) {
+        branchNote = `,分支 ${parsed.branch} 已合并删除(完成提交 ${String(parsed.sha).slice(0, 12)} 仍在当前分支历史)`;
+      } else {
+        return bad('R10', 'WARN', `事实行 branch=${parsed.branch} 无法验证(${bc.state === 'missing' ? '分支不存在且完成提交不在当前分支历史' : bc.detail}),数字对账无法完成`,
+          '若分支已按人工流程合并删除且完成提交已进 main,本检查会放行;否则事实行被篡改,删除该行后重跑 relay_session_end 重写');
+      }
     }
   } else if (parsed.branch && parsed.branch !== '无 git' && parsed.branch !== '未知' && (!snap || !snap.git || snap.git.isRepo)) {
     const exists = await gitRun(root, 'rev-parse', '--verify', '--quiet', `refs/heads/${parsed.branch}`);
@@ -501,7 +521,7 @@ const checkR10 = async (root, cfg, snap) => {
     return bad('R10', 'ERROR', `事实行机检段与 git 事实不一致:${fails.join('; ')}`,
       '事实行是引擎产物,不允许手改;删除该行后重跑 relay_session_end 重写(机检段=mode/文件数/base/sha/branch,managed 另含 ±,叙述段=验收/verify/耗时)');
   }
-  return pass('R10', `事实对账一致(v2 机检段:${parsed.files} 文件${parsed.mode === 'managed' ? `,±+${parsed.insertions}/-${parsed.deletions}` : ''},${parsed.branch || '单根'}${parsed.mode === 'managed' ? ` 含 sha ${String(parsed.sha).slice(0, 12)}` : ''})`);
+  return pass('R10', `事实对账一致(v2 机检段:${parsed.files} 文件${parsed.mode === 'managed' ? `,±+${parsed.insertions}/-${parsed.deletions}` : ''},${parsed.branch || '单根'}${parsed.mode === 'managed' ? ` 含 sha ${String(parsed.sha).slice(0, 12)}` : ''}${branchNote})`);
 };
 
 // —— R11 协议文件敏感内容 ——

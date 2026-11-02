@@ -404,3 +404,86 @@ smoke-t021-decision.mjs   exit 1(红灯,T021)✓
 ```
 
 结论:**N1/N2 均修复**;R12 的 WARN 维持(归档引擎按 DECISIONS 推迟,触发条件 1/2),T021 仍待产品决策。
+---
+
+## 12. 合并后终检(2026-11-02,`main` = `cf397fc`)
+
+PR #8 已合并(`cf397fc` merge commit),N1/N2 在 `12269f7` 一并修完。终检仍以**实测**为准。
+
+### 12.1 N2 的 merge-SKIP:三种提交形状各自行为正确
+
+`collectGit` 的提交头加 `%P`,R5 见 `parents.length > 1` 返回显式 SKIP。实测:
+
+| HEAD 形态 | R5 判定 |
+|---|---|
+| 普通提交,只改 `src/` | `WARN 最近一次提交触碰 src/feature.js 等代码…原子性缺口` ✓ |
+| `--no-ff` merge(2 个父) | `SKIP 最近一次提交是 merge 提交(d1f4cb1489c1,2 个父)…原子性无法判定(不是通过)` ✓ |
+| merge 之后的普通提交 | `WARN 最近一次提交触碰 src/feature2.js 等代码…` ✓ |
+
+**关键点:R5 没有变成永不响的规则** —— merge 之后的第一条普通提交照常 WARN。这一点比「HEAD 是 merge 就 SKIP」的粗糙实现强得多。
+
+### 12.2 N1 的真双根冒烟
+
+`smoke-perf.mjs` 的 managed 用例改为从 `claim` 返回的 executionRoot 跑,并断言:
+
+```
+✓ 真双根 verify 通过
+✓ 确实走双根分支(不是单根快路径)
+✓ 真双根同步 spawn = 0(async 引擎)
+✓ 真双根 manifest 只读 1 次(meta 复用)
+```
+
+双根分支(此前从未被测)现在有覆盖,且 `≤ 8` 的上界测的是真实路径。
+
+### 12.3 终检状态
+
+```
+npm test(14 套并行)      16.45s,全部 exit 0;604 断言全绿(另两个红灯脚本 exit 1,符合设计)
+smoke-session-perf.mjs   exit 1(T026 红灯,不在 npm test)✓
+smoke-t021-decision.mjs  exit 1(T021 待决)✓
+relay_verify --full      PASS 9 · WARN 1(R12)· ERROR 0 · SKIP 2(R5 merge skip / R8 无工具链)
+```
+
+### 12.4 顺带核实:merge-SKIP 是否留下可利用的缺口
+
+**单根模式下,用 `--no-ff` merge 合入一个只改 `src/` 的分支,同样能让 R5 SKIP** —— 实测:
+
+```
+HEAD subject : Merge feature
+R5           : | R5 | SKIP | 最近一次提交是 merge 提交(10916e49c4e4,2 个父)…原子性无法判定(不是通过)
+```
+
+**但这不构成缺口**:R5 的契约级别是 `warn(本地提示,不阻断)`,而 `session_end` 的绿闸只拦 `result === 'ERROR'`。R5 从来就不阻断任何东西,merge-SKIP 只是让一个**建议级提示**在特定提交形态下不响,没有「解锁」任何原本锁着的东西。
+
+`docs-design/CONTRACT.md:180` 与 `src/contract.mjs:457` 都已写成「最新提交是 merge → skip(不再假 PASS)」,AGENTS.md 的 R5 行同步 —— **三处一致**,不再有 PR #6 时期「规则表与实现分家」的老问题。
+
+### 12.5 终检结论
+
+**PR #8 的 14 条发现(12 条首轮 + N1/N2)全部确认修复并有回归断言;终检未发现新的阻断性问题。** 剩下的都是登记在案的待办,不是缺陷:
+
+- **T021**:等人类的产品决定(保留 / 回退 recall/get),非技术问题。
+- **T026**:`session_start` 读放大(manifest 6 次),红灯脚本在仓,未进 npm test。
+- **R12 WARN**:LOG 175 行 > 150,按 DECISIONS 推迟归档引擎,触发条件「连续两次 WARN」现为 1/2。
+
+---
+
+## 13. 合并后清理与 R10 分支删除兼容(2026-11-02)
+
+PR #8 合并后按人类指示删除已合并的 `relay/T022`–`relay/T025` 分支与任务 worktree(worktree 目录已移除、注册表已清空、`relay_doctor` 七检全 OK)。
+
+清理暴露一个真实边界:**R10 只校验「最新完成条目」的 branch 归属,而分支被删后事实行引用的 branch 无法验证 → 每次 verify 都 WARN**。若每个任务合并后都删分支,这个 WARN 会永久存在,属于规则误报(不是篡改信号)。
+
+**修法**:R10 在 branch 缺失/不可读时增加一层「合并删除」判定——同时满足以下两条才降级为 PASS(带注记),否则维持 WARN:
+
+1. 事实行声明的 sha 的提交信息含「<T###> 完成」(session_end 的完成提交);
+2. 该 sha 仍在当前分支历史里(`git merge-base --is-ancestor <sha> HEAD`)。
+
+这样伪造分支名(`relay/T999`)、或引用历史之外的提交仍会被拦(回归 `smoke-facts`:非完成提交 → WARN;完成提交 + 在历史中 → PASS 带注记)。
+
+**实测**:清理后 `relay_verify --full` = `PASS 9 · WARN 1(R12)· ERROR 0 · SKIP 2`,R10 输出:
+
+```
+| R10 | PASS | 事实对账一致(v2 机检段:2 文件,±+10/-0,relay/T025 含 sha 93b68c161441,分支 relay/T025 已合并删除(完成提交 93b68c161441 仍在当前分支历史)) |
+```
+
+`npm test` 14 套 / 605 断言全绿;`relay_doctor` 七检全 OK(无残留 worktree/认领锁)。

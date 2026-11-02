@@ -27,7 +27,8 @@
 - **LOW**:v2 分隔符改按「空格||空格」解析(分支名含 `|`、叙述段含 `||` 均不再截断);recall 同时剥离 v1/v2 事实行前缀;任务树检查不再取提交历史(省一次 git);R12 修复文案删除「拆小任务粒度」
 - **复审 N1**:`smoke-perf` 的 managed 用例改跑**真双根**(从 executionRoot verify),断言双根分支 + `manifest` 读 1 次 + git ≤8(实测 5–7);此前 `git=2` 是单根路径误测
 - **复审 N2**:R5 在最新提交为 merge 时改为**显式 SKIP**(不再因 `git log --name-only` 不列 merge 文件而假 PASS),双根由成对证据兜底
-- 回归规模:`npm test` 14 套 / 604 断言;新增 `smoke-session-perf.mjs`(红灯,T026)登记 session_start 读放大残留
+- **合并后清理**:删除已合并任务分支后 R10 不再永久 WARN——声明分支已删除、但「T### 完成」提交仍在当前分支历史 → PASS 带注记(伪造分支名/历史外提交仍 WARN);回归 `smoke-facts`
+- 回归规模:`npm test` 14 套 / 605 断言;新增 `smoke-session-perf.mjs`(红灯,T026)登记 session_start 读放大残留
 
 ## [1.4.1] - 2026-11-01
 
