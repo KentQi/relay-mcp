@@ -83,6 +83,11 @@ try {
   const pNarr = parseFactLine('- 事实(v2): mode=single | 文件 0 | ± +0/-0 | base=- | sha=- | branch=main || 验收: 通过 || 备注: x | verify: PASS 2·WARN 1·ERROR 0 | 耗时: 3s');
   ok(pNarr && pNarr.branch === 'main' && pNarr.verifyPass === 2 && pNarr.verifyWarn === 1, "叙述段含 '||' 时保留其后内容", JSON.stringify(pNarr));
 
+  console.log('\n== single 模式 ± 是写时近似,不参与对账(P1-4 契约化) ==');
+  writeFileSync(logPath, log.replace(/± \+\d+\/-\d+/, '± +999/-999'));
+  const v6 = cli('relay_verify', { full: true });
+  ok(v6.status === 0 && /R10\s*\|\s*PASS/.test(out(v6)), 'single ± 被改不误红(契约:± 仅 managed 可复算)', out(v6).slice(0, 300));
+
   console.log('\n== managed 夹具:± 行数属机检段 ==');
   const mtmp = mkdtempSync(path.join(tmpdir(), 'relay-facts-managed-'));
   try {

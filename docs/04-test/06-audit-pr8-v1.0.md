@@ -317,6 +317,6 @@ ok(/^\| R12 \|/m.test(tpl),           'AGENTS 模板规则表含 R12 | 行');
 | P2-11 任务树 git 进程 | `runTaskTreeChecks` 只取 `ls-files`(不取提交历史) | `smoke-perf` managed 双根 git=2 ≤ 5 |
 | P2-12 R12 修复文案 | 删除「拆小任务粒度」(与阈值方向相反) | 文案断言(`/归档/`,不含错误指引) |
 
-**复测**:`npm test` 14 套 / 593 断言全绿;`relay_verify --full` = PASS 10 · WARN 1(R12,LOG 159 行 > 150)· ERROR 0;CI(node 22/24/26)全绿。
+**复测**:`npm test` 14 套 / 594 断言全绿;`relay_verify --full` = PASS 10 · WARN 1(R12,LOG 159 行 > 150)· ERROR 0;CI(node 22/24/26)全绿。
 
 **残留(已登记 T026)**:`session_start` 仍有 manifest 读 6 次 / git 7 次的读放大(同步 spawn 已清零);修复需把 manifest 配置沿 session_start 调用链单轮传递,不引入跨调用缓存。
