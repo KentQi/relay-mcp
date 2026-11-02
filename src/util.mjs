@@ -7,7 +7,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
-import { randomUUID } from 'node:crypto';
+import { randomUUID, createHash } from 'node:crypto';
 
 const execFileAsync = promisify(execFile);
 
@@ -297,10 +297,28 @@ export class ProtocolSecretError extends Error {
     this.label = label;
   }
 }
-export const writeProtocolFile = async (root, name, content, { token = '', lockLabel = '仓库写锁' } = {}) => {
+// T002:内容 CAS。锁只约束守规矩的 relay 进程;人类手改、旧版本进程、TTL 接管窗口都能绕过锁,
+// 只有「写入前重读磁盘并比对内容哈希」能让「基于旧快照的覆写」fail-closed。
+export const sha256Hex = (text) => createHash('sha256').update(String(text ?? ''), 'utf8').digest('hex');
+export class ProtocolConflictError extends Error {
+  constructor(name, { expected = '', actual = '' } = {}) {
+    super(`${name} 在读取后被其他写入者修改(内容 CAS 失败:期望 ${String(expected).slice(0, 12)}… 实际 ${String(actual).slice(0, 12)}…),已阻断写入;请重读后重试`);
+    this.name = 'ProtocolConflictError';
+    this.code = 'RELAY_CONFLICT';
+    this.file = name;
+    this.expected = expected;
+    this.actual = actual;
+  }
+}
+export const writeProtocolFile = async (root, name, content, { token = '', lockLabel = '仓库写锁', expectedHash = '' } = {}) => {
   const hits = scanSecrets(content); // 不接受标记豁免:模型可写的标记不能当绕过凭证
   if (hits.length) throw new ProtocolSecretError(hits, name);
   const target = path.join(root, name);
+  if (expectedHash) {
+    const current = await readFileSafe(target, null);
+    const actual = sha256Hex(current == null ? '' : current);
+    if (actual !== expectedHash) throw new ProtocolConflictError(name, { expected: expectedHash, actual });
+  }
   await writeFileAtomic(target, content, {
     label: name,
     fencing: token

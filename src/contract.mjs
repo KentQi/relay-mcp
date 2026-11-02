@@ -476,6 +476,7 @@ const RULES_TEXT = `# relay 规则表(R 系列)
 - **清理保护**:含未跟踪或 ignored 本地内容(\`.env\`、\`node_modules\`、构建产物)的 worktree 默认保留,不自动删;删除只走非强制 \`git worktree remove\`,分支保留。
 - **升级与迁移**:旧项目升级先跑 \`relay_sync\`(重投影入口 + 幂等补 .gitignore 运行时基线 + AGENTS 迁移指引);\`relay_onboard\` 保留既有 manifest 配置(worktree/autoCommit/acceptance/protectedPaths/entryFilesTakeover 等不被重置);claim 也会幂等补 .gitignore 基线。
 - **registry fail-closed/恢复**:\`.relay/worktrees.json\` 损坏 → 完成出场/claim fail-closed 并提示备份或删除运行时注册表(不猜测受管状态);注册表缺失且目录是 linked worktree → 完成出场拒绝,可回 controlRoot 重新 \`relay_claim {worktree:true}\` 重建登记;cleanup 对未登记目录只报告不删。
+- **协议写入 CAS**:claim/session_end 的 TASKS/LOG 写入带内容 CAS(读后写前重读比对哈希),冲突 → isError 且不写;锁防并发 relay 进程,CAS 防非协作写入者(人类手改/旧版本/TTL 接管窗口)。
 - **锁心跳与崩溃恢复(两把锁语义不同)**:仓库写锁 \`.relay/relay.lock\` 约 20s 心跳续租 + 写前 fencing(长 cleanup/出场不被 120s stale 误判,写入前发现被接管则拒绝);任务认领锁 \`.relay/claims/T###.lock\` **刻意关闭心跳**,保留 240min TTL 崩溃恢复(agent 崩溃后到期可被其他模型接管);锁为 JSON v2(兼容旧文本),model 换行/控制字符由输入净化拒收。
 - **尚未提供**:没有 claim 的 \`abort/release\`、没有按任务查询 \`status\` 的工具、没有 sessionId;可用恢复 = 认领锁 240min TTL 到期接管(可传 \`ttl_minutes\`)/ relay_session_end 出场释放 / relay_worktree_cleanup。并发会话必须用不同 model 标识(同名 model 无法区分持有者,会互锁)。
 `;

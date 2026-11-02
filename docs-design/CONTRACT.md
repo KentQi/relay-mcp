@@ -36,6 +36,7 @@
 - **AGENTS.md 迁移**:R1 无条件要求 AGENTS.md 存在且首行带 `<!-- relay:generated`。缺失 → `relay_sync` 重建;已存在无标记 → `relay_onboard`(备份 + 原正文包进 user-rules)、manifest `entryFilesTakeover:true` 后 `relay_sync`、或手工加标记;verify/sync 输出给出上述可执行选项,不再让修复指令空转。
 - **worktree 配置真值表**:`enabled` 只认 JSON 布尔 `true`(字符串 `"true"`/数字 1 静默按 false);`cacheDir` 只允许 controlRoot 内相对路径(绝对路径、`..`、盘符、控制字符、`.git` 前缀非法,在任何目录创建之前校验);`ttlHours` 非有限数/负数回退 24;`autoCleanup` 仅显式布尔 false 关闭;未知/拼错字段静默忽略;单次 `worktree:true/false` 覆盖配置。无可用 HEAD/git 时 claim 降级为单根并 WARN,不硬失败。
 - **registry 恢复**:`.relay/worktrees.json` 损坏 → 完成出场/claim fail-closed,提示备份或删除该运行时注册表(不猜测受管状态);注册表缺失且目录是 linked worktree → 完成出场拒绝,可回到 controlRoot 重新 `relay_claim {worktree:true}` 重建登记;cleanup 对未登记目录只报告不删,注册表损坏时输出恢复指引。
+- **内容 CAS(T002)**:`writeProtocolFile` 支持 `expectedHash`——写入前重读磁盘比对内容哈希,不符则 **fail-closed(不写)**;claim / session_end 在读取 TASKS/LOG 时记录哈希,写前对两个文件同时预检,任一被外部改过就整体拒绝。锁只约束守规矩的 relay 进程(人类手改、旧版本进程、TTL 接管窗口都能绕过),CAS 补上「文件还是不是我读的那份」这一维,两者互补。
 - **锁心跳与崩溃恢复(两把锁语义不同)**:仓库写锁 `.relay/relay.lock` 持锁期间约 20s 心跳续租 + 写前 fencing 校验,长 cleanup/出场不会被 120s stale 规则误判,写入前发现被接管则拒绝;任务认领锁 `.relay/claims/T###.lock` **刻意关闭心跳**,保留 240min TTL 崩溃恢复语义(agent 崩溃后到期可被其他模型接管,不因 server 进程存活而永久占用)。锁协议为 JSON v2(兼容旧文本),model 等字段的换行/控制字符由输入净化拒收,防注入不依赖心跳。
 - **尚未提供**:claim 无 abort/release,无按任务查询 status 的独立工具,无 sessionId;可用恢复 = 认领锁 240min TTL 到期接管(可传 ttl_minutes)/ relay_session_end 出场释放 / relay_worktree_cleanup。并发会话必须使用不同 model 标识,同名 model 无法区分持有者。
 

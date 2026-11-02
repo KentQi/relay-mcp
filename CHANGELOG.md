@@ -29,6 +29,7 @@
 - **复审 N2**:R5 在最新提交为 merge 时改为**显式 SKIP**(不再因 `git log --name-only` 不列 merge 文件而假 PASS),双根由成对证据兜底
 - **合并后清理**:删除已合并任务分支后 R10 不再永久 WARN——声明分支已删除、但「T### 完成」提交仍在当前分支历史 → PASS 带注记(伪造分支名/历史外提交仍 WARN);回归 `smoke-facts`
 - **R7 维护会话口径**:`task=无`(引擎无 done_task 的维护出场)与 `task=维护` 一样不计入发散窗口;否则连续几次维护出场会误触发「3 条任务会话无完成」停机;回归 `smoke.mjs`
+- **T002 写入竞争治理**:`writeProtocolFile` 增加内容 CAS(`expectedHash`)——claim/session_end 读 TASKS/LOG 后记哈希,写前对两文件同时预检,任一被外部改过(人类手改/旧版本进程/TTL 接管窗口)就整体拒绝、不写不提交;`smoke-concurrency.mjs`(14 断言)接入 `npm test`(CAS 冲突、并发认领不丢更新、幂等、无残留)
 - **T026 会话启动读放大收敛**:`relay_session_start` 的 manifest 读 6→1、LOG 2→1、TASKS 3→1(worktree 配置/自动清理/简报回显/verify 快检共用同一份内存快照);git 子进程 7 来自自动清理与未合并分支探测,非读放大;`smoke-session-perf.mjs` 由红灯转绿并接入 `npm test`
 - **LOG 归档(人工执行一次)**:R12 连续 WARN 触发 T001——20 条历史条目搬入 `docs/archive/LOG-2026-09-11.md` 并在 LOG.md 留指针,R12 转 PASS;自动化归档引擎仍推迟(控制面白名单/PROTOCOL_FILES/R11 扫描面需同步扩展)
 - **R10 单根定位**:单根事实行没有 sha 时按「T### 完成」反查完成提交,完成之后的普通维护提交(归档/changelog)不再让 R10 失去定位能力;回归 `smoke-facts`

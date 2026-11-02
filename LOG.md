@@ -1,5 +1,12 @@
 # 会话日志(最新在上)
 
+## 2026-11-02 16:22 | model=dsh-lead-deepseek-v4.1 | task=T002 完成
+- 摘要: T002 写入竞争治理:钢人论证后采纳「仓库锁 + 内容 CAS」——writeProtocolFile 增加 expectedHash,claim/session_end 读 TASKS/LOG 时记哈希、写前双文件预检,任一被外部改过就 fail-closed 不写不提交;新增 smoke-concurrency(14 断言:CAS 冲突不覆盖/无半写、并发认领两条不丢、幂等、无残留)并接入 npm test;16 套 627 断言全绿
+- 事实(v2): mode=single | 文件 9 | ± +80/-15 | base=- | sha=- | branch=main || 验收: 通过 | verify: PASS 11·WARN 0·ERROR 0 | 耗时: 33s
+- 负结果: T002 的前提已过期:claim/session_end 早就有仓库锁+fencing,真正的缺口是 CAS 与确定性回归;不先读代码就照任务描述改,会重复实现已有机制
+- 负结果: 内容 CAS 必须对 TASKS 和 LOG 同时预检:只做单文件 CAS 会留下「TASKS 已写、LOG 冲突」的半写状态
+- 留给下一个: 钢人论证采纳「独立工具 relay_archive_log(默认 dry-run)+ 保留人工确认」,否决 session_end 自动归档(绿闸不应改写历史);须同步扩展控制面提交白名单(docs/archive/LOG-*.md)、PROTOCOL_FILES 与 R11 扫描面。
+
 ## 2026-11-02 16:09 | model=dsh-lead-deepseek-v4.1 | task=T026 完成
 - 摘要: T026 session_start 读放大收敛:manifest 6→1、LOG 2→1、TASKS 3→1——manifest 解析一次后沿 worktree 配置/自动清理/简报回显/verify 快检验证链传递,LOG/TASKS 读一次后通过 runChecks({meta,texts}) 复用;不引入跨调用缓存。smoke-session-perf 由红灯转绿并接入 npm test(6 断言),全量 15 套 613 断言全绿
 - 事实(v2): mode=single | 文件 8 | ± +41/-28 | base=- | sha=- | branch=main || 验收: 通过 | verify: PASS 11·WARN 0·ERROR 0 | 耗时: 30s

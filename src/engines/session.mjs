@@ -10,9 +10,9 @@
 import {
   acquireFileLock, acquireRepoLock, checkProtocolFilesSafe, parseLockContent, readFileSafe, isGitRepoAsync, gitIdentityArgs,
   gitRun, findSensitiveChanges, releaseFileLock, stamp, nowIso, templatesDir,
-  writeProtocolFile, scanSecrets, SECRET_OK_MARKER,
+  writeProtocolFile, scanSecrets, SECRET_OK_MARKER, sha256Hex,
 } from '../util.mjs';
-import { stat as fsStat } from 'node:fs/promises';
+import { stat as fsStat, writeFile as fsWriteFile } from 'node:fs/promises';
 import { join, resolve, sep } from 'node:path';
 import { execFile, exec } from 'node:child_process';
 import { promisify } from 'node:util';
@@ -743,7 +743,10 @@ export const relayClaim = async (args = {}) => {
   try {
   const fence0 = await claimLock.check();
   if (!fence0.held) return fail(`仓库写锁在认领期间被接管(${fence0.warning || '锁已不属于当前会话'}),未做任何写入;请重试。`);
-  const lines = await readLines(join(root, 'TASKS.md'));
+  // T002:读一次原文并留哈希,写入前做内容 CAS(防人类手改 / 旧版本进程 / 接管窗口的丢更新)。
+  const tasksRaw = await readText(join(root, 'TASKS.md'));
+  const tasksHash = sha256Hex(tasksRaw == null ? '' : tasksRaw);
+  const lines = tasksRaw == null ? null : tasksRaw.replace(/\r\n/g, '\n').split('\n');
   if (lines == null) {
     return fail('未找到 TASKS.md:该仓库尚未接入接力协议。', ['', '修复: 先 relay_init(0→1)或 relay_onboard(老项目)。']);
   }
@@ -840,8 +843,14 @@ export const relayClaim = async (args = {}) => {
   const blockLines = [`- [~] ${p.id} ${p.title}  (${model}, ${stamp()})`, ...lines.slice(idx + 1, range.end)];
   lines.splice(idx, range.end - idx);
   insertIntoSection(lines, '进行中', blockLines);
-  // TASKS.md 原子写(tmp+rename)并带 fencing:TASKS 是任务队列唯一事实源,不能被半写截断。
-  await writeProtocolFile(root, 'TASKS.md', tidy(lines), { token: claimLock.token, lockLabel: '仓库写锁' });
+  // 测试专用(T002):模拟「读完 TASKS 后被外部写入者修改」,用于确定性验证内容 CAS;
+  // 仅当 RELAY_TEST_EXTERNAL_TASKS_WRITE 存在时生效,生产路径无此变量、行为不变。
+  if (process.env.RELAY_TEST_EXTERNAL_TASKS_WRITE) {
+    await fsWriteFile(join(root, 'TASKS.md'), process.env.RELAY_TEST_EXTERNAL_TASKS_WRITE, 'utf8');
+  }
+  // TASKS.md 原子写(tmp+rename)并带 fencing + 内容 CAS:TASKS 是任务队列唯一事实源,
+  // 不能被半写截断,也不能用旧快照覆写别人的更新。
+  await writeProtocolFile(root, 'TASKS.md', tidy(lines), { token: claimLock.token, lockLabel: '仓库写锁', expectedHash: tasksHash });
   const executionRoot = taskWorktree?.path || root;
   let unmergedBranches = [];
   try { unmergedBranches = await listUnmergedTaskBranches(root); } catch { /* 只读提示,失败不阻断认领 */ }
@@ -1272,7 +1281,10 @@ export const relaySessionEnd = async (args = {}) => {
   // 3. 更新 TASKS.md
   const changes = [];
   const tasksPath = join(root, 'TASKS.md');
-  let tLines = await readLines(tasksPath);
+  // T002:读原文并留哈希,写前做内容 CAS(防人类手改 / 旧版本进程 / 接管窗口的丢更新)。
+  const tasksRawBefore = await readText(tasksPath);
+  const tasksHashBefore = sha256Hex(tasksRawBefore == null ? '' : tasksRawBefore);
+  let tLines = tasksRawBefore == null ? null : tasksRawBefore.replace(/\r\n/g, '\n').split('\n');
   if (tLines == null) { tLines = await baseTemplateLines('TASKS.md'); changes.push('TASKS.md 不存在,已按模板重建'); }
   const date = stamp().slice(0, 10);
 
@@ -1329,12 +1341,36 @@ export const relaySessionEnd = async (args = {}) => {
     out.push(tasksSecret);
     return { content: [{ type: 'text', text: out.join('\n') }], isError: true };
   }
-  await writeProtocolFile(root, 'TASKS.md', tasksText, { token: exitLock.token, lockLabel: '仓库写锁' });
-
-  // 4. 更新 LOG.md(顶部、标题行之后)
+  // 4. 先读 LOG.md 原文(与 TASKS 一起做 CAS 预检;LOG 条目在下方构造)
   const logPath = join(root, 'LOG.md');
-  let lLines = await readLines(logPath);
+  const logRawBefore = await readText(logPath);
+  const logHashBefore = sha256Hex(logRawBefore == null ? '' : logRawBefore);
+  let lLines = logRawBefore == null ? null : logRawBefore.replace(/\r\n/g, '\n').split('\n');
   if (lLines == null) { lLines = await baseTemplateLines('LOG.md'); changes.push('LOG.md 不存在,已按模板重建'); }
+  // 测试专用(T002):模拟读完 TASKS/LOG 之后被外部写入者修改;仅当 RELAY_TEST_EXTERNAL_* 存在时生效。
+  if (process.env.RELAY_TEST_EXTERNAL_TASKS_WRITE) {
+    await fsWriteFile(join(root, 'TASKS.md'), process.env.RELAY_TEST_EXTERNAL_TASKS_WRITE, 'utf8');
+  }
+  if (process.env.RELAY_TEST_EXTERNAL_LOG_WRITE) {
+    await fsWriteFile(join(root, 'LOG.md'), process.env.RELAY_TEST_EXTERNAL_LOG_WRITE, 'utf8');
+  }
+  // T002:写前对 TASKS/LOG 同时做内容 CAS 预检——任一文件在读取后被外部改过就整体拒绝,
+  // 避免「TASKS 已写、LOG 冲突」的半写状态。
+  const casCheck = async (name, expected) => {
+    const cur = await readFileSafe(join(root, name), null);
+    const actual = sha256Hex(cur == null ? '' : cur);
+    return actual === expected ? null : { name, expected, actual };
+  };
+  const conflict = (await casCheck('TASKS.md', tasksHashBefore)) || (await casCheck('LOG.md', logHashBefore));
+  if (conflict) {
+    out.push('## 出场冲突:未提交 — TASKS/LOG 已被其他写入者修改', '',
+      `${conflict.name} 在本次出场读取后被修改(内容 CAS 失败:期望 ${conflict.expected.slice(0, 12)}… 实际 ${conflict.actual.slice(0, 12)}…)。按 fail-closed **未写入任何文件、未提交**。`, '',
+      '修复:重新运行 relay_session_end(会重读 TASKS/LOG 后重建本次更新);不要手工合并或覆盖对方改动。');
+    return { content: [{ type: 'text', text: out.join('\n') }], isError: true };
+  }
+  await writeProtocolFile(root, 'TASKS.md', tasksText, { token: exitLock.token, lockLabel: '仓库写锁', expectedHash: tasksHashBefore });
+
+  // 5. 写入 LOG.md(顶部、标题行之后;lLines 已在上面读取)
   // 注意:未完成时的 task 字段不得包含「完成」子串,否则会干扰 R7/R9 的判定
   // 维护会话(onboard/开源化/引擎迁移等基础设施工作)不对应 TASKS 任务:
   // task=维护 且不计入 R7 发散窗口(否则探测类会话挂 task=无 会被误判为停滞)
@@ -1380,7 +1416,7 @@ export const relaySessionEnd = async (args = {}) => {
       out.push(logSecret);
       return { content: [{ type: 'text', text: out.join('\n') }], isError: true };
     }
-    await writeProtocolFile(root, 'LOG.md', logTextOut, { token: exitLock.token, lockLabel: '仓库写锁' });
+    await writeProtocolFile(root, 'LOG.md', logTextOut, { token: exitLock.token, lockLabel: '仓库写锁', expectedHash: logHashBefore });
     changes.push(`LOG.md: 顶部新增条目「${entry[0]}」`);
   } else {
     changes.push('LOG.md: 最新条目即本次出场(幂等跳过,不重复记录)');
