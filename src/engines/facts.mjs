@@ -194,7 +194,7 @@ export const parseFactLine = (text) => {
  * 注意:v1 旧行不得走「行自带的 base/sha」——那等于让被校验方自选 range(审计 P0-2);
  * R10 对 v1 只做结构校验并 WARN,数字权威仅 v2 机检段。
  */
-export const recomputeCommitStats = async (root, parsed, { isRepo = undefined, headSubject = null } = {}) => {
+export const recomputeCommitStats = async (root, parsed, { isRepo = undefined, headSubject = null, completionSha = '' } = {}) => {
   if (isRepo === false) return null;
   if (isRepo === undefined && !(await isGitRepoAsync(root))) return null;
   let range = null;
@@ -203,8 +203,12 @@ export const recomputeCommitStats = async (root, parsed, { isRepo = undefined, h
     range = parsed.base && /^[0-9a-f]{7,40}$/.test(parsed.base)
       ? [`${parsed.base}..${parsed.sha}`]
       : [`${parsed.sha}^`, parsed.sha];
+  } else if (completionSha && /^[0-9a-f]{7,40}$/.test(completionSha)) {
+    // 单根:事实行没有 sha,由 R10 按「<T###> 完成」反查完成提交后传入。
+    // 不依赖 HEAD —— 完成之后的普通维护提交(归档、changelog 等)不应让 R10 失去定位能力。
+    range = [`${completionSha}^`, completionSha];
   } else {
-    // 单根:HEAD 就是本次完成提交。优先用快照里已有的 subject(T022),否则才单独起 git log。
+    // 兼容:没有 completionSha 时退回「HEAD 就是完成提交」的老路径(需要 HEAD subject 含「T### 完成」)。
     let subject = headSubject;
     if (subject == null) {
       const msg = await gitRun(root, 'log', '-1', '--pretty=%s');

@@ -2,7 +2,7 @@
 // T013/T023 冒烟:事实底账 v2(机检段/叙述段)+ R10 对账 + fail-open 修复。
 // 用 CLI 而非 MCP 客户端:验证引擎判定;传输层由 smoke.mjs 覆盖。
 import { spawnSync } from 'node:child_process';
-import { mkdtempSync, rmSync, readFileSync, writeFileSync, mkdirSync } from 'node:fs';
+import { mkdtempSync, rmSync, readFileSync, writeFileSync, mkdirSync, appendFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -75,6 +75,14 @@ try {
   ok(v4.status === 1, '单根行带 sha → 退出码 1', out(v4).slice(0, 300));
   ok(/R10\s*\|\s*ERROR/.test(out(v4)), 'R10 ERROR(机检段自相矛盾)');
   ok(/自相矛盾/.test(out(v4)), '文案指明机检段自相矛盾(不靠 git 也能发现篡改)');
+
+  console.log('\n== 单根:完成提交之后又有普通提交,R10 仍能定位完成提交 ==');
+  writeFileSync(logPath, log); // 恢复干净事实行(前面用例会篡改 LOG)
+  appendFileSync(path.join(tmp, 'README.md'), '\n<!-- post-completion maintenance -->\n');
+  gitAt(tmp, 'add', '-A');
+  gitAt(tmp, '-c', 'user.name=t', '-c', 'user.email=t@t', 'commit', '-q', '-m', 'docs: 完成后的普通提交');
+  const vPost = cli('relay_verify', { full: true });
+  ok(/R10\s*\|\s*PASS/.test(out(vPost)), '完成提交之后有普通提交,R10 仍 PASS(按「T### 完成」反查,不依赖 HEAD)', out(vPost).slice(0, 400));
 
   console.log('\n== 解析器边界:| 与 ||(审计 P2-8/P2-9)==');
   const pPipe = parseFactLine('- 事实(v2): mode=managed | 文件 1 | ± +1/-0 | base=abc1234 | sha=def5678 | branch=relay/T1|x || 验收: 通过 | verify: PASS 1·WARN 0·ERROR 0 | 耗时: 1s');

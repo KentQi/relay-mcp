@@ -29,7 +29,9 @@
 - **复审 N2**:R5 在最新提交为 merge 时改为**显式 SKIP**(不再因 `git log --name-only` 不列 merge 文件而假 PASS),双根由成对证据兜底
 - **合并后清理**:删除已合并任务分支后 R10 不再永久 WARN——声明分支已删除、但「T### 完成」提交仍在当前分支历史 → PASS 带注记(伪造分支名/历史外提交仍 WARN);回归 `smoke-facts`
 - **R7 维护会话口径**:`task=无`(引擎无 done_task 的维护出场)与 `task=维护` 一样不计入发散窗口;否则连续几次维护出场会误触发「3 条任务会话无完成」停机;回归 `smoke.mjs`
-- 回归规模:`npm test` 14 套 / 606 断言;新增 `smoke-session-perf.mjs`(红灯,T026)登记 session_start 读放大残留
+- **LOG 归档(人工执行一次)**:R12 连续 WARN 触发 T001——20 条历史条目搬入 `docs/archive/LOG-2026-09-11.md` 并在 LOG.md 留指针,R12 转 PASS;自动化归档引擎仍推迟(控制面白名单/PROTOCOL_FILES/R11 扫描面需同步扩展)
+- **R10 单根定位**:单根事实行没有 sha 时按「T### 完成」反查完成提交,完成之后的普通维护提交(归档/changelog)不再让 R10 失去定位能力;回归 `smoke-facts`
+- 回归规模:`npm test` 14 套 / 607 断言;新增 `smoke-session-perf.mjs`(红灯,T026)登记 session_start 读放大残留
 
 ## [1.4.1] - 2026-11-01
 

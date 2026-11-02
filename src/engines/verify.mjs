@@ -474,9 +474,19 @@ const checkR10 = async (root, cfg, snap) => {
       '事实行是引擎产物,不允许手改;删除该行后重跑 relay_session_end 重写(机检段=mode/文件数/base/sha/branch)');
   }
   // 复用快照里的 git 结果:不再单独起 isGitRepo / git log(R10 只需一次 diff)
+  // 单根 v2 事实行没有 sha:按「<T###> 完成」反查完成提交(1 次 git),否则完成之后的普通提交会让 R10 失去定位。
+  let completionSha = '';
+  if (parsed.mode === 'single' && !parsed.sha) {
+    const taskId = (String(entry.task).match(/^T\d+/) || [])[0];
+    if (taskId) {
+      const g = await gitRun(root, '-c', 'core.quotePath=false', 'log', '-1', '--fixed-strings', '--format=%H', '--grep', `${taskId} 完成`);
+      if (g.ok && g.stdout.trim()) completionSha = g.stdout.trim().split('\n')[0].trim();
+    }
+  }
   const stats = await recomputeCommitStats(root, parsed, {
     isRepo: snap && snap.git ? snap.git.isRepo : undefined,
     headSubject: snap && snap.git && snap.git.commits[0] ? snap.git.commits[0].subject : null,
+    completionSha,
   });
   if (!stats) {
     // T023:fail-open 修复 —— 「算不了」绝不能 PASS(未验证的确信比空白更危险);
