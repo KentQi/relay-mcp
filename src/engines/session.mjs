@@ -428,11 +428,16 @@ export const relaySessionStart = async (args = {}) => {
   const root = roots.controlRoot;
   const executionRoot = roots.executionRoot;
   // 简报预算(T015):只读配置,用于「字段上限 + 溢出显式告警」;绝不裁剪段落。
+  // T026:manifest / LOG / TASKS 在本轮只读一次——后续 worktree 配置、自动清理、
+  // 依赖隔离回显、verify 快检全部复用这份内存快照(不引入跨调用缓存,只在本函数内传递)。
   const briefCfg = await readManifestConfig(root);
+  const manifest = briefCfg.manifest;
+  const logText = await readText(join(root, 'LOG.md'));
+  const tasksText = await readText(join(root, 'TASKS.md'));
   // 生效配置回显(P2-23):worktree 由 worktree.mjs 单独解析,必须回显真实生效值,
   // 否则 manifest 写成字符串 "true"(静默失效)时简报会误导 agent 以为 worktree 已开启。
   let briefWt = null;
-  try { briefWt = await readWorktreeConfig(root); } catch { briefWt = null; }
+  try { briefWt = await readWorktreeConfig(root, { manifest }); } catch { briefWt = null; }
   const startText = await readText(join(root, 'START.md'));
   if (startText == null) {
     return {
@@ -460,9 +465,9 @@ export const relaySessionStart = async (args = {}) => {
       lifecycleNotes.push(`- ⚠ linked worktree 未登记(registryState=${roots.registryState}):完成出场将被 fail-closed 拒绝;${registryRecoveryHint(root, roots.registryState)}`);
     }
     try {
-      const wtConfig = await readWorktreeConfig(root);
+      const wtConfig = await readWorktreeConfig(root, { manifest });
       if (wtConfig.enabled && wtConfig.autoCleanup) {
-        const cleaned = await cleanupWorktrees(root, { confirm: true, currentRoot: executionRoot });
+        const cleaned = await cleanupWorktrees(root, { confirm: true, currentRoot: executionRoot, manifest, tasksText });
         lifecycleNotes.push(`- 自动清理: 移除 ${cleaned.removed.length} 个,保留 ${cleaned.kept.length} 个,错误 ${cleaned.errors.length} 个${cleaned.errors.length ? '(不阻断简报)' : ''}`);
       }
     } catch (e) {
@@ -471,7 +476,7 @@ export const relaySessionStart = async (args = {}) => {
   }
   // 依赖隔离 + 未合并分支:双根的核心认知,必须在进场时就说清
   try {
-    const wtCfg = await readWorktreeConfig(root);
+    const wtCfg = await readWorktreeConfig(root, { manifest });
     if (wtCfg.enabled) {
       lifecycleNotes.push('- 依赖隔离:任务 worktree 不携带 node_modules/.env 等 gitignored 文件;需要依赖时在 executionRoot 内安装(或 symlink),不要依赖 controlRoot 的旧依赖(嵌套目录可能被 Node 向上解析到 controlRoot/node_modules)');
     }
@@ -480,8 +485,7 @@ export const relaySessionStart = async (args = {}) => {
   try { unmergedBranches = await listUnmergedTaskBranches(root); } catch { /* 只读提示,失败不阻断 */ }
 
   const specText = await readText(join(root, 'SPEC.md'));
-  const tasksLines = (await readLines(join(root, 'TASKS.md'))) || [];
-  const logText = await readText(join(root, 'LOG.md'));
+  const tasksLines = tasksText == null ? [] : tasksText.replace(/\r\n/g, '\n').split('\n');
   const decisionsText = await readText(join(root, 'DECISIONS.md'));
 
   // START/SPEC 摘录
@@ -579,8 +583,8 @@ export const relaySessionStart = async (args = {}) => {
     if (lg.ok) recentCommits = lg.stdout.split('\n').map((s) => s.trim()).filter(Boolean);
   }
 
-  // verify 快检(fast:跳过 R5/R6/R8)
-  const checks = await runChecks(root, { full: false });
+  // verify 快检(fast:跳过 R5/R6/R8);复用本函数已读的 manifest/LOG/TASKS(单轮读取各 1 次)
+  const checks = await runChecks(root, { full: false, meta: { manifest, cfg: briefCfg }, texts: { logText, tasksText } });
   const errors = checks.filter((c) => c.result === 'ERROR');
   // SKIP 项折叠为单行(认知审计:R5/R6/R8 三条重复提示占简报中部注意力,信息增益≈0)
   const skips = checks.filter((c) => c.result === 'SKIP');

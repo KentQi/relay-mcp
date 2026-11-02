@@ -79,10 +79,13 @@ const collectGit = async (root, { commits = true } = {}) => {
   return ctx;
 };
 
-const collectSnapshot = async (root, preloadedMeta = null) => {
+const collectSnapshot = async (root, preloadedMeta = null, preloadedTexts = null) => {
   const meta = preloadedMeta || await collectMeta(root);
-  const logText = await readText(join(root, 'LOG.md'));
-  const tasksText = await readText(join(root, 'TASKS.md'));
+  // T026:调用方(relay_session_start)已经把 LOG/TASKS 读进内存时直接复用,单轮读取恒为 1。
+  const logText = preloadedTexts && preloadedTexts.logText !== undefined
+    ? preloadedTexts.logText : await readText(join(root, 'LOG.md'));
+  const tasksText = preloadedTexts && preloadedTexts.tasksText !== undefined
+    ? preloadedTexts.tasksText : await readText(join(root, 'TASKS.md'));
   const git = await collectGit(root);
   return { ...meta, logText, tasksText, git };
 };
@@ -625,10 +628,11 @@ export const runTaskTreeChecks = async (executionRoot, controlRoot = executionRo
 };
 
 // —— 检查编排:fast(默认)跳过 R5/R6/R8 ——
-export const runChecks = async (root, { full = false, meta: preloadedMeta = null } = {}) => {
+export const runChecks = async (root, { full = false, meta: preloadedMeta = null, texts: preloadedTexts = null } = {}) => {
   // T022:单轮 verify 只读一次 LOG/TASKS/manifest,git 子进程收敛到必要数量;
   // 所有检查消费同一份快照(同一条日志不会在 R7 与 R10 下看到不同版本)。
-  const snap = await collectSnapshot(root, preloadedMeta);
+  // T026:relay_session_start 已把 LOG/TASKS/manifest 读进内存时,通过 { meta, texts } 透传,避免二次读盘。
+  const snap = await collectSnapshot(root, preloadedMeta, preloadedTexts);
   const { manifest, cfg } = snap;
   const fastSkip = (id, name) => skip(id, `fast 模式跳过 ${name}`, '出场(relay_session_end)会全量执行;需要立即全量:relay_verify {full:true}');
   return [

@@ -1,5 +1,12 @@
 # 会话日志(最新在上)
 
+## 2026-11-02 16:09 | model=dsh-lead-deepseek-v4.1 | task=T026 完成
+- 摘要: T026 session_start 读放大收敛:manifest 6→1、LOG 2→1、TASKS 3→1——manifest 解析一次后沿 worktree 配置/自动清理/简报回显/verify 快检验证链传递,LOG/TASKS 读一次后通过 runChecks({meta,texts}) 复用;不引入跨调用缓存。smoke-session-perf 由红灯转绿并接入 npm test(6 断言),全量 15 套 613 断言全绿
+- 事实(v2): mode=single | 文件 8 | ± +41/-28 | base=- | sha=- | branch=main || 验收: 通过 | verify: PASS 11·WARN 0·ERROR 0 | 耗时: 30s
+- 负结果: T026 的 6 次读不是设计,是五个功能各自 readManifestConfig/readWorktreeConfig + cleanupWorktrees 内部 activeTaskIds 再读一次;修法是「本函数内传递」而不是模块级缓存
+- 负结果: session_start 的 git 7 次来自自动清理(git worktree list)与未合并分支探测,属于另外两个功能,不要混进「读放大」指标里一起判
+- 留给下一个: 钢人评审更正:claim/session_end 已用 acquireRepoLock 包裹读改写(T010),真实缺口是「无内容 CAS + 无确定性并发回归」。方案:writeProtocolFile 增加 expectedHash(写入前重读比对,不符 fail-closed);测试用 RELAY_TEST_* 钩子模拟外部写入,零 sleep 零竞速。
+
 ## 2026-11-02 14:35 | model=dsh-lead-deepseek-v4.1 | task=T021 完成
 - 摘要: T021 检索寻址收益复核:结论保留 relay_recall/relay_get。数据闸已过(LOG 28 条/完成条目 18 条);DECISIONS 新增条目锚定 T017 完成提交 8a1ed24 与当时的闸门测量,写明复评阈值(LOG ≥30 条或任一项目反馈取回失败)与回退方式(移除两工具注册);smoke-t021-decision.mjs 转绿
 - 事实(v2): mode=single | 文件 1 | ± +7/-0 | base=- | sha=- | branch=main || 验收: 通过 | verify: PASS 10·WARN 1·ERROR 0 | 耗时: 33s

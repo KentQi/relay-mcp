@@ -303,6 +303,7 @@ export const startServer = async ({ onInit, onMethod }) => {
 - **git 收敛**:repo 探测走 `isGitRepoAsync`(root/.git 是目录或文件 → 零子进程;否则回退 `git rev-parse`,兼容「root 是仓库子目录」);R2 用一次 `git ls-files -z --cached --others --exclude-standard` 同时拿已跟踪+未跟踪;R5/R6 共用一次 `git log -20 --name-only`;R10 复用快照的 HEAD subject,只额外起一次 diff。
 - **根解析快路径**:`resolveRelayRoots` 在 `root/.git` 是**目录**时直接返回(普通仓库,省 2 个 git);linked worktree 的 `.git` 是**文件**,继续走 git 解析,不丢双根语义。
 - **计数可观测(测试专用)**:设置 `RELAY_TRACE_FILE` 时,进程退出写 `{reads, git, sync}` 计数;生产行为不变。`scripts/smoke-perf.mjs` 用它做**确定性断言**,不用计时阈值(CI 抖动不会造成假红)。
+- **单快照扩展到会话启动(T026)**:`relay_session_start` 的 manifest / LOG / TASKS 各读 **1** 次——worktree 配置、自动清理、依赖隔离回显、简报渲染、verify 快检全部复用同一份内存快照;不引入跨调用缓存(manifest 在会话之间可变,跨调用缓存=第二真相源)。`smoke-session-perf.mjs` 用 `RELAY_TRACE_FILE` 做确定性断言。
 - **async 路径禁止同步 git 探测**:同步 `isGitRepo()`(execFileSync)已从 `src/util.mjs` 删除,全部引擎(verify/facts/session/claim/doctor/bootstrap/restructure)统一走 `isGitRepoAsync`;`smoke-perf` 对整棵 `src/` 做静态断言(无 `execFileSync`、无同步 `isGitRepo(` 调用),长驻 MCP 进程不再被同步 spawn 冻结。
 - **规模不变量**:LOG 20/100/500 条时,读次数(1/1/1)与 git 进程数不变,R1–R12 **判定结果**一致(R7 详情里的「另排除 N 条维护条目」随规模变化属正常,不作断言)。
 ## 2026-11-01 T023 补充契约(事实行 v2 / R10 去 fail-open)

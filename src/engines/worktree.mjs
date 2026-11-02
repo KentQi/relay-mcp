@@ -44,8 +44,9 @@ const normalizeCacheDir = (value) => {
 
 // 无校验读取:供 claim 判定「是否启用」与「显式 worktree:false 时完全跳过配置校验」使用。
 // cacheDirProvided 区分「manifest 显式写了 cacheDir(哪怕是空串/null,要拒绝)」与「缺省(用默认值)」。
-export const readWorktreeConfigRaw = async (root) => {
-  const cfg = await readManifestConfig(root);
+// T026:manifest 可由调用方预解析传入,避免同一轮会话里重复读盘(单轮 manifest 读取恒为 1)。
+export const readWorktreeConfigRaw = async (root, { manifest } = {}) => {
+  const cfg = await readManifestConfig(root, { manifest });
   const raw = cfg.manifest && cfg.manifest.worktree && typeof cfg.manifest.worktree === 'object'
     ? cfg.manifest.worktree : {};
   const ttl = Number(raw.ttlHours);
@@ -59,8 +60,8 @@ export const readWorktreeConfigRaw = async (root) => {
   };
 };
 
-export const readWorktreeConfig = async (root) => {
-  const raw = await readWorktreeConfigRaw(root);
+export const readWorktreeConfig = async (root, { manifest } = {}) => {
+  const raw = await readWorktreeConfigRaw(root, { manifest });
   if (raw.cacheDirProvided && typeof raw.cacheDirRaw !== 'string') {
     throw new Error(`worktree.cacheDir 必须是字符串相对路径,收到 ${JSON.stringify(raw.cacheDirRaw).slice(0, 40)}。修复:改为 controlRoot 内的相对路径(默认 .relay/worktrees)`);
   }
@@ -447,8 +448,8 @@ const registryRecordMismatch = (record, recordPath, cacheDir) => {
   return '';
 };
 
-const activeTaskIds = async (controlRoot) => {
-  const raw = await readFileSafe(path.join(controlRoot, 'TASKS.md'), '');
+const activeTaskIds = async (controlRoot, preloadedText = null) => {
+  const raw = preloadedText != null ? preloadedText : await readFileSafe(path.join(controlRoot, 'TASKS.md'), '');
   const active = new Set();
   for (const line of String(raw || '').replace(/\r\n/g, '\n').split('\n')) {
     const m = line.match(TASK_LINE_RE);
@@ -472,7 +473,7 @@ export const cleanupWorktrees = async (controlRoot, options = {}) => {
     return report;
   }
   try {
-    const cfg = await readWorktreeConfig(controlRoot);
+    const cfg = await readWorktreeConfig(controlRoot, { manifest: options.manifest });
     const ttlHours = Number.isFinite(Number(options.ttlHours)) && Number(options.ttlHours) >= 0
       ? Number(options.ttlHours) : cfg.ttlHours;
     const nowValue = options.now instanceof Date ? options.now.getTime()
@@ -484,7 +485,7 @@ export const cleanupWorktrees = async (controlRoot, options = {}) => {
     if (!contained(rootReal, cacheReal)) throw new Error(`缓存目录通过符号链接逃出 controlRoot:${cfg.cacheDir}`);
     const currentReal = options.currentRoot ? await realPath(options.currentRoot) : rootReal;
     const registry = await readWorktreeRegistry(controlRoot);
-    const active = await activeTaskIds(controlRoot);
+    const active = await activeTaskIds(controlRoot, options.tasksText);
     const listed = await gitRun(controlRoot, 'worktree', 'list', '--porcelain');
     if (!listed.ok) throw new Error(`git worktree list 失败:${listed.stderr || listed.stdout}`);
     let gitEntries = [];
