@@ -10,6 +10,8 @@ import { gitRun, isGitRepoAsync } from '../util.mjs';
 // 中间用 "||" 分隔;v1 旧行仍可解析(只对账文件数),保证升级不误报。
 export const FACT_LINE_PREFIX = '- 事实(v2):';
 export const FACT_LINE_RE = /^- 事实\(v([12])\):\s*(.*)$/;
+// 剥离 v1/v2 两种前缀(recall 等消费方共用):只认 v2 前缀会把升级前的 v1 行原样吐出来。
+export const FACT_LINE_PREFIX_RE = /^- 事实\(v[12]\):\s*/;
 // 协议文件不计入「改动文件数」:它们由控制面提交维护,不是本次任务的代码事实。
 const PROTOCOL_FILES = new Set(['TASKS.md', 'LOG.md']);
 
@@ -97,7 +99,8 @@ export const deriveFacts = async ({
 };
 
 /** 事实行(v2):由引擎写入,模型不得手写或改写(R10 会拦)。
- *  机检段 = mode/文件数/±/base/sha/branch(检查时点全部可从 git 重算);
+ *  机检段 = mode/文件数/base/sha/branch(检查时点可从 git 重算;± 仅 managed 可复算——
+ *  单根写 ± 时未跟踪文件还没进 numstat,提交后才可得,故 single 的 ± 不构成机检字段);
  *  叙述段 = 验收结果/verify 汇总/耗时(写时快照,重算不出,不构成交接证据)。 */
 export const formatFactLine = (f) => {
   const mode = f.mode === 'managed' ? 'managed' : 'single';
@@ -114,7 +117,12 @@ export const parseFactLine = (text) => {
   const version = Number(m[1]);
   const body = m[2];
   if (version === 2) {
-    const [machineRaw = '', narrativeRaw = ''] = body.split('||');
+    // P2-8/P2-9(审计):分隔符必须是「空格||空格」。用 split('||') 会把含 '|' 的分支名截断
+    // (git 允许分支名含 '|'),叙述段里出现 '||' 也会被丢段;改用首个 ' || ' 切分,
+    // 机检段内部不再受 '|' 影响,叙述段保留其后全部内容。
+    const sep = body.indexOf(' || ');
+    const machineRaw = sep < 0 ? body : body.slice(0, sep);
+    const narrativeRaw = sep < 0 ? '' : body.slice(sep + 4);
     const machine = machineRaw.trim();
     const narrative = narrativeRaw.trim();
     const num = (re, src) => {
@@ -128,7 +136,8 @@ export const parseFactLine = (text) => {
     const del = num(/\/-\s*(\d+)/, machine);
     const baseM = machine.match(/base=([0-9a-f]{7,40}|-)/);
     const shaM = machine.match(/sha=([0-9a-f]{7,40}|-)/);
-    const branchM = machine.match(/branch=([^|]+?)\s*$/);
+    // 机检段已在 ' || ' 处切开,这里可贪婪取到行尾:分支名允许含 '|'(空格不允许,故不会吃掉叙述段)。
+    const branchM = machine.match(/branch=(.+?)\s*$/);
     return {
       version: 2,
       mode: modeM ? modeM[1] : 'single',
@@ -182,6 +191,8 @@ export const parseFactLine = (text) => {
  * 校验侧重算:只数文件数,且与写入侧同一条命令。
  * 优先用事实行里的代码 SHA(managed);否则用 HEAD(单根:HEAD 就是本次完成提交)。
  * 返回 null 表示「无法定位提交」,调用方应跳过数字对账而不是判错。
+ * 注意:v1 旧行不得走「行自带的 base/sha」——那等于让被校验方自选 range(审计 P0-2);
+ * R10 对 v1 只做结构校验并 WARN,数字权威仅 v2 机检段。
  */
 export const recomputeCommitStats = async (root, parsed, { isRepo = undefined, headSubject = null } = {}) => {
   if (isRepo === false) return null;

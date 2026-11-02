@@ -2,7 +2,7 @@
 // T024 冒烟:LOG 边界规则 R12 —— 活跃区 >150 行 或 完成条目 >20 → WARN。
 // 红线(可执行验收):151 行 LOG fixture → R12 WARN;120 行 → 全绿;修宪三处一致(CONTRACT/relay_rules/AGENTS 模板)。
 import { spawnSync } from 'node:child_process';
-import { mkdtempSync, rmSync, readFileSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, rmSync, readFileSync, writeFileSync, mkdirSync, readdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -68,15 +68,40 @@ try {
   ok(/R12\s*\|\s*WARN/.test(row(g3, 'R12')), '完成条目 >20:R12 WARN', row(g3, 'R12'));
   ok(/完成条目/.test(row(g3, 'R12')), 'WARN 文案指明完成条目超限', row(g3, 'R12'));
 
-  console.log('\n== 修宪三处一致(CONTRACT / relay_rules / AGENTS 模板) ==');
+  console.log('\n== 归档指针:必须指向真实存在的 docs/archive 文件(P1-7) ==');
+  // 假指针(目标不存在):不承认边界 → 151 行仍 WARN(一行字不能消音)
+  writeFileSync(logPath, '<!-- relay:log-archive: docs/archive/LOG-2026-01.md -->\n' + makeLog(151));
+  const g4 = cli('relay_verify', { full: true });
+  ok(/R12\s*\|\s*WARN/.test(row(g4, 'R12')), '假归档指针不能把活跃区归零(仍 WARN)', row(g4, 'R12'));
+  ok(/未被承认/.test(row(g4, 'R12')), 'WARN 文案指明指针未被承认', row(g4, 'R12'));
+  // 真指针(目标存在且非空):边界生效 → 活跃区归零 → PASS;条目轴用同一活跃区
+  mkdirSync(path.join(tmp, 'docs', 'archive'), { recursive: true });
+  writeFileSync(path.join(tmp, 'docs', 'archive', 'LOG-2026-01.md'), '# 归档\n\n- 旧条目\n');
+  writeFileSync(logPath, '<!-- relay:log-archive: docs/archive/LOG-2026-01.md -->\n' + makeDoneLog(21));
+  writeFileSync(path.join(tmp, 'TASKS.md'), doneTasks(21));
+  const g5 = cli('relay_verify', { full: true });
+  ok(/R12\s*\|\s*PASS/.test(row(g5, 'R12')), '真归档指针生效 → 活跃区归零 PASS', row(g5, 'R12'));
+  ok(/活跃区 0 行/.test(row(g5, 'R12')), '指针之前的行才算活跃区(两轴同一口径)', row(g5, 'R12'));
+
+  console.log('\n== 修宪三处一致:内容一致,不只行存在(P1-5) ==');
   const contract = readFileSync(path.join(RELAY, 'docs-design', 'CONTRACT.md'), 'utf8');
-  ok(/^\| R12 \|/m.test(contract), 'CONTRACT 规则表含 | R12 | 行');
   const rules = cli('relay_rules', {});
-  ok(/^\| R12 \|/m.test(out(rules)), 'relay_rules 输出含 R12 行', out(rules).slice(0, 300));
   const tpl = readFileSync(path.join(RELAY, 'templates', 'AGENTS.md.tpl'), 'utf8');
-  ok(/^\| R12 \|/m.test(tpl), 'AGENTS 模板规则表含 R12 行');
   const readme = readFileSync(path.join(RELAY, 'README.md'), 'utf8');
-  ok(/R12/.test(readme), 'README 规则清单提及 R12');
+  const r12Rows = {
+    CONTRACT: (contract.match(/^\| R12 \|.*$/m) || [''])[0],
+    relay_rules: (out(rules).match(/^\| R12 \|.*$/m) || [''])[0],
+    'AGENTS 模板': (tpl.match(/^\| R12 \|.*$/m) || [''])[0],
+  };
+  for (const [name, text] of Object.entries(r12Rows)) {
+    ok(/150/.test(text) && /20/.test(text) && /warn/i.test(text) && /logBoundary\.strict/.test(text),
+      `${name} 的 R12 行内容一致(阈值 150/20 + 判定 WARN + 开关键名)`, text.slice(0, 180));
+  }
+  ok(/R1–R12/.test(readme) && !/R1–R11/.test(readme), 'README 中英文两半规则区间均为 R1–R12(无 R1–R11 残留)');
+  const walk = (dir) => readdirSync(dir, { withFileTypes: true })
+    .flatMap((e) => (e.isDirectory() ? walk(path.join(dir, e.name)) : [path.join(dir, e.name)]));
+  const stale = walk(path.join(RELAY, 'src')).filter((f) => readFileSync(f, 'utf8').includes('R1–R11'));
+  ok(stale.length === 0, 'src/** 无 R1–R11 残留', stale.map((f) => f.replace(RELAY + '/', '')).join(','));
 } finally {
   rmSync(tmp, { recursive: true, force: true });
 }

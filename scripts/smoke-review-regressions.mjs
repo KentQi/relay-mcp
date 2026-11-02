@@ -26,6 +26,7 @@ const field = (text, name) => {
 
 const tmpA = mkdtempSync(path.join(tmpdir(), 'relay-rev-managed-'));
 const tmpB = mkdtempSync(path.join(tmpdir(), 'relay-rev-single-'));
+const tmpC = mkdtempSync(path.join(tmpdir(), 'relay-rev-sentinel-'));
 
 try {
   // ================= A. managed:密钥必须在任何提交之前被拦 =================
@@ -102,9 +103,33 @@ try {
   ok(guardDeny.status === 1, '无显式批准时发布护栏拒绝(exit 1)');
   const guardAllow = spawnSync('node', [path.join(RELAY, 'scripts', 'check-publish-guard.mjs')], { encoding: 'utf8', env: { ...process.env, RELAY_ALLOW_PUBLISH: '1' } });
   ok(guardAllow.status === 0, 'RELAY_ALLOW_PUBLISH=1 时放行');
+
+  // ================= F. R5 提交原子性:哨兵文件名不可伪造提交头 =================
+  // P0-1(PR #8 审计):git log --name-only 把文件名混进同一行流,旧实现用文本哨兵
+  // "__COMMIT__" 分隔提交——根级同名文件会被当成提交头,让 R5 静默失明。
+  // 回归:白名单修宪允许该文件(R2 不干扰)后,R5 仍必须看到 src 改动并 WARN。
+  console.log('\n== F. R5 原子性:__COMMIT__ 文件名不可伪造提交头(P0-1) ==');
+  const initC = cliAt(tmpC, 'relay_init', { name: '评审回归-哨兵' });
+  ok(initC.status === 0, 'init tmpC', out(initC).slice(0, 200));
+  const mfC = JSON.parse(readFileSync(path.join(tmpC, '.relay', 'manifest.json'), 'utf8'));
+  mfC.allowedTopLevel = [...new Set([...(mfC.allowedTopLevel || []), '__COMMIT__notes.md'])];
+  writeFileSync(path.join(tmpC, '.relay', 'manifest.json'), JSON.stringify(mfC, null, 2) + '\n');
+  mkdirSync(path.join(tmpC, 'src'), { recursive: true });
+  writeFileSync(path.join(tmpC, 'src', 'feature.js'), 'export const f = 1;\n');
+  writeFileSync(path.join(tmpC, '__COMMIT__notes.md'), 'sentinel\n');
+  git(tmpC, 'add', '-A');
+  const cmt = git(tmpC, '-c', 'user.name=rev', '-c', 'user.email=rev@local', 'commit', '-q', '-m', 'feat: 改代码但不更新 TASKS/LOG');
+  ok(cmt.status === 0, '提交含 src 改动与 __COMMIT__ 文件名', (cmt.stderr || '').slice(0, 200));
+  const vC = cliAt(tmpC, 'relay_verify', { full: true });
+  const rowOf = (text, id) => (text.split('\n').find((l) => new RegExp(`^\\| ${id} \\|`).test(l)) || '');
+  const r5 = rowOf(out(vC), 'R5');
+  ok(/R5\s*\|\s*WARN/.test(r5), '哨兵文件名不能让 R5 失明(仍 WARN)', r5);
+  ok(/feature\.js/.test(r5), 'R5 详情确实看到 src 改动', r5);
+  ok(/R2\s*\|\s*PASS/.test(rowOf(out(vC), 'R2')), '白名单已修宪 → R2 PASS(排除 R2 干扰)', rowOf(out(vC), 'R2'));
 } finally {
   rmSync(tmpA, { recursive: true, force: true });
   rmSync(tmpB, { recursive: true, force: true });
+  rmSync(tmpC, { recursive: true, force: true });
 }
 
 console.log(`\n结果: ${pass} 通过 / ${fail} 失败`);

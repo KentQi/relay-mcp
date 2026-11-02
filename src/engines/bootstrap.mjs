@@ -13,7 +13,7 @@
 import { basename, dirname, join, relative, resolve } from 'node:path';
 import { access, chmod, readdir, writeFile } from 'node:fs/promises';
 import {
-  backupFile, ensureDir, findSensitiveChanges, gitIdentityArgs, gitRun, isGitRepo, nowIso,
+  backupFile, ensureDir, findSensitiveChanges, gitIdentityArgs, gitRun, isGitRepoAsync, nowIso,
   readFileSafe, stamp, templatesDir, writeFileIfAbsent,
 } from '../util.mjs';
 import { ensureGitignoreBaseline } from '../config.mjs';
@@ -306,7 +306,7 @@ export const relayInit = async (args = {}) => {
     } else kept.push(manifestRel);
 
     // 4) git(失败降级,不置 isError)
-    const gitLines = await gitCommitFlow(root, !isGitRepo(root), 'relay: init project');
+    const gitLines = await gitCommitFlow(root, !(await isGitRepoAsync(root)), 'relay: init project');
 
     // 5) 报告
     const L = [
@@ -357,7 +357,7 @@ export const relayOnboard = async (args = {}) => {
     const tdir = templatesDir();
 
     // 1) 扫描
-    const git = isGitRepo(root);
+    const git = await isGitRepoAsync(root);
     const top = (await listTop(root)) || [];
     const docs = await docsLayout(root);
     const existed = {

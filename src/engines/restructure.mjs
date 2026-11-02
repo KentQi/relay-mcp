@@ -13,7 +13,7 @@
 import { readdir, stat, writeFile } from 'node:fs/promises';
 import { basename, dirname, extname, join, resolve } from 'node:path';
 import {
-  acquireRepoLock, backupFile, ensureDir, findSensitiveChanges, gitIdentityArgs, gitRun, isGitRepo, nowIso,
+  acquireRepoLock, backupFile, ensureDir, findSensitiveChanges, gitIdentityArgs, gitRun, isGitRepoAsync, nowIso,
   readFileSafe, releaseRepoLock, stamp, scanSecrets,
 } from '../util.mjs';
 
@@ -208,7 +208,7 @@ export const relayRestructure = async (args = {}) => {
     if (!moves.length) {
       return ok([head, '', '结构已达标,无可移动项;人工清单:', ...manualRows].join('\n'));
     }
-    if (!isGitRepo(root)) return err('非 git 仓库:拒绝执行(无历史可保、无法回滚)。先 `git init` 并提交当前状态。');
+    if (!(await isGitRepoAsync(root))) return err('非 git 仓库:拒绝执行(无历史可保、无法回滚)。先 `git init` 并提交当前状态。');
     const st = await gitRun(root, 'status', '--porcelain', '-uall');
     if (!st.ok) return err(`无法读取 git 状态:${firstLine(st.stderr)}`);
     if (st.stdout.trim()) return err(['工作区不干净,拒绝执行:', ...st.stdout.trim().split('\n').slice(0, 5).map((l) => `- ${l}`), '先提交或暂存(git stash)再来。'].join('\n'));

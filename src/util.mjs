@@ -1,11 +1,11 @@
 // relay-mcp — src/util.mjs (W2)
 // 零依赖公共助手:fs / git / 时间戳。仅使用 node: 内置模块。
 import { readFile, writeFile, mkdir, rename, stat, lstat, unlink, utimes, open as fsOpen2 } from 'node:fs/promises';
-import { realpathSync, writeFileSync } from 'node:fs';
+import { writeFileSync } from 'node:fs';
 import { realpath } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { execFile, execFileSync } from 'node:child_process';
+import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { randomUUID } from 'node:crypto';
 
@@ -76,30 +76,12 @@ export const backupFile = async (p) => {
   return backup;
 };
 
-// root 目录本身是否是一个 git 仓库(而非恰好位于某个外层仓库之内)
+// root 目录本身是否是一个 git 仓库(而非恰好位于某个外层仓库之内)。
 // 两侧都过 realpath:macOS 的 /tmp→/private/tmp、/var→/private/var 符号链接
-// 会让字符串比较永远不等,把真仓库误判成"非 git 仓库"
-export const isGitRepo = (root) => {
-  if (typeof root !== 'string' || root === '') return false;
-  traceGit(true);
-  const real = (p) => {
-    try { return realpathSync(p); } catch { return path.resolve(p); }
-  };
-  try {
-    const top = execFileSync(
-      'git',
-      ['-C', root, 'rev-parse', '--show-toplevel'],
-      { stdio: ['ignore', 'pipe', 'ignore'], timeout: 8000 },
-    )
-      .toString()
-      .trim();
-    return top !== '' && real(top) === real(root);
-  } catch {
-    return false;
-  }
-};
-
-// 异步版 isGitRepo(T022):fs 快路径先看 root/.git(普通仓库是目录;linked worktree 是文件,
+// 会让字符串比较永远不等,把真仓库误判成"非 git 仓库"。
+// P1-6(审计):同步探测版已删除——MCP server 是长驻进程,
+// 任何同步 spawn 都会冻结事件循环;所有调用方统一走 isGitRepoAsync。
+// 异步版 isGitRepoAsync(T022):fs 快路径先看 root/.git(普通仓库是目录;linked worktree 是文件,
 // 两者都意味着 root 自身是仓库根)→ 命中则**零子进程**;未命中再回退 git rev-parse,
 // 兼容「root 是仓库子目录」的情形(此时 .git 不在 root 下)。
 export const isGitRepoAsync = async (root) => {

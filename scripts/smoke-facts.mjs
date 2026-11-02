@@ -6,6 +6,7 @@ import { mkdtempSync, rmSync, readFileSync, writeFileSync, mkdirSync } from 'nod
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { parseFactLine } from '../src/engines/facts.mjs';
 
 const RELAY = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const CLI = path.join(RELAY, 'src', 'cli.mjs');
@@ -75,6 +76,13 @@ try {
   ok(/R10\s*\|\s*ERROR/.test(out(v4)), 'R10 ERROR(机检段自相矛盾)');
   ok(/自相矛盾/.test(out(v4)), '文案指明机检段自相矛盾(不靠 git 也能发现篡改)');
 
+  console.log('\n== 解析器边界:| 与 ||(审计 P2-8/P2-9)==');
+  const pPipe = parseFactLine('- 事实(v2): mode=managed | 文件 1 | ± +1/-0 | base=abc1234 | sha=def5678 | branch=relay/T1|x || 验收: 通过 | verify: PASS 1·WARN 0·ERROR 0 | 耗时: 1s');
+  ok(pPipe && pPipe.branch === 'relay/T1|x', "分支名含 '|' 不被截断", pPipe && pPipe.branch);
+  ok(pPipe && pPipe.verifyPass === 1 && pPipe.acceptance === '通过', "含 '|' 的分支名不影响叙述段解析");
+  const pNarr = parseFactLine('- 事实(v2): mode=single | 文件 0 | ± +0/-0 | base=- | sha=- | branch=main || 验收: 通过 || 备注: x | verify: PASS 2·WARN 1·ERROR 0 | 耗时: 3s');
+  ok(pNarr && pNarr.branch === 'main' && pNarr.verifyPass === 2 && pNarr.verifyWarn === 1, "叙述段含 '||' 时保留其后内容", JSON.stringify(pNarr));
+
   console.log('\n== managed 夹具:± 行数属机检段 ==');
   const mtmp = mkdtempSync(path.join(tmpdir(), 'relay-facts-managed-'));
   try {
@@ -95,6 +103,9 @@ try {
       facts: { enabled: true, since: '2020-01-01 00:00', strict: false },
     }, null, 2) + '\n');
     writeFileSync(path.join(mtmp, 'TASKS.md'), '# 任务队列\n\n## 待办\n\n## 已完成\n- [x] T900 夹具任务  (2026-01-01)\n');
+    // 分支归属(P1-3):relay/T900 指向 sha2(含);relay/T902 指向 sha1(不含 sha2)——两种篡改可区分。
+    g('branch', 'relay/T900', sha2);
+    g('branch', 'relay/T902', sha1);
     const mkFact = (pm) => `- 事实(v2): mode=managed | 文件 1 | ± ${pm} | base=${sha1} | sha=${sha2} | branch=relay/T900 || 验收: 通过 | verify: PASS 0·WARN 0·ERROR 0 | 耗时: 1s`;
     const logM = (factLine) => writeFileSync(path.join(mtmp, 'LOG.md'), `# 会话日志(最新在上)\n\n## 2026-01-01 00:00 | model=fixture | task=T900 完成\n- 摘要: 夹具\n${factLine}\n`);
     const mRow = (mut) => { logM(mut(mkFact('+2/-0'))); return r10Row(cliAt(mtmp, 'relay_verify', { full: true })); };
@@ -106,12 +117,22 @@ try {
     ok(/R10\s*\|\s*ERROR/.test(r10Row(m2)), 'managed ± 行数被篡改 → R10 ERROR', r10Row(m2));
     const rMode = mRow((l) => l.replace('mode=managed', 'mode=single'));
     ok(/R10\s*\|\s*ERROR/.test(rMode) && /自相矛盾/.test(rMode), 'mode 被篡改(managed→single)→ R10 ERROR', rMode);
-    const rBranch = mRow((l) => l.replace('branch=relay/T900', 'branch=main'));
-    ok(/R10\s*\|\s*ERROR/.test(rBranch), 'branch 被篡改 → R10 ERROR', rBranch);
+    const rBranchShape = mRow((l) => l.replace('branch=relay/T900', 'branch=main'));
+    ok(/R10\s*\|\s*ERROR/.test(rBranchShape), 'branch 形状非法(非 relay/)→ R10 ERROR', rBranchShape);
+    const rBranchMissing = mRow((l) => l.replace('branch=relay/T900', 'branch=relay/T901'));
+    ok(/R10\s*\|\s*WARN/.test(rBranchMissing) && /无法验证/.test(rBranchMissing), '分支不存在 → R10 WARN(不可验证,不 PASS)', rBranchMissing);
+    const rBranchWrong = mRow((l) => l.replace('branch=relay/T900', 'branch=relay/T902'));
+    ok(/R10\s*\|\s*ERROR/.test(rBranchWrong) && /不包含/.test(rBranchWrong), '分支存在但不含 sha → R10 ERROR(分支与提交不匹配)', rBranchWrong);
     const rSha = mRow((l) => l.replace(`sha=${sha2}`, 'sha=deadbeefdeadbeefdeadbeefdeadbeefdeadbeef'));
     ok(/R10\s*\|\s*WARN/.test(rSha) && /无法定位对应提交/.test(rSha), '伪造 sha → R10 WARN(不再 PASS)', rSha);
     const rBase = mRow((l) => l.replace(`base=${sha1}`, 'base=deadbeefdeadbeefdeadbeefdeadbeefdeadbeef'));
     ok(/R10\s*\|\s*WARN/.test(rBase), '伪造 base → R10 WARN(不再 PASS)', rBase);
+    // P0-2(审计):v1 旧行即便数字「恰好对上」也只报 WARN——行自带的 range 不能自证。
+    const v1Line = `- 事实(v1): 改动 1 文件(+2/-0) | 验收: 通过 | verify: PASS 9·WARN 0·ERROR 0 | 分支: fake/branch @${sha2} base=${sha1} | 耗时: 1s`;
+    logM(v1Line);
+    const rV1 = r10Row(cliAt(mtmp, 'relay_verify', { full: true }));
+    ok(/R10\s*\|\s*WARN/.test(rV1) && /v1/.test(rV1), 'v1 旧行数字一致也只报 WARN(不自证 PASS)', rV1);
+    ok(!/R10\s*\|\s*PASS/.test(rV1), 'v1 旧行绝不 PASS');
   } finally {
     rmSync(mtmp, { recursive: true, force: true });
   }

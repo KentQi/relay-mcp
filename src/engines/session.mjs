@@ -8,7 +8,7 @@
 //   注意:护栏只看未提交 diff——模型中途自行 git commit 即可绕过,该边界写明在 README。
 // 疑似密钥文件(.env*/*secret*/*credential*/*.key/*.pem/id_rsa)在场:同护栏处理,不自动提交(H3)。
 import {
-  acquireFileLock, acquireRepoLock, checkProtocolFilesSafe, parseLockContent, readFileSafe, isGitRepo, gitIdentityArgs,
+  acquireFileLock, acquireRepoLock, checkProtocolFilesSafe, parseLockContent, readFileSafe, isGitRepoAsync, gitIdentityArgs,
   gitRun, findSensitiveChanges, releaseFileLock, stamp, nowIso, templatesDir,
   writeProtocolFile, scanSecrets, SECRET_OK_MARKER,
 } from '../util.mjs';
@@ -113,7 +113,7 @@ const nextTaskId = (lines) => {
   return `T${String(max + 1).padStart(3, '0')}`;
 };
 const shortSha = async (root) => {
-  if (!isGitRepo(root)) return 'nogit';
+  if (!(await isGitRepoAsync(root))) return 'nogit';
   const r = await gitRun(root, 'rev-parse', '--short', 'HEAD');
   return r.ok ? r.stdout.trim() : 'nogit';
 };
@@ -569,7 +569,7 @@ export const relaySessionStart = async (args = {}) => {
   };
 
   // git 对账:代码状态属于 executionRoot,协议检查仍使用 controlRoot。
-  const isRepo = isGitRepo(executionRoot);
+  const isRepo = await isGitRepoAsync(executionRoot);
   let dirty = null;
   let recentCommits = [];
   if (isRepo) {
@@ -798,7 +798,7 @@ export const relayClaim = async (args = {}) => {
         ...(releaseWarning ? ['', `锁告警:${releaseWarning}`] : []),
       ]);
     }
-    const headCheck = isGitRepo(root) ? await gitRun(root, 'rev-parse', '--verify', 'HEAD') : { ok: false, stdout: '' };
+    const headCheck = (await isGitRepoAsync(root)) ? await gitRun(root, 'rev-parse', '--verify', 'HEAD') : { ok: false, stdout: '' };
     if (!headCheck.ok || !String(headCheck.stdout || '').trim()) {
       worktreeNotes.push('- ⚠ worktree 降级单根: 当前仓库不是 Git 仓库或尚无可用 HEAD(无提交),未创建 executionRoot;完成首次提交后重新 relay_claim 即可获得任务 worktree');
     } else {
@@ -1072,7 +1072,7 @@ export const relaySessionEnd = async (args = {}) => {
   let taskResults = [];
   let taskGateNote = '';
   if (executionRoot !== root) {
-    if (isGitRepo(executionRoot)) {
+    if (await isGitRepoAsync(executionRoot)) {
       taskResults = await runTaskTreeChecks(executionRoot, root);
     } else {
       taskGateNote = 'executionRoot 不是 Git 工作树,跳过任务树结构检查(managed 提交会随后拒绝)';
@@ -1156,7 +1156,7 @@ export const relaySessionEnd = async (args = {}) => {
     }
   }
   // 受保护路径检测:代码改动只从 executionRoot 读取。
-  const isRepo = isGitRepo(executionRoot);
+  const isRepo = await isGitRepoAsync(executionRoot);
   let statusLines = [];
   let statusError = '';
   if (isRepo) {

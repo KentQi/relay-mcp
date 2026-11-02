@@ -2,8 +2,8 @@
 // 铁律:
 //   1) 只读:不写任何文件、不取仓库写锁、不自动修复(自动修=越 fail-closed,修复指令交给人类/下一个会话)。
 //   2) 每条非 OK 结果都以「修复:」开头,给可执行指令,且只引用 relay 原生命令(绝不输出 rm)。
-//   3) 诊断的是「环境/安装面」漂移,不是仓库规范(R1–R11 归 relay_verify)。
-import { readFileSafe, isGitRepo, gitRun, parseLockContent, templatesDir } from '../util.mjs';
+//   3) 诊断的是「环境/安装面」漂移,不是仓库规范(R1–R12 归 relay_verify)。
+import { readFileSafe, isGitRepoAsync, gitRun, parseLockContent, templatesDir } from '../util.mjs';
 import { readWorktreeRegistryState, resolveRelayRoots } from './worktree.mjs';
 import { generateEntryFiles } from './sync.mjs';
 import { join, resolve } from 'node:path';
@@ -93,7 +93,7 @@ const checkClaimLocks = async (root) => {
 
 // D5 未登记的 linked worktree(relay 任务树必须在 registry 里)
 const checkWorktrees = async (root) => {
-  if (!isGitRepo(root)) return ok('D5', 'worktree', '非 git 仓库,跳过');
+  if (!(await isGitRepoAsync(root))) return ok('D5', 'worktree', '非 git 仓库,跳过');
   const r = await gitRun(root, 'worktree', 'list', '--porcelain');
   if (!r.ok) return warn('D5', 'worktree', `无法读取 worktree 列表:${(r.stderr || r.stdout || '').split('\n')[0]}`, '确认 git 可用后重跑 relay_doctor');
   const entries = [];

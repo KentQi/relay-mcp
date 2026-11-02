@@ -96,12 +96,24 @@ try {
   const g2 = cli(tmp, 'relay_get', { ids: ['T002'] }, '');
   ok(out(g1) === out(g2), 'get 输出可复放(两次逐字一致)');
 
-  console.log('\n== 静态约束:async 引擎无同步 exec ==');
-  for (const f of ['src/engines/verify.mjs', 'src/engines/facts.mjs']) {
-    const src = readFileSync(path.join(RELAY, f), 'utf8');
-    ok(!src.includes('execFileSync'), `${f} 无 execFileSync`);
-    ok(!/isGitRepo\(/.test(src), `${f} 不调用同步 isGitRepo()`);
-  }
+  console.log('\n== managed 双根:任务树只取 ls-files,git 进程有上界(P2-11) ==');
+  const claim = cli(tmp, 'relay_claim', { task: 'T004', model: 'perf-managed', worktree: true });
+  ok(claim.status === 0, 'claim 建出受管任务树', out(claim).slice(0, 300));
+  const mv = cli(tmp, 'relay_verify', { full: true }, trace);
+  const tm = traceOf(trace);
+  ok(mv.status === 0, 'managed 双根 verify 通过', out(mv).slice(0, 400));
+  ok(tm && tm.sync === 0, 'managed 路径同步 spawn = 0(async 引擎)');
+  ok(tm && tm.git <= 5, `managed 双根 git 子进程 ${tm && tm.git} ≤ 5(任务树不取提交历史)`);
+
+  console.log('\n== 静态约束:整棵 src/ 无同步 exec(P1-6 扩展) ==');
+  const walkSrc = (dir) => readdirSync(dir, { withFileTypes: true })
+    .flatMap((e) => (e.isDirectory() ? walkSrc(path.join(dir, e.name)) : [path.join(dir, e.name)]));
+  const srcFiles = walkSrc(path.join(RELAY, 'src'));
+  const syncHits = srcFiles.filter((f) => {
+    const src = readFileSync(f, 'utf8');
+    return src.includes('execFileSync') || /(^|[^A-Za-z0-9_])isGitRepo\s*\(/.test(src);
+  });
+  ok(syncHits.length === 0, `src/ 无同步 exec / 同步 isGitRepo 调用(扫描 ${srcFiles.length} 文件)`, syncHits.map((f) => f.replace(RELAY + '/', '')).join(','));
 } finally {
   rmSync(tmp, { recursive: true, force: true });
   try { rmSync(trace, { force: true }); } catch { /* ignore */ }

@@ -66,6 +66,12 @@ try {
   const g4 = cli('relay_get', { ids: ['T001', 'T002', 'T003', 'T004', 'T005', 'T006'] });
   ok(g4.status === 1 && /最多取 5 个/.test(out(g4)), '超过 5 个 → isError');
   ok(gitStatus() === before, 'recall/get 零写盘(git status 不变)');
+
+  console.log('\n== get:v1 旧事实行前缀也要剥离(P2-10) ==');
+  appendFileSync(logPath, '- 事实(v1): 改动 3 文件(+10/-2) | 验收: 通过 | verify: PASS 9·WARN 0·ERROR 0 | 分支: main @未提交 | 耗时: 9s\n');
+  const gv = cli('relay_get', { ids: ['T004'] });
+  ok(/事实: 改动 3 文件/.test(out(gv)), 'v1 事实行剥离后输出(不再双前缀)', out(gv).slice(0, 400));
+  ok(!/- 事实\(v1\)/.test(out(gv)), '输出不含原始 v1 前缀');
 } finally {
   rmSync(tmp, { recursive: true, force: true });
 }

@@ -14,6 +14,9 @@
 (空——认领后由 relay_claim 移入;认领锁在 .relay/claims/,TTL 4 小时,崩溃会话的认领到期自动可接管)
 
 ## 待办
+- [ ] T026 session_start 读放大收敛(PR #8 审计 P1-6 残留):session_start 实测 manifest 读 6 次 / git 7 次,relay_verify 已 1/1/1;把 manifest 配置在 session_start 内单轮只读一次(collectMeta 预加载 + 沿调用链传递),不引入跨调用缓存
+  验收: test:scripts/smoke-session-perf.mjs
+  备注: 同步 spawn 已在 PR #8 审计修复中清零(整棵 src 静态断言),本任务只处理读/子进程放大;不要为了省读引入模块级缓存(manifest 在会话之间可能被改,跨调用缓存=第二真相源)
 - [ ] T021 检索寻址(T018)收益复核:数据闸未过(LOG 16 < 20),按实测决定去留
   验收: test:scripts/smoke-t021-decision.mjs
   备注: 完成动作 = 在 DECISIONS.md 追加一条标题含 T018 的决策条目,且必须锚定不可变证据(T017 的提交 sha + 对应 LOG 条目原文)与可测复评阈值(如 LOG ≥ 30 条),断言脚本会用 git log 反查 sha 是否真实存在——只写「保留」两个字不算通过;调用次数与「取回失败」无法机检(recall 零持久化、无遥测),只作为决策理由的人工依据;回退方式 = 移除 relay_recall/relay_get 注册,协议面与事实底账不受影响;数据闸现状如实记录:实测 16 条 → 当前 20 条,已自然越过闸门
