@@ -1,5 +1,11 @@
 # 会话日志(最新在上)
 
+## 2026-11-02 13:55 | model=dsh-lead-deepseek-v4.1 | task=无
+- 摘要: 合并后清理(维护):按人类指示删除已合并的 relay/T022–T025 分支与任务 worktree、清空 worktree 注册表;清理暴露 R10 误报——分支删除后事实行引用的 branch 无法验证导致永久 WARN,已修:branch 缺失时若「T### 完成」提交仍在当前分支历史 → PASS 带注记,否则 WARN(伪造仍被拦);回归 smoke-facts 43 断言,npm test 14 套 605 断言全绿;relay_doctor 七检全 OK
+- 事实(v2): mode=single | 文件 0 | ± +0/-0 | base=- | sha=- | branch=main || 验收: 通过 | verify: PASS 9·WARN 2·ERROR 0 | 耗时: 33s
+- 负结果: R10 只校验最新完成条目的 branch:合并后删分支会让它永久 WARN——「分支不存在」既可能是正常清理也可能是篡改,必须用「完成提交是否仍在历史」区分,不能一律 WARN
+- 负结果: relay 的 cleanup 工具按设计只保留分支不删分支;人工删分支是允许的,但规则必须承认这个生命周期,否则清理动作会把绿闸变成长期黄灯
+
 ## 2026-11-02 11:47 | model=dsh-lead-deepseek-v4.1 | task=无
 - 摘要: PR #8 审计修复补充(维护):single 模式补 branch 存在性校验(P1-3 的 zzz/zzz、relay/T999 伪造现在报 WARN 而非 PASS);锁定 single ± 不参与对账的契约(P1-4);回归 smoke-facts 42 断言,npm test 14 套 595 断言全绿;审计复现脚本 bp.txt 已从 PASS 变为 WARN
 - 事实(v2): mode=single | 文件 0 | ± +0/-0 | base=- | sha=- | branch=main || 验收: 通过 | verify: PASS 9·WARN 2·ERROR 0 | 耗时: 26s
