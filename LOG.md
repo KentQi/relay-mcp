@@ -1,5 +1,12 @@
 # 会话日志(最新在上)
 
+## 2026-11-02 14:35 | model=dsh-lead-deepseek-v4.1 | task=T021 完成
+- 摘要: T021 检索寻址收益复核:结论保留 relay_recall/relay_get。数据闸已过(LOG 28 条/完成条目 18 条);DECISIONS 新增条目锚定 T017 完成提交 8a1ed24 与当时的闸门测量,写明复评阈值(LOG ≥30 条或任一项目反馈取回失败)与回退方式(移除两工具注册);smoke-t021-decision.mjs 转绿
+- 事实(v2): mode=single | 文件 1 | ± +7/-0 | base=- | sha=- | branch=main || 验收: 通过 | verify: PASS 10·WARN 1·ERROR 0 | 耗时: 33s
+- 负结果: 数据闸口径要写清:LOG 总条目 28 与完成条目 18 是两个数,复核结论里必须区分,否则下一个会话会拿错数字
+- 负结果: recall/get 的调用次数与取回失败无法机检(零持久索引、无遥测);决策只能锚定「日志规模 + 无失败证据」这类可测事实,不能伪造使用率
+- 留给下一个: 红灯脚本已存在且当前为红;根因:session_start 里 5 处各自 readManifestConfig/readWorktreeConfig + cleanupWorktrees 再读一次 = 6 次。目标 1 次,不引入模块级缓存。
+
 ## 2026-11-02 13:59 | model=dsh-lead-deepseek-v4.1 | task=无
 - 摘要: 维护出场补充:清理后连续维护出场暴露 R7 误报——task=无(引擎无 done_task 的维护出场)被当成任务会话,三次即触发「3 条任务会话无完成」停机;已修 R7 排除规则为 task=维护|无,回归 smoke.mjs 99 断言;npm test 14 套 606 断言全绿,verify full PASS 10 WARN 1(R12) ERROR 0
 - 事实(v2): mode=single | 文件 0 | ± +0/-0 | base=- | sha=- | branch=main || 验收: 通过 | verify: PASS 9·WARN 2·ERROR 0 | 耗时: 28s
