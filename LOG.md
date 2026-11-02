@@ -1,5 +1,11 @@
 # 会话日志(最新在上)
 
+## 2026-11-02 13:59 | model=dsh-lead-deepseek-v4.1 | task=无
+- 摘要: 维护出场补充:清理后连续维护出场暴露 R7 误报——task=无(引擎无 done_task 的维护出场)被当成任务会话,三次即触发「3 条任务会话无完成」停机;已修 R7 排除规则为 task=维护|无,回归 smoke.mjs 99 断言;npm test 14 套 606 断言全绿,verify full PASS 10 WARN 1(R12) ERROR 0
+- 事实(v2): mode=single | 文件 0 | ± +0/-0 | base=- | sha=- | branch=main || 验收: 通过 | verify: PASS 9·WARN 2·ERROR 0 | 耗时: 28s
+- 负结果: R7 的维护豁免不能只认 task=维护:引擎自己的维护出场写 task=无,漏掉它会让「连续几次维护」被误判成发散停机
+- 负结果: 规则文本里的排除条件必须与写入侧的字面值对齐(维护 vs 无),否则三处一致也一致地错
+
 ## 2026-11-02 13:55 | model=dsh-lead-deepseek-v4.1 | task=无
 - 摘要: 合并后清理(维护):按人类指示删除已合并的 relay/T022–T025 分支与任务 worktree、清空 worktree 注册表;清理暴露 R10 误报——分支删除后事实行引用的 branch 无法验证导致永久 WARN,已修:branch 缺失时若「T### 完成」提交仍在当前分支历史 → PASS 带注记,否则 WARN(伪造仍被拦);回归 smoke-facts 43 断言,npm test 14 套 605 断言全绿;relay_doctor 七检全 OK
 - 事实(v2): mode=single | 文件 0 | ± +0/-0 | base=- | sha=- | branch=main || 验收: 通过 | verify: PASS 9·WARN 2·ERROR 0 | 耗时: 33s
