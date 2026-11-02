@@ -190,6 +190,9 @@ const existsFile = async (p) => (await readFileSafe(p, null)) !== null;
 
 // —— 双根辅助:协议文件名判定 / 任务 worktree 证据 / 成对证据校验 ——
 const PROTOCOL_FILES = new Set(['TASKS.md', 'LOG.md']);
+// T001:控制面提交白名单 = 协议文件 + 归档目录(relay_archive_log 搬出的历史条目要能入库,
+// 否则指针指向的文件不在 git 里 = 新漂移;归档文件只增不改,不卷入其它改动)。
+const CONTROL_PLANE_PATHS = ['TASKS.md', 'LOG.md', 'docs/archive'];
 // porcelain 行:XY 定宽两字符 + 空格,其余是路径(rename 为 "old -> new")。只认协议文件本身。
 const statusPathOf = (line) => {
   const raw = String(line || '').slice(3);
@@ -1475,17 +1478,17 @@ export const relaySessionEnd = async (args = {}) => {
       // TASKS 完成行不记 sha(自指无解),考古靠提交消息 token:自定义模板若不含任务号则补前缀
       const controlCommitMsg = doneTask && !commitMsg.includes(`${doneTask} 完成`)
         ? `${doneTask} 完成 · ${commitMsg}`.slice(0, 80) : commitMsg;
-      const added = await gitRun(root, 'add', '--', 'TASKS.md', 'LOG.md');
+      const added = await gitRun(root, 'add', '--', ...CONTROL_PLANE_PATHS);
       if (!added.ok) {
         out.push('## 控制面提交失败 — 未落完成状态', '',
           `executionRoot 代码已提交(${managedCommit?.sha || '?'}),但 controlRoot 的 TASKS/LOG 暂存失败:${added.stderr || added.stdout}`, '',
           '本次未更新注册表完成状态、未释放认领锁;TASKS.md/LOG.md 已在工作区更新。修复后重跑 relay_session_end 补交(幂等)。');
         return { content: [{ type: 'text', text: out.join('\n') }], isError: true };
       }
-      const staged = await gitRun(root, 'diff', '--cached', '--name-only', '--', 'TASKS.md', 'LOG.md');
+      const staged = await gitRun(root, 'diff', '--cached', '--name-only', '--', ...CONTROL_PLANE_PATHS);
       const stagedNames = staged.ok ? staged.stdout.split('\n').map((s) => s.trim()).filter(Boolean) : [];
       if (stagedNames.length) {
-        const cR = await gitRun(root, ...(await gitIdentityArgs(root)), 'commit', '-m', controlCommitMsg, '--', 'TASKS.md', 'LOG.md');
+        const cR = await gitRun(root, ...(await gitIdentityArgs(root)), 'commit', '-m', controlCommitMsg, '--', ...CONTROL_PLANE_PATHS);
         if (!cR.ok) {
           out.push('## 控制面提交失败 — 未落完成状态', '',
             `git commit(TASKS.md/LOG.md)失败:${(cR.stderr || cR.stdout || '').split('\n').find(Boolean) || '未知原因'}`, '',
@@ -1570,13 +1573,13 @@ export const relaySessionEnd = async (args = {}) => {
         if (root !== executionRoot) {
           // 未登记的 linked worktree(维护出场):代码提交在任务分支,协议面写 controlRoot;
           // 再把 TASKS/LOG 作为独立控制面提交,避免把主工作树留成脏状态。
-          const cAdd = await gitRun(root, 'add', '--', 'TASKS.md', 'LOG.md');
-          const cStaged = cAdd.ok ? await gitRun(root, 'diff', '--cached', '--name-only', '--', 'TASKS.md', 'LOG.md') : null;
+          const cAdd = await gitRun(root, 'add', '--', ...CONTROL_PLANE_PATHS);
+          const cStaged = cAdd.ok ? await gitRun(root, 'diff', '--cached', '--name-only', '--', ...CONTROL_PLANE_PATHS) : null;
           const cNames = cStaged && cStaged.ok ? cStaged.stdout.split('\n').map((s) => s.trim()).filter(Boolean) : [];
           if (!cAdd.ok) {
             commitSection.push(`- ⚠ 控制面(controlRoot)未提交:git add 失败(${cAdd.stderr || cAdd.stdout})`);
           } else if (cNames.length) {
-            const cR2 = await gitRun(root, ...(await gitIdentityArgs(root)), 'commit', '-m', commitMsg, '--', 'TASKS.md', 'LOG.md');
+            const cR2 = await gitRun(root, ...(await gitIdentityArgs(root)), 'commit', '-m', commitMsg, '--', ...CONTROL_PLANE_PATHS);
             if (!cR2.ok) {
               commitSection.push(`- ⚠ 控制面(controlRoot)未提交:git commit 失败(${(cR2.stderr || cR2.stdout || '').split('\n').find(Boolean) || '未知原因'})`);
             } else {

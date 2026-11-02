@@ -555,13 +555,25 @@ const checkR11 = async (root, snap) => {
     exempted += String(t).split('\n')
       .filter((l) => l.includes(SECRET_OK_MARKER) && scanSecrets(l).length > 0).length;
   }
+  // T001:归档文件也是协议面的一部分(从 LOG.md 搬出的历史条目),必须同样过密钥闸;
+  // 归档工具写盘前也会扫一次,这里兜住「人工 git mv / 手改归档文件」的路径。
+  let archiveFiles = [];
+  try {
+    const names = await readdir(join(root, 'docs', 'archive'));
+    archiveFiles = names.filter((n) => /^LOG-[^/]+\.md$/.test(n)).sort();
+  } catch { /* 无归档目录 → 跳过 */ }
+  for (const name of archiveFiles) {
+    const t = await readText(join(root, 'docs', 'archive', name));
+    if (t == null) continue;
+    for (const h of scanSecrets(t, { allowMarker: true })) hits.push({ file: `docs/archive/${name}`, ...h });
+  }
   if (hits.length) {
     const shown = hits.slice(0, 3).map((h) => formatSecretHits([h], h.file)).join('; ');
     return bad('R11', 'ERROR',
       `协议文件含疑似密钥内容(${hits.length} 处): ${shown}${hits.length > 3 ? ` 等 ${hits.length} 处` : ''}`,
       '删除或替换为 [REDACTED];若该串曾进入 git 历史,立即轮换该密钥。确属误报可在同一行标注 relay:secret-ok 豁免');
   }
-  return pass('R11', `TASKS/LOG 无密钥样式内容${exempted ? `(另有 ${exempted} 行标注 relay:secret-ok 被豁免,请人工复核)` : ''}`);
+  return pass('R11', `TASKS/LOG/归档文件 无密钥样式内容${archiveFiles.length ? `(已扫归档 ${archiveFiles.length} 个)` : ''}${exempted ? `(另有 ${exempted} 行标注 relay:secret-ok 被豁免,请人工复核)` : ''}`);
 };
 
 // —— R12 LOG 边界(T024 / T001 最小触发)——
@@ -604,7 +616,7 @@ const checkR12 = async (root, cfg, snap) => {
     overLines ? `活跃区 ${activeLines} 行 > ${R12_MAX_LOG_LINES}` : '',
     overDone ? `完成条目 ${doneEntries} 条 > ${R12_MAX_DONE_ENTRIES}` : '',
   ].filter(Boolean).join(';');
-  const fix = '归档较早条目:人工决定把尾部历史 git move 到 docs/archive/LOG-YYYY.md,并在 LOG.md 留一行指针 <!-- relay:log-archive: docs/archive/LOG-YYYY.md -->(指针目标必须真实存在,否则不计入边界;relay 不自动归档,R12 只是触发器);manifest.logBoundary.strict=true 可升级为 ERROR';
+  const fix = '归档较早条目:运行 relay_archive_log {confirm:true}(默认 dry-run,只从尾部搬、保留至少 3 条、边界早于最新完成条目;或人工 git move 到 docs/archive/LOG-YYYY.md 并在 LOG.md 留一行指针 <!-- relay:log-archive: docs/archive/LOG-YYYY.md -->,指针目标必须真实存在);manifest.logBoundary.strict=true 可升级为 ERROR';
   return (cfg && cfg.logBoundary && cfg.logBoundary.strict)
     ? bad('R12', 'ERROR', `LOG 边界超限:${over}${dangling}`, fix)
     : bad('R12', 'WARN', `LOG 边界超限:${over}${dangling}`, fix);

@@ -52,7 +52,7 @@ try {
   ok(init.result?.serverInfo?.name === 'relay-mcp', 'initialize 握手');
   const tools = await call('tools/list');
   const names = (tools.result?.tools ?? []).map(t => t.name);
-  ok(names.length === 13 && names.includes('relay_worktree_cleanup') && names.includes('relay_doctor') && names.includes('relay_recall') && names.includes('relay_get'), 'tools/list = 13 个工具(含 worktree 清理、doctor、recall/get)', `got ${names.length}`);
+  ok(names.length === 14 && names.includes('relay_worktree_cleanup') && names.includes('relay_doctor') && names.includes('relay_recall') && names.includes('relay_get') && names.includes('relay_archive_log'), 'tools/list = 14 个工具(含 worktree 清理、doctor、recall/get、归档)', `got ${names.length}`);
 
   // ---------- 场景 A: 0→1 ----------
   console.log('\n== 场景 A: relay_init (0→1) ==');

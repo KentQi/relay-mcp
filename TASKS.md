@@ -24,11 +24,12 @@
 - [ ] T005 CI 矩阵三绿确认与 README badge 补链
   验收: GitHub Actions node 22/24/26 三个 job 全绿后,把 badge 链接到实际 Actions 页
   备注: 首跑失败日志:git commit fatal(无身份);本地 macOS 因 hostname 自动兜底而全绿——环境差异只能靠真机 CI 抓
-- [ ] T001 LOG 归档机制(LOG 只增不减,与"有限上下文"公理矛盾,长期使用后条目膨胀)
-  验收: verify 全绿 且 `npm test` 通过 且 归档后 relay_session_start 简报仍只含最近 3 条
-  备注: 2026-11-02 已人工归档一次(20 条旧条目 → docs/archive/LOG-2026-09-11.md + 指针,R12 转 PASS);自动化引擎仍推迟,下次触发 = R12 再次连续两次 WARN;实现时硬约束见 T024 备注
 
 ## 已完成
+- [x] T001 LOG 归档机制:新增 relay_archive_log(默认 dry-run;只从尾部搬、live≥3、边界早于最新完成条目、归档文件只追加;控制面白名单/PROTOCOL_FILES/R11 扫描面同步扩展)  (2026-11-02)
+  验收: test:scripts/smoke-archive-log.mjs
+  断言: dry-run 不写盘;confirm 后 R12 PASS、指针目标存在、条目守恒、live≥3、幂等 no-op;verify 全绿且 npm test 通过
+  备注: 2026-11-02 已人工归档一次(20 条旧条目 → docs/archive/LOG-2026-09-11.md);自动化工具 relay_archive_log 已落地,默认 dry-run + confirm 才写盘
 - [x] T002 认领/出场写入竞争治理(仓库锁+fencing 已覆盖并发 relay 进程;补内容 CAS 防非协作写入者 + 确定性并发回归;三轮审计 N7)  (2026-11-02)
   验收: verify 全绿 且 `npm test` 通过 且 新增并发认领回归断言(两模型同时 claim 不同任务,两条认领均不丢失)
 - [x] T026 session_start 读放大收敛(PR #8 审计 P1-6 残留):session_start 实测 manifest 读 6 次 / git 7 次,relay_verify 已 1/1/1;把 manifest 配置在 session_start 内单轮只读一次(collectMeta 预加载 + 沿调用链传递),不引入跨调用缓存  (2026-11-02)

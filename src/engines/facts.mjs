@@ -13,7 +13,10 @@ export const FACT_LINE_RE = /^- 事实\(v([12])\):\s*(.*)$/;
 // 剥离 v1/v2 两种前缀(recall 等消费方共用):只认 v2 前缀会把升级前的 v1 行原样吐出来。
 export const FACT_LINE_PREFIX_RE = /^- 事实\(v[12]\):\s*/;
 // 协议文件不计入「改动文件数」:它们由控制面提交维护,不是本次任务的代码事实。
+// T001:归档文件(docs/archive/LOG-*.md)同属协议面——归档工具搬移历史条目时不应把归档文件
+// 算成「本次任务的代码改动」,否则事实行会因维护动作虚增文件数。
 const PROTOCOL_FILES = new Set(['TASKS.md', 'LOG.md']);
+const isProtocolFile = (p) => PROTOCOL_FILES.has(p) || /^docs\/archive\/LOG-[^/\\]+\.md$/.test(p);
 
 // 一次 git 调用同时拿到文件数与 ±(--numstat 每行自带路径);两侧共用本函数。
 const diffStat = async (root, range) => {
@@ -25,7 +28,7 @@ const diffStat = async (root, range) => {
   for (const line of nums.stdout.split('\n')) {
     const m = line.match(/^(\d+|-)\t(\d+|-)\t(.*)$/);
     if (!m) continue;
-    if (PROTOCOL_FILES.has(m[3].trim())) continue;
+    if (isProtocolFile(m[3].trim())) continue;
     files += 1;
     if (m[1] !== '-') insertions += Number(m[1]);
     if (m[2] !== '-') deletions += Number(m[2]);

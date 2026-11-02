@@ -14,6 +14,7 @@
 
 以下为现行增量,覆盖本文历史 memo 中的对应字段:
 
+- 归档工具 `relay_archive_log {root?, confirm:boolean?, keep:number?}`:默认 dry-run;`confirm:true` 才写盘——只从 LOG.md 尾部搬、live 至少保留 3 条(默认 8)、边界严格早于最新完成条目;归档文件只在 `docs/archive/` 下、追加不改写、过密钥闸;LOG.md 写入走协议原语(内容 CAS + fencing);归档文件由下一次 `relay_session_end` 控制面提交入库(白名单含 `docs/archive/`)。详见 T001 补充契约段。
 - 第 10 个工具 `relay_worktree_cleanup {root, confirm:boolean?, ttl_hours:number?}`:默认 dry-run;仅清理已登记、过期、非活跃、干净、未 locked、realpath 位于受管缓存且分支仍存在的 worktree。删除只走非强制 `git worktree remove`,分支保留;错误逐项报告。
 - `relay_claim` 新增 `worktree:boolean?`,单次覆盖 `manifest.worktree.enabled`;新 init 默认 true,既有 manifest 缺省 false。返回 controlRoot、executionRoot、`relay/T###` 分支和真实 baseSha。
 - 引擎新增 `src/engines/worktree.mjs`,管理双根解析、原子注册表、任务目录复用和安全清理;新 init/onboard 的 `.gitignore` 基线包含注册表与缓存,旧项目由 `relay_sync`(以及 claim 启用 worktree 时)幂等补齐。controlRoot 唯一维护 TASKS/LOG、认领锁和注册表,executionRoot 负责代码、验收和任务分支提交。
@@ -339,3 +340,15 @@ export const startServer = async ({ onInit, onMethod }) => {
 - **P2-10 recall v1 前缀**:`FACT_LINE_PREFIX_RE` 同时剥离 v1/v2 前缀,升级前条目不再输出双前缀。
 - **P2-11 任务树 git**:`runTaskTreeChecks` 只取 `ls-files`(不取提交历史),省一次 git;任务树检查本就不需要提交历史。
 - **P2-12 R12 修复文案**:删除「或拆小任务粒度」——拆小任务只会产生更多 LOG 行,与阈值方向相反。
+
+## 2026-11-02 T001 补充契约(LOG 归档机制:relay_archive_log)
+
+- **工具**:`relay_archive_log {root?, confirm?:boolean, keep?:number}`。默认 **dry-run**(只报告将搬多少条、目标文件、安全线);`confirm:true` 才写盘。
+- **硬约束**(机检):只从 LOG.md **尾部**搬、永不触碰头部;边界严格早于最新完成条目(R10 依赖);live 至少保留 3 条(默认 8),保证 R7 的「最近 3 条任务会话」窗口不退化;归档文件只在 `docs/archive/LOG-*.md`,**只追加不改写**,不压缩不删历史。
+- **指针**:写盘后在 LOG.md 留 `<!-- relay:log-archive: docs/archive/LOG-YYYY.md -->`;R12 只承认目标真实存在且非空的指针。
+- **安全**:归档内容与 LOG.md 都过密钥闸(`scanSecrets`);LOG.md 写入走 `writeProtocolFile`(内容 CAS + fencing);归档文件写入走原子写。
+- **控制面**:`relay_session_end` 的控制面提交白名单扩展为 `TASKS.md / LOG.md / docs/archive`——归档文件必须能进控制面提交,否则指针指向的文件不在 git 里 = 新漂移。
+- **事实底账**:`PROTOCOL_FILES` 扩展为 TASKS/LOG + `docs/archive/LOG-*.md`,归档搬移不计入「本次任务改动文件数」。
+- **R11 扫描面**:归档文件纳入密钥扫描(兜住人工 `git mv` / 手改归档文件的路径)。
+- **否决 session_end 自动归档**(钢人论证):归档是全仓唯一不可逆的「移动历史」动作,写进绿闸=不可逆操作与人类决策权旁落;改为显式工具 + 默认 dry-run,保留人工确认。
+- **冒烟**:`scripts/smoke-archive-log.mjs`(dry-run 不写盘、confirm 后 R12 PASS、指针存在、条目守恒、live≥3、幂等 no-op),已接入 `npm test`。

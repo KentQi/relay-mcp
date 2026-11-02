@@ -1,5 +1,12 @@
 # 会话日志(最新在上)
 
+## 2026-11-02 16:46 | model=dsh-lead-deepseek-v4.1 | task=T001 完成
+- 摘要: T001 LOG 归档机制:钢人论证后采纳「独立工具 + 默认 dry-run」,否决 session_end 自动归档(绿闸不应改写历史)。新增 relay_archive_log:只从尾部搬、live≥3(默认 8)、边界严格早于最新完成条目、归档文件 docs/archive/LOG-*.md 只追加、过密钥闸、LOG 写入走内容 CAS+fencing;控制面提交白名单扩展为 TASKS/LOG/docs/archive,PROTOCOL_FILES 与 R11 扫描面同步扩展;smoke-archive-log(18 断言)接入 npm test;17 套 645 断言全绿
+- 事实(v2): mode=single | 文件 13 | ± +75/-14 | base=- | sha=- | branch=main || 验收: 通过 | verify: PASS 11·WARN 0·ERROR 0 | 耗时: 34s
+- 负结果: 归档自动化不能塞进 session_end:不可逆的历史移动一旦写进绿闸,就把「历史边界由谁定」交给了模型,与 fail-closed/人类决策原则冲突
+- 负结果: 归档文件必须进控制面提交白名单:否则指针指向的文件不在 git 里,等于制造新的真相漂移
+- 留给下一个: CI 已多次 3/3 绿(node 22/24/26);README 顶部加 badge 并链接实际 Actions 页。
+
 ## 2026-11-02 16:22 | model=dsh-lead-deepseek-v4.1 | task=T002 完成
 - 摘要: T002 写入竞争治理:钢人论证后采纳「仓库锁 + 内容 CAS」——writeProtocolFile 增加 expectedHash,claim/session_end 读 TASKS/LOG 时记哈希、写前双文件预检,任一被外部改过就 fail-closed 不写不提交;新增 smoke-concurrency(14 断言:CAS 冲突不覆盖/无半写、并发认领两条不丢、幂等、无残留)并接入 npm test;16 套 627 断言全绿
 - 事实(v2): mode=single | 文件 9 | ± +80/-15 | base=- | sha=- | branch=main || 验收: 通过 | verify: PASS 11·WARN 0·ERROR 0 | 耗时: 33s

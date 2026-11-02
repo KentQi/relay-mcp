@@ -231,6 +231,26 @@ export const TOOLS = [
     },
   },
   {
+    name: 'relay_archive_log',
+    description:
+      'Archive old LOG.md entries into docs/archive/ and leave a verifiable pointer (R12 trigger). ' +
+      'Dry-run by default: reports how many entries would move, where, and the safety checks. confirm=true ' +
+      'executes the move - only from the tail, never the head; keeps at least 3 entries (default 8) so the ' +
+      'R7 divergence window never degrades; the boundary is always strictly older than the newest completion ' +
+      'entry (R10 relies on it). Archive files live only under docs/archive/, are append-only, pass the secret ' +
+      'scan, and the LOG.md rewrite goes through the protocol writer (content CAS + fencing). The archived file ' +
+      'is committed by the next relay_session_end control-plane commit (whitelist includes docs/archive/). ' +
+      'Never compresses, rewrites, or deletes history - moving is the whole action.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        root: { type: 'string', description: ROOT_DESC },
+        confirm: { type: 'boolean', description: 'false/omitted = dry-run; true = write LOG.md + archive file.' },
+        keep: { type: 'number', description: 'How many newest entries stay live (default 8, minimum 3).' },
+      },
+    },
+  },
+  {
     name: 'relay_recall',
     description:
       'Read-only task-history index (progressive disclosure step 1). Derives rows on the fly from LOG.md + TASKS.md ' +
@@ -497,6 +517,7 @@ const ENGINE_OF = {
   relay_doctor: { module: './engines/doctor.mjs', fn: 'relayDoctor' },
   relay_recall: { module: './engines/recall.mjs', fn: 'relayRecall' },
   relay_get: { module: './engines/recall.mjs', fn: 'relayGet' },
+  relay_archive_log: { module: './engines/archive.mjs', fn: 'relayArchiveLog' },
 };
 
 const engineModuleCache = new Map();
