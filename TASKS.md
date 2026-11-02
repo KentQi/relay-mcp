@@ -21,11 +21,11 @@
   备注: 审计 P0 项;零 fork 窗口内与历史清洗同批完成
 - [x] T006 git 历史身份重写  (2026-09-29)
   备注: 零 fork 窗口期内一次性完成;重写后旧 commit sha 全部变化
-- [ ] T005 CI 矩阵三绿确认与 README badge 补链
-  验收: GitHub Actions node 22/24/26 三个 job 全绿后,把 badge 链接到实际 Actions 页
-  备注: 首跑失败日志:git commit fatal(无身份);本地 macOS 因 hostname 自动兜底而全绿——环境差异只能靠真机 CI 抓
 
 ## 已完成
+- [x] T005 CI 矩阵三绿确认与 README badge 补链  (2026-11-02)
+  验收: GitHub Actions node 22/24/26 三个 job 全绿后,把 badge 链接到实际 Actions 页
+  备注: 2026-11-02 复核:README 顶部 CI badge 已链接 https://github.com/KentQi/relay-mcp/actions/workflows/ci.yml;CI matrix node 22/24/26 三个 job 全绿(最近 main push run 41401631868:3/3 success);首跑失败日志(git commit fatal 无身份)由 gitIdentityArgs 兜底,现已稳定
 - [x] T001 LOG 归档机制:新增 relay_archive_log(默认 dry-run;只从尾部搬、live≥3、边界早于最新完成条目、归档文件只追加;控制面白名单/PROTOCOL_FILES/R11 扫描面同步扩展)  (2026-11-02)
   验收: test:scripts/smoke-archive-log.mjs
   断言: dry-run 不写盘;confirm 后 R12 PASS、指针目标存在、条目守恒、live≥3、幂等 no-op;verify 全绿且 npm test 通过

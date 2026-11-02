@@ -1,5 +1,11 @@
 # 会话日志(最新在上)
 
+## 2026-11-02 16:49 | model=dsh-lead-deepseek-v4.1 | task=T005 完成
+- 摘要: T005 CI 矩阵三绿确认与 README badge 补链:复核 ci.yml matrix(node 22/24/26)三个 job 全绿(最近 main push run 41401631868 3/3 success);README 顶部 CI badge 已指向实际 Actions 页(actions/workflows/ci.yml),本地 npm test 17 套全绿;无需代码改动,补记证据后完成
+- 事实(v2): mode=single | 文件 0 | ± +0/-0 | base=- | sha=- | branch=main || 验收: 通过 | verify: PASS 11·WARN 0·ERROR 0 | 耗时: 34s
+- 负结果: T005 没有代码可写:badge 早已存在且链接正确,真正的「完成动作」是把 CI 三绿证据固定下来,而不是再改一次 README
+- 留给下一个: 范围另含 5 视角报告的中低危残留(模板占位符注入/symlink/root 校验/manifest 版本路径)。
+
 ## 2026-11-02 16:46 | model=dsh-lead-deepseek-v4.1 | task=T001 完成
 - 摘要: T001 LOG 归档机制:钢人论证后采纳「独立工具 + 默认 dry-run」,否决 session_end 自动归档(绿闸不应改写历史)。新增 relay_archive_log:只从尾部搬、live≥3(默认 8)、边界严格早于最新完成条目、归档文件 docs/archive/LOG-*.md 只追加、过密钥闸、LOG 写入走内容 CAS+fencing;控制面提交白名单扩展为 TASKS/LOG/docs/archive,PROTOCOL_FILES 与 R11 扫描面同步扩展;smoke-archive-log(18 断言)接入 npm test;17 套 645 断言全绿
 - 事实(v2): mode=single | 文件 13 | ± +75/-14 | base=- | sha=- | branch=main || 验收: 通过 | verify: PASS 11·WARN 0·ERROR 0 | 耗时: 34s
