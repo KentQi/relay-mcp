@@ -1,5 +1,11 @@
 # 会话日志(最新在上)
 
+## 2026-11-02 22:00 | model=dsh-lead-deepseek-v4.1 | task=无
+- 摘要: 维护:转写第六轮独立复审证据到 docs/04-test/07-audit-round5-v1.5.0.md §6(6 个真实攻击:src 符号链接 init / docs 符号链接归档 / 项目名注入 / 归档方向 / 出场半写 / R7 洗绿,全部实测确认修复;两次误报均归因夹具),报告升 v1.1;复核 npm test 18 套/677 断言、verify 全量 PASS 11·WARN 0·ERROR 0·SKIP 1;T027 发布仍为唯一待办,npm publish 因本机未登录(ENEEDAUTH)不可自动执行。
+- 事实(v2): mode=single | 文件 1 | ± +40/-2 | base=- | sha=- | branch=main || 验收: 通过 | verify: PASS 11·WARN 0·ERROR 0 | 耗时: 43s
+- 负结果: npm publish 本机未登录(ENEEDAUTH):T027 发布步骤无法由 agent 自动完成,需人类先 npm login 或亲自发布
+- 负结果: 复审夹具教训:归档方向须按集合比较(LOG 最新在上);R7 发散夹具不能用 task=维护(R7 明确排除维护条目)
+
 ## 2026-11-02 17:27 | model=dsh-lead-deepseek-v4.1 | task=T011 完成
 - 摘要: T011 第五轮复验审计:独立复验实测 P0×3(init/onboard/archive 符号链接写穿、项目名与密钥随首个提交入史、归档方向反)+P1×2(归档可洗绿 R7、出场半写)+P2×6 残留,已全部修复并 1:1 收编回归;新增 smoke-security(25 断言)、smoke-archive-log 18→25、smoke-compat 幂等期望;CONTRACT/模板/README/CHANGELOG/DECISIONS 同步并 relay_sync 重投影;npm test 18 套/677 断言全绿,verify --full PASS 11·WARN 0·ERROR 0·SKIP 1;证据见 docs/04-test/07-audit-round5-v1.5.0.md
 - 事实(v2): mode=single | 文件 19 | ± +323/-98 | base=- | sha=- | branch=main || 验收: 通过 | verify: PASS 11·WARN 0·ERROR 0 | 耗时: 59s
