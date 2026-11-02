@@ -487,3 +487,10 @@ PR #8 合并后按人类指示删除已合并的 `relay/T022`–`relay/T025` 分
 ```
 
 `npm test` 14 套 / 605 断言全绿;`relay_doctor` 七检全 OK(无残留 worktree/认领锁)。
+### 13.1 清理暴露的第二处误报:R7 把引擎维护出场当任务会话
+
+删分支后连续跑了 3 次维护出场(`relay_session_end` 无 `done_task`),LOG 顶部因此出现 3 条 `task=无` 条目。R7 的排除规则只认 `task=维护`,于是把这 3 条当成「3 条任务会话均无完成」→ **ERROR 停机误报**(verify 汇总从「通过」变「不通过」)。
+
+修法:R7 的排除规则改为 `task=维护 | task=无` 都不计入发散窗口(两者都是引擎/人工维护出场,本就不对应任务);规则表/CONTRACT/AGENTS 模板三处同步。回归 `smoke.mjs` 新增「三连 task=无 不触发 R7」用例。
+
+**实测**:修复后 `relay_verify --full` = `PASS 10 · WARN 1(R12)· ERROR 0 · SKIP 1`,R7 输出「最近 3 条任务会话中 3 条为完成(另排除 9 条维护条目)」。

@@ -307,8 +307,10 @@ const checkR7 = async (root, snap) => {
   if (t == null) return skip('R7', 'LOG.md 不存在', '先 relay_init/onboard 建立 LOG.md;出场会写入首条日志');
   const entries = parseLogEntries(t);
   if (!entries.length) return skip('R7', 'LOG.md 无条目', '首个会话出场后自动产生条目');
-  // 维护条目(onboard/开源化/引擎迁移等,task=维护)不计入发散窗口——它们本来就不对应任务
-  const relevant = entries.filter((e) => !/^维护/.test(String(e.task || '').trim()));
+  // 维护条目不计入发散窗口——它们本来就不对应任务。两种写法都要认:
+  //   task=维护(人工维护条目)/ task=无(relay_session_end 无 done_task 的引擎维护出场)。
+  // 漏掉「无」会让连续几次维护出场被误判成「3 条任务会话无完成」→ R7 停机误报。
+  const relevant = entries.filter((e) => !/^(维护|无)/.test(String(e.task || '').trim()));
   const maintenanceCount = entries.length - relevant.length;
   if (!relevant.length) {
     return pass('R7', `最近 ${maintenanceCount} 条均为维护会话,不计入发散窗口`);

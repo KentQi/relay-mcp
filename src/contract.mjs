@@ -456,7 +456,7 @@ const RULES_TEXT = `# relay 规则表(R 系列)
 | R4 | 入口/START 无时变词 | AGENTS/CLAUDE/GEMINI/START 中 grep -E 'TODO\\|进行中\\|下周\\|待办:' 为空 | relay_verify |
 | R5 | 提交原子性 | 最近 1 条 commit 触碰 (src\\|lib\\|app)/** 而未触碰 TASKS.md\\|LOG.md → warn(本地提示,不阻断);最新提交是 merge → skip(不再假 PASS) | relay_verify(full) |
 | R6 | 文档 staleness | src 近 20 commit 有改动而 docs 0 改动 → warn | relay_verify(full) |
-| R7 | 发散报警 | LOG 最近 3 条任务会话(task=维护 的条目不计入)task 均非「T### 完成」→ error:停机,升级人类仲裁 | relay_verify |
+| R7 | 发散报警 | LOG 最近 3 条任务会话(task=维护 / task=无 的条目不计入)task 均非「T### 完成」→ error:停机,升级人类仲裁 | relay_verify |
 | R8 | 风格归一化 | 项目存在 prettier/eslint 配置或 package.json scripts.format → 提示运行;不存在 → skip(不强加工具链) | relay_verify(full) |
 | R9 | LOG/TASKS 一致性 | LOG 最新条目 task=Txxx 完成 而 TASKS 中 Txxx 仍为未完成 → error | relay_verify / session_end 绿闸 |
 | R10 | 事实对账 | LOG 最新完成条目必须含引擎写入的「事实(v2)」行;机检段(mode/文件数/base/sha/branch)与 git 重算逐字段一致(managed 另含 ±),不一致 → ERROR;branch 必须真实包含声明的 sha(存在但不含 → ERROR;已删除但完成提交仍在当前分支历史 → PASS 带注记,否则 WARN);叙述段(验收/verify/耗时)不参与对账;无法定位提交 → WARN(永不 PASS);v1 旧格式只做结构校验 → WARN(数字权威仅 v2);缺事实行 → WARN;早于 facts.since 的旧条目豁免 | relay_verify / session_end 绿闸 |

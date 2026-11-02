@@ -238,6 +238,16 @@ try {
   writeFileSync(logP, maintLog.join('\n'));
   const rv7 = await tool('relay_verify', { root: tmpA });
   ok(!rv7.isError && !rv7.text.includes('| R7 | ERROR'), '维护会话不计入 R7 发散窗口');
+  // 引擎维护出场写 task=无(无 done_task),同样不能计入发散窗口——否则连续几次维护会误触发停机
+  const noneLog = savedLog.split('\n');
+  const tiN = noneLog.findIndex((l) => l.startsWith('# '));
+  noneLog.splice(tiN + 1, 0, '',
+    '## 2026-09-28 10:00 | model=x | task=无', '- 摘要: 引擎维护出场',
+    '## 2026-09-28 11:00 | model=x | task=无', '- 摘要: 引擎维护出场',
+    '## 2026-09-28 12:00 | model=x | task=无', '- 摘要: 引擎维护出场', '');
+  writeFileSync(logP, noneLog.join('\n'));
+  const rvNone = await tool('relay_verify', { root: tmpA });
+  ok(!rvNone.isError && !rvNone.text.includes('| R7 | ERROR'), '引擎维护出场(task=无)不计入 R7 发散窗口');
   writeFileSync(logP, savedLog);
 
   // ---------- P0 安检回归:H-A 选项注入/目录逃逸 + H-B onboard 密钥安检 ----------

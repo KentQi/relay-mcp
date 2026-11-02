@@ -21,7 +21,7 @@ status: 现行
 ## 验证命令与结果
 
 ```
-npm test   # 14 套冒烟 / 605 断言,全绿(含 PR #8 审计修复、复审 N1/N2 与合并后清理的回归)
+npm test   # 14 套冒烟 / 606 断言,全绿(含 PR #8 审计修复、复审 N1/N2 与合并后清理的回归)
 ./verify   # fast:PASS 8 · WARN 1 · ERROR 0(唯一 WARN 为 R12,见下)
 node src/cli.mjs relay_verify --root . --json '{"full":true}'   # PASS 10 · WARN 1 · ERROR 0
 ```
