@@ -27,6 +27,7 @@ const field = (text, name) => {
 const tmpA = mkdtempSync(path.join(tmpdir(), 'relay-rev-managed-'));
 const tmpB = mkdtempSync(path.join(tmpdir(), 'relay-rev-single-'));
 const tmpC = mkdtempSync(path.join(tmpdir(), 'relay-rev-sentinel-'));
+const tmpD = mkdtempSync(path.join(tmpdir(), 'relay-rev-merge-'));
 
 try {
   // ================= A. managed:密钥必须在任何提交之前被拦 =================
@@ -126,10 +127,31 @@ try {
   ok(/R5\s*\|\s*WARN/.test(r5), '哨兵文件名不能让 R5 失明(仍 WARN)', r5);
   ok(/feature\.js/.test(r5), 'R5 详情确实看到 src 改动', r5);
   ok(/R2\s*\|\s*PASS/.test(rowOf(out(vC), 'R2')), '白名单已修宪 → R2 PASS(排除 R2 干扰)', rowOf(out(vC), 'R2'));
+
+  // ================= G. R5 在 merge 提交上不再静默 PASS(N2 复审) =================
+  // git log --name-only 对 merge 不列文件 → 旧实现 code.length=0 直接 PASS;现在必须显式 SKIP。
+  console.log('\n== G. R5:merge 提交显式 SKIP,不再假 PASS(N2) ==');
+  const initD = cliAt(tmpD, 'relay_init', { name: '评审回归-merge' });
+  ok(initD.status === 0, 'init tmpD', out(initD).slice(0, 200));
+  const defBranch = git(tmpD, 'symbolic-ref', '--short', 'HEAD').stdout.trim();
+  ok(!!defBranch, '取到默认分支名', defBranch);
+  git(tmpD, 'checkout', '-q', '-b', 'feat/x');
+  mkdirSync(path.join(tmpD, 'src'), { recursive: true });
+  writeFileSync(path.join(tmpD, 'src', 'merged.js'), 'export const m = 1;\n');
+  git(tmpD, 'add', '-A');
+  git(tmpD, '-c', 'user.name=rev', '-c', 'user.email=rev@local', 'commit', '-q', '-m', 'feat: 分支上的代码');
+  git(tmpD, 'checkout', '-q', defBranch);
+  const mg = git(tmpD, '-c', 'user.name=rev', '-c', 'user.email=rev@local', 'merge', '--no-ff', '-q', '-m', 'Merge feat/x', 'feat/x');
+  ok(mg.status === 0, '创建 merge 提交', (mg.stderr || '').slice(0, 200));
+  const vD = cliAt(tmpD, 'relay_verify', { full: true });
+  const r5m = rowOf(out(vD), 'R5');
+  ok(/R5\s*\|\s*SKIP/.test(r5m), 'merge 提交 → R5 SKIP(不再静默 PASS)', r5m);
+  ok(/merge/.test(r5m), 'SKIP 文案说明是 merge 提交', r5m);
 } finally {
   rmSync(tmpA, { recursive: true, force: true });
   rmSync(tmpB, { recursive: true, force: true });
   rmSync(tmpC, { recursive: true, force: true });
+  rmSync(tmpD, { recursive: true, force: true });
 }
 
 console.log(`\n结果: ${pass} 通过 / ${fail} 失败`);

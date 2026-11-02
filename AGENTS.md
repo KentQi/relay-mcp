@@ -34,7 +34,7 @@
 | R2 | 顶层目录白名单;越界须显式修 `.relay/manifest.json`(修宪) |
 | R3 | docs 文档命名(`NN-类型-主题-vX.Y.md`)与 frontmatter 合规 |
 | R4 | 入口文件与 START 保持常青,不得出现时变词汇 |
-| R5 | 动了 src 就要同步动 TASKS/LOG(提交原子性;双根下由成对证据兜底:任务分支代码提交+controlRoot 完成提交) |
+| R5 | 动了 src 就要同步动 TASKS/LOG(提交原子性;双根下由成对证据兜底:任务分支代码提交+controlRoot 完成提交);最新提交是 merge → skip(不假 PASS) |
 | R6 | 代码连动而文档未动 → staleness 提醒 |
 | R7 | 会话日志连续 3 条任务会话(维护不计入)无「T### 完成」→ 停机,人类仲裁 |
 | R8 | 项目配了 format 工具链就跑;没配不硬加 |

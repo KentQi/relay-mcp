@@ -96,14 +96,21 @@ try {
   const g2 = cli(tmp, 'relay_get', { ids: ['T002'] }, '');
   ok(out(g1) === out(g2), 'get 输出可复放(两次逐字一致)');
 
-  console.log('\n== managed 双根:任务树只取 ls-files,git 进程有上界(P2-11) ==');
+  console.log('\n== 真双根:从 executionRoot verify 走双根分支(N1 复审) ==');
+  // 复审 N1:旧用例跑 `--root <controlRoot>`,落进单根快路径(controlRoot===executionRoot),
+  // 真正的双根分支(`--root <executionRoot>`)从未被测到。这里改跑真双根。
   const claim = cli(tmp, 'relay_claim', { task: 'T004', model: 'perf-managed', worktree: true });
   ok(claim.status === 0, 'claim 建出受管任务树', out(claim).slice(0, 300));
-  const mv = cli(tmp, 'relay_verify', { full: true }, trace);
+  const execRoot = ((out(claim).match(/- executionRoot: (.+)/) || [])[1] || '').trim();
+  ok(!!execRoot && execRoot !== tmp, 'claim 返回独立 executionRoot', execRoot);
+  const mv = cli(execRoot, 'relay_verify', { full: true }, trace);
   const tm = traceOf(trace);
-  ok(mv.status === 0, 'managed 双根 verify 通过', out(mv).slice(0, 400));
-  ok(tm && tm.sync === 0, 'managed 路径同步 spawn = 0(async 引擎)');
-  ok(tm && tm.git <= 5, `managed 双根 git 子进程 ${tm && tm.git} ≤ 5(任务树不取提交历史)`);
+  ok(mv.status === 0, '真双根 verify 通过', out(mv).slice(0, 400));
+  ok(/双根模式/.test(out(mv)), '确实走双根分支(不是单根快路径)');
+  ok(/executionRoot\(任务树结构检查/.test(out(mv)), '输出含 executionRoot 任务树段落');
+  ok(tm && tm.sync === 0, '真双根同步 spawn = 0(async 引擎)');
+  ok(tm && tm.reads['manifest.json'] === 1, `真双根 manifest 只读 ${tm && tm.reads['manifest.json']} 次(meta 复用)`);
+  ok(tm && tm.git <= 8, `真双根 git 子进程 ${tm && tm.git} ≤ 8(含 R10 对账时的分支/diff)`);
 
   console.log('\n== 静态约束:整棵 src/ 无同步 exec(P1-6 扩展) ==');
   const walkSrc = (dir) => readdirSync(dir, { withFileTypes: true })

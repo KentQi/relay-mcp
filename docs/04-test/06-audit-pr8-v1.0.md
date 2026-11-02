@@ -314,9 +314,93 @@ ok(/^\| R12 \|/m.test(tpl),           'AGENTS 模板规则表含 R12 | 行');
 | P1-7 R12 指针消音 | 指针必须指向真实存在且非空的 `docs/archive/*.md`,否则按全文计算并标注「未被承认」;两轴共用活跃区 | `smoke-r12-boundary` 假指针仍 WARN / 真指针 PASS + 活跃区 0 行 |
 | P2-8/9 `|`/`||` 解析断裂 | v2 按「空格||空格」切分;分支名含 `|`、叙述段含 `||` 均保留 | `smoke-facts` 解析器边界 3 断言 |
 | P2-10 recall v1 前缀 | 导出 `FACT_LINE_PREFIX_RE` 同时剥离 v1/v2 | `smoke-recall` v1 前缀用例 |
-| P2-11 任务树 git 进程 | `runTaskTreeChecks` 只取 `ls-files`(不取提交历史) | `smoke-perf` managed 双根 git=2 ≤ 5 |
+| P2-11 任务树 git 进程 | `runTaskTreeChecks` 只取 `ls-files`(不取提交历史) | `smoke-perf`(此处 git=2 实为 controlRoot 单根路径的测量,真双根见 §11 N1 修正) |
 | P2-12 R12 修复文案 | 删除「拆小任务粒度」(与阈值方向相反) | 文案断言(`/归档/`,不含错误指引) |
 
-**复测**:`npm test` 14 套 / 595 断言全绿;`relay_verify --full` = PASS 10 · WARN 1(R12,LOG 159 行 > 150)· ERROR 0;CI(node 22/24/26)全绿。
+**复测**:`npm test` 14 套 / 595 断言全绿(复审后 N1/N2 修复补齐至 604,见 §11);`relay_verify --full` = PASS 10 · WARN 1(R12,LOG 159 行 > 150)· ERROR 0;CI(node 22/24/26)全绿。
 
 **残留(已登记 T026)**:`session_start` 仍有 manifest 读 6 次 / git 7 次的读放大(同步 spawn 已清零);修复需把 manifest 配置沿 session_start 调用链单轮传递,不引入跨调用缓存。
+---
+
+## 10. 复审记录(2026-11-02,HEAD `0e509fa`)
+
+复审方式:**重跑本报告 §5 的全部复现脚本**(脚本未改动,仍指向工作树=新 HEAD),加上新写的边界脚本。不采信修复说明,只认脚本输出。
+
+### 10.1 12 条发现的复验结果
+
+| 发现 | 复验实测 | 结论 |
+|---|---|---|
+| P0-1 `__COMMIT__` 哨兵伪造 | 同提交含 `src/feature.js` + `__COMMIT__notes.md` → `R5 \| WARN`(基线同夹具亦 WARN)。NUL 前缀解析实测:`commit f9178fe8 files=["__COMMIT__notes.md","src/feature.js"]` —— 文件名正确落在 chunk 后续行,伪造不再成立 | **已修复** |
+| P0-2 v1 自选 range | 手写 v1 行、base/sha 指向无关提交、数字恰好对上 → `R10 \| WARN \| …v1 旧格式,只做结构校验(数字对账仅 v2 机检段权威)`,verify status 0 | **已修复** |
+| P1-3 branch 未比对 | ①用 main 的真实 sha 冒充 → `ERROR \| branch=relay/T001 不包含声明的 sha=…(分支与提交不匹配)`;②分支合并后删除 → `WARN \| branch=relay/T001 无法验证(分支不存在,可能已合并删除)`;③single 伪造 `zzz/zzz` / `relay/T999` → 均 WARN | **已修复** |
+| P1-4 single ± 不对账 | single `± +999/-999` → PASS(契约已改为「± 仅 managed 可复算」,并锁测试) | **已由契约统一** |
+| P1-5 三处一致只查行存在 | `smoke-r12-boundary.mjs:98` 已改为内容比对(阈值 150/20/warn/开关键名);`README.md`/`src/**` 的 R1–R11 残留已清零 | **已修复** |
+| P1-6 会话层同步探测 | relay_session_start:sync **1→0**;relay_session_end:sync **1→0**;`isGitRepo` 同步版已从 util 删除 | **已修复**(读放大登记 T026) |
+| P1-7 R12 指针消音 | 旧格式指针→不被承认;新格式目标不存在→不被承认;目标为空→不被承认;指向 `../../etc/passwd`→不被承认;真指针→`PASS 活跃区 0 行`;两轴已共用同一活跃区 | **已修复** |
+| P2-8/9 `|`/`\|\|` 断裂 | `branch=relay/T1\|x` → 解析出 `"relay/T1\|x"`;`branch=relay/T1\|\|x` → 保留且叙述段 `acceptance=通过 / verifyPass=1` | **已修复** |
+| P2-10 recall v1 前缀 | 改用 `FACT_LINE_PREFIX_RE = /^- 事实\(v[12]\):\s*/` | **已修复** |
+| P2-11 任务树多一次 git | `runTaskTreeChecks` 不再取提交历史 | **已修复**(但见 10.3) |
+| P2-12 R12 文案 | 「拆小任务粒度」已删(残留命中是 R7 自己的文案,上下文不同) | **已修复** |
+
+另验:NUL 解析对**中文名 / 空格 / 引号文件名**正确计入(文件数 3、± 对账一致);merge 提交作为最新提交时 R5 仍 PASS(见 10.3)。
+
+### 10.2 修复后状态复核
+
+```
+npm test(14 套并行)      15.19s,全部 exit 0,595 断言全绿
+smoke-session-perf.mjs   exit 1(红灯,登记为 T026,未进 npm test)✓
+smoke-t021-decision.mjs  exit 1(红灯,T021 待办)✓
+CI(node 22/24/26)        6/6 pass
+```
+
+### 10.3 复审新发现(2 条,均未修)
+
+**N1 · perf 冒烟的「managed 双根」用例实际没走双根分支,§9 的「git=2」不准确 【MEDIUM】**
+
+`scripts/smoke-perf.mjs:99-106` 标为「managed 双根」,但它跑的是 `relay_verify --root <controlRoot>`。`src/engines/verify.mjs:643` 的分支条件是 `roots.controlRoot === roots.executionRoot`,controlRoot 入参直接落进**单根分支**。而真正的双根分支(`relay_verify --root <executionRoot>`)恰恰是代码注释里点名要支持的场景(「避免『在 worktree 里 verify 出绿、出场绿闸却查 controlRoot』的分裂结论」),它**从未被该冒烟测量**。
+
+实测两者的 git 子进程数(生产追踪缝 `RELAY_TRACE_FILE`):
+
+| 调用 | git | sync |
+|---|---|---|
+| `relay_verify --root <controlRoot>`(冒烟所测) | 2 | 0 |
+| `relay_verify --root <executionRoot>`(真双根) | **7** | 0 |
+
+真双根 7 次已超出该冒烟宣称的 `≤ 5` 上界。本报告 §9 的「smoke-perf managed 双根 git=2 ≤ 5」因此既不是双根的数,也不是该分支的上界断言。
+
+**N2 · R5 在最新提交为 merge 时静默空转(与 base 同行为,非本 PR 引入)【LOW】**
+
+`git log --name-only` 对 merge 提交不显示文件,故 `commits[0].files` 为空 → R5 的 `code.length` 为 0 → 直接 PASS。实测把 HEAD 换成 `Merge tmpmerge` 后:`R5 | PASS`。base 版用 `git log -1 --name-only` 行为相同,**不是回归**;但本仓库提交史里 `Merge T018/T019/T020` 连续出现,意味着 R5 在相当一部分真实提交上处于「形同虚设」状态。若要修:`git log --first-parent` 或 `git show --name-only -m`。
+
+### 10.4 复审结论
+
+**12 条发现全部确认修复,可以合并。** P0-1 与 P0-2 都不是打补丁而是换机制:NUL 前缀让「文件名伪造提交边界」在类型层不成立;v1 不再调用重算、数字权威收敛到 v2。两处新发现(N1/N2)都不阻断合并,但 N1 建议顺手把冒烟的「managed 双根」用例改成真跑双根分支,否则那条 `≤ 5` 的上界保护的是没人走的路径。
+
+---
+
+## 11. 复审后修复(N1 / N2,2026-11-02)
+
+复审 §10 的两条新发现均为「顺手可做」,已在同一 PR 内修复并补回归;§9 的 P2-11 测量口径也一并修正。
+
+### N1 · 冒烟改跑真双根,上界断言改为真实路径
+
+- `smoke-perf.mjs` 的 managed 用例不再跑 `--root <controlRoot>`(那条路径会落进单根分支),改为从 `claim` 返回的 **executionRoot** 跑 `relay_verify`,并断言输出含「双根模式」与 executionRoot 任务树段落。
+- 断言:真双根 `sync=0`、`manifest` 读 **1** 次(meta 复用)、git 子进程 **≤ 8**。实测本仓库夹具 5 次;复审测得 7 次(其夹具含 v2 完成条目,R10 会多一次 branch 校验 + 一次 diff)——两者都在上界内。
+- §9 P2-11 的「git=2」标注为单根路径测量,已加注指向本节;`verify.mjs` 双根输出标签同步修正为「R5/R6/R7/R9/R10/R11/R12 只在 controlRoot 跑」。
+
+### N2 · R5 遇 merge 提交改为显式 SKIP,不再假 PASS
+
+- `collectGit` 的提交头增加 `%P`(父提交),R5 识别 `parents.length > 1` 时返回 **SKIP** 并在文案里说明「merge 是集成提交、git log --name-only 不列 merge 文件、不是通过」,给出 `git show --name-only -m <merge-sha>` 的核对方式。
+- 双根场景由 session_end 的成对证据(代码提交 + 控制面提交)兜底,与 AGENTS/CONTRACT 的 R5 口径一致。
+- 回归:`smoke-review-regressions` G 段——构造 `--no-ff` merge 提交后断言 `R5 | SKIP` 且文案含 merge(旧行为是 PASS)。
+
+### 复测(§11 修复后)
+
+```
+npm test(14 套)           全部 exit 0,604 断言全绿
+relay_verify --full       PASS 10 · WARN 1(R12)· ERROR 0
+smoke-session-perf.mjs    exit 1(红灯,T026)✓
+smoke-t021-decision.mjs   exit 1(红灯,T021)✓
+```
+
+结论:**N1/N2 均修复**;R12 的 WARN 维持(归档引擎按 DECISIONS 推迟,触发条件 1/2),T021 仍待产品决策。

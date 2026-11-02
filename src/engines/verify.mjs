@@ -60,14 +60,15 @@ const collectGit = async (root, { commits = true } = {}) => {
   // 名为 __COMMIT__* 的文件会被当成提交头,让 R5 静默失明(base 版无哨兵,是本 PR 引入的回归)。
   // 改用 NUL 作**记录前缀**:文件名不可能含 NUL,因此每个 NUL 之后的第一个行必然是提交头,
   // 路径只可能落在该 chunk 的后续行——文件名再也无法伪造提交边界。
-  const log = await gitRun(root, '-c', 'core.quotePath=false', 'log', '-20', '--name-only', '--pretty=format:%x00%H%x09%s');
+  // 头格式 = sha \t parents(空格分隔) \t subject:%P 让 R5 能识别 merge 提交(N2 复审)。
+  const log = await gitRun(root, '-c', 'core.quotePath=false', 'log', '-20', '--name-only', '--pretty=format:%x00%H%x09%P%x09%s');
   if (log.ok) {
     for (const chunk of log.stdout.split('\0')) {
       const rows = chunk.replace(/\r\n/g, '\n').split('\n');
       const header = rows.shift() || '';
-      const hm = header.match(/^([0-9a-f]{40})\t(.*)$/);
+      const hm = header.match(/^([0-9a-f]{40})\t([0-9a-f ]*)\t(.*)$/);
       if (!hm) continue; // 空 chunk / 非提交头行(理论上不存在)
-      const cur = { sha: hm[1], subject: hm[2], files: [] };
+      const cur = { sha: hm[1], parents: hm[2].trim() ? hm[2].trim().split(' ') : [], subject: hm[3], files: [] };
       for (const row of rows) {
         const line = row.trim();
         if (line) cur.files.push(line);
@@ -261,6 +262,15 @@ const checkR5 = async (root, cfg, git) => {
   if (!git || !git.isRepo) return skip('R5', '非 git 仓库,跳过', '初始化 git 后本检查自动生效');
   const newest = git.commits && git.commits[0];
   if (!newest) return skip('R5', '仓库尚无提交,跳过', '产生首个提交后本检查自动生效');
+  // N2(复审):merge 提交在 `git log --name-only` 里不列文件 → 旧实现 code.length===0 直接 PASS,
+  // 让 R5 在「HEAD 是 merge」时静默空转(本项目提交史里 Merge T0xx 很常见)。
+  // merge 是集成提交、不是原子性单元;双根场景由 session_end 的成对证据兜底 —— 这里显式 SKIP,
+  // 不再假 PASS(需要逐提交核对时用 `git show --name-only -m <merge-sha>`)。
+  if (Array.isArray(newest.parents) && newest.parents.length > 1) {
+    return skip('R5', `最近一次提交是 merge 提交(${newest.sha.slice(0, 12)},${newest.parents.length} 个父),` +
+      'git log --name-only 不列 merge 文件,原子性无法判定(不是通过)',
+      '逐提交核对用 `git show --name-only -m <merge-sha>`;双根场景由 session_end 的成对证据(代码提交 + 控制面提交)校验');
+  }
   const files = newest.files;
   const roots = (cfg && cfg.codeRoots) || DEFAULT_CODE_ROOTS;
   const code = files.filter((f) => underRoots(roots, f)); // P4:原 /^(src|lib|app)\// 的配置化形态
@@ -658,7 +668,7 @@ export const relayVerify = async (args = {}) => {
     '',
     formatChecks(controlResults, { root: roots.controlRoot, full, mode: 'controlRoot 全量' }),
     '',
-    formatChecks(taskResults, { root: roots.executionRoot, full: false, mode: 'executionRoot 任务树(R5/R6/R7/R9 只在 controlRoot 跑)' }),
+    formatChecks(taskResults, { root: roots.executionRoot, full: false, mode: 'executionRoot 任务树(R5/R6/R7/R9/R10/R11/R12 只在 controlRoot 跑)' }),
   ];
   if (roots.linkedWorktree && !roots.managed) {
     lines.push('', `> ⚠ 该 worktree 未被 relay 注册(registryState=${roots.registryState});session_end 的完成出场会 fail-closed 拒绝。`);
