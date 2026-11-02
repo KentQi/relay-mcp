@@ -1,5 +1,15 @@
 # 会话日志(最新在上)
 
+## 2026-11-02 11:35 | model=dsh-lead-deepseek-v4.1 | task=无
+- 摘要: PR #8 审计修复(维护会话):2 HIGH + 5 MEDIUM + 5 LOW 全修——__COMMIT__ 文本哨兵改 NUL 前缀(R5 不再可伪造)、v1 事实行降为结构校验 WARN(不自证 range)、R10 增加 branch 归属校验、single ± 契约化、三处一致断言升级为内容比对、删除同步 isGitRepo(全引擎 async,静态扫描整棵 src)、R12 归档指针必须指向真实文件、v2 分隔符按 ' || ' 解析、recall 剥离 v1 前缀、任务树省一次 git;新增/扩展回归后 npm test 14 套 593 断言全绿,verify full PASS 10 WARN 1(R12)ERROR 0
+- 事实(v2): mode=single | 文件 0 | ± +0/-0 | base=- | sha=- | branch=main || 验收: 通过 | verify: PASS 10·WARN 1·ERROR 0 | 耗时: 27s
+- 负结果: 文本哨兵不能用来分隔 git 输出:文件名与提交头在同一行流,任何字符串标记都可能被文件名伪造;NUL 是文件系统不允许出现的字节,才是稳的边界
+- 负结果: 给 v1 旧格式找「可信 range」是伪解:v1 行自带的 base/sha 由被校验方提供,怎么算都是自证;正确做法是降级为结构校验并 WARN,数字权威收敛到 v2
+- 负结果: WARN 不阻断绿闸:任何「可被篡改但只 WARN」的机检字段等于可绕过;要么 ERROR,要么在契约里明确它不构成证据
+- 负结果: git branch --contains 输出行带 '*' 或 '+' 前缀(+ = 已被 linked worktree 检出),解析必须先剥标记,否则任务分支永远匹配不上
+- 负结果: 三处一致断言只查「行存在」会把分歧固化进测试:必须比对阈值/判定/开关键名等内容
+- 留给下一个: 红灯脚本已存在且当前为红(manifest 读 6 / LOG 2 / TASKS 3 / git 6);目标 = 1/1/1 且 git ≤4,sync 恒 0。不要引入模块级缓存(manifest 会话间可变 = 第二真相源)。
+
 ## 2026-11-01 23:46 | model=dsh-lead-deepseek-v4.1 | task=T025 完成
 - 摘要: T025 provenance 发布前置:package.json 补 repository(git+https://github.com/KentQi/relay-mcp.git)与 bugs(…/issues);smoke-pack 增加 2 条机检断言(28→30),打包边界 46 文件断言不回归;npm test 14 套 573 断言全绿
 - 事实(v2): mode=managed | 文件 2 | ± +10/-0 | base=bbf250f74f9989f3d2a21c6fea10319a83efbd79 | sha=93b68c161441638c244ea609ea30afc23a75e4ad | branch=relay/T025 || 验收: 通过 | verify: PASS 15·WARN 0·ERROR 0 | 耗时: 28s
