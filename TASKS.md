@@ -14,15 +14,15 @@
 (空——认领后由 relay_claim 移入;认领锁在 .relay/claims/,TTL 4 小时,崩溃会话的认领到期自动可接管)
 
 ## 待办
-- [ ] T027 发布 v1.5.0 与 GitHub Release(人类修宪级动作,不自动执行)
-  验收: 人工批准后:package.json 版本改 1.5.0 → npm publish → git tag v1.5.0 指向本提交并推送 → Release 说明引用 docs/04-test/05 与 07
-  备注: 发布前人工复核 07 报告 §5 已知边界;发布属人类决策,relay 不自动发布
 - [x] T007 发布 v1.0.0 tag  (2026-09-29)
   备注: 审计 P0 项;零 fork 窗口内与历史清洗同批完成
 - [x] T006 git 历史身份重写  (2026-09-29)
   备注: 零 fork 窗口期内一次性完成;重写后旧 commit sha 全部变化
 
 ## 已完成
+- [x] T027 发布 v1.5.0 与 GitHub Release(不发布 npm;人类修宪级动作,已获批准)  (2026-11-02)
+  验收: package.json 版本为 1.5.0 且 CHANGELOG 已定版;git tag v1.5.0 指向 T027 完成提交并推送;GitHub Releases 出现 v1.5.0 且说明引用 docs/04-test/05 与 07;npm publish 明确不做
+  备注: 用户 2026-11-02 决策「不做 npm,只把项目更新到 GitHub」;发布前人工复核 07 报告 §5 已知边界
 - [x] T011 第五轮复验审计(约第三方独立视角验证 P0+P1 修复)  (2026-11-02)
   验收: 复验方独立实测:P0 安检(选项注入/目录逃逸/密钥)、并发回归、幂等、维护语义全部复现通过
   备注: 审计范围另含 5 视角报告中的中低危残留(模板占位符注入/symlink/root 校验/manifest 版本路径);修复与复验证据见 docs/04-test/07-audit-round5-v1.5.0.md

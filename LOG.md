@@ -1,5 +1,11 @@
 # 会话日志(最新在上)
 
+## 2026-11-02 22:06 | model=dsh-lead-deepseek-v4.1 | task=T027 完成
+- 摘要: T027 发布 v1.5.0(仅 GitHub,不做 npm):package.json 1.4.1→1.5.0、CHANGELOG 的 Unreleased 定版为 1.5.0(2026-11-02)、DECISIONS 记录「不做 npm 只更新 GitHub」决策与后续 npm 复评条件;T027 认领验收已按用户决策去掉 npm publish。出场通过后创建 tag v1.5.0 指向本完成提交并推送,再创建 GitHub Release(说明引用 docs/04-test/05 与 07);npm registry 保持 1.2.0 不变。
+- 事实(v2): mode=single | 文件 3 | ± +9/-2 | base=- | sha=- | branch=main || 验收: 通过 | verify: PASS 11·WARN 0·ERROR 0 | 耗时: 36s
+- 负结果: 本版本明确不发布 npm(用户 2026-11-02 决策);不要在本轮或后续会话尝试 npm publish,除非重新登记任务并获人类批准
+- 负结果: 发布后须复核 tag v1.5.0 指向 T027 完成提交(不是更早的 0f6440c/2c6e3ca),Release 与 tag 必须同源
+
 ## 2026-11-02 22:00 | model=dsh-lead-deepseek-v4.1 | task=无
 - 摘要: 维护:转写第六轮独立复审证据到 docs/04-test/07-audit-round5-v1.5.0.md §6(6 个真实攻击:src 符号链接 init / docs 符号链接归档 / 项目名注入 / 归档方向 / 出场半写 / R7 洗绿,全部实测确认修复;两次误报均归因夹具),报告升 v1.1;复核 npm test 18 套/677 断言、verify 全量 PASS 11·WARN 0·ERROR 0·SKIP 1;T027 发布仍为唯一待办,npm publish 因本机未登录(ENEEDAUTH)不可自动执行。
 - 事实(v2): mode=single | 文件 1 | ± +40/-2 | base=- | sha=- | branch=main || 验收: 通过 | verify: PASS 11·WARN 0·ERROR 0 | 耗时: 43s

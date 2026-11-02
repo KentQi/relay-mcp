@@ -3,7 +3,7 @@
 本项目遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 格式;
 版本号遵循 [SemVer](https://semver.org/lang/zh-CN/)。
 
-## [Unreleased]
+## [1.5.0] - 2026-11-02
 
 ### Changed
 - `relay_verify` 单轮只读一次 LOG/TASKS/manifest(此前 4/2/2 次),git 子进程从 9 收敛到 2–4;`resolveRelayRoots` 对普通仓库走 fs 快路径(recall/get 的 git 调用 2→0);async 路径不再同步探测 git(T022)
