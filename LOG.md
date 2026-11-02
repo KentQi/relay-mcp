@@ -1,5 +1,63 @@
 # 会话日志(最新在上)
 
+## 2026-11-02 11:47 | model=dsh-lead-deepseek-v4.1 | task=无
+- 摘要: PR #8 审计修复补充(维护):single 模式补 branch 存在性校验(P1-3 的 zzz/zzz、relay/T999 伪造现在报 WARN 而非 PASS);锁定 single ± 不参与对账的契约(P1-4);回归 smoke-facts 42 断言,npm test 14 套 595 断言全绿;审计复现脚本 bp.txt 已从 PASS 变为 WARN
+- 事实(v2): mode=single | 文件 0 | ± +0/-0 | base=- | sha=- | branch=main || 验收: 通过 | verify: PASS 9·WARN 2·ERROR 0 | 耗时: 26s
+- 负结果: single 模式不能校验 sha 归属(代码未提交),但分支名存在性可以且必须校验——「无法完全验证」不等于「不验证」
+- 负结果: 审计脚本的复现夹具本身可能依赖旧行为(如先 claim 改了 TASKS 导致 R5 基线就是 PASS);复验前先确认基线,否则「未复现」可能只是夹具失效
+
+## 2026-11-02 11:35 | model=dsh-lead-deepseek-v4.1 | task=无
+- 摘要: PR #8 审计修复(维护会话):2 HIGH + 5 MEDIUM + 5 LOW 全修——__COMMIT__ 文本哨兵改 NUL 前缀(R5 不再可伪造)、v1 事实行降为结构校验 WARN(不自证 range)、R10 增加 branch 归属校验、single ± 契约化、三处一致断言升级为内容比对、删除同步 isGitRepo(全引擎 async,静态扫描整棵 src)、R12 归档指针必须指向真实文件、v2 分隔符按 ' || ' 解析、recall 剥离 v1 前缀、任务树省一次 git;新增/扩展回归后 npm test 14 套 593 断言全绿,verify full PASS 10 WARN 1(R12)ERROR 0
+- 事实(v2): mode=single | 文件 0 | ± +0/-0 | base=- | sha=- | branch=main || 验收: 通过 | verify: PASS 10·WARN 1·ERROR 0 | 耗时: 27s
+- 负结果: 文本哨兵不能用来分隔 git 输出:文件名与提交头在同一行流,任何字符串标记都可能被文件名伪造;NUL 是文件系统不允许出现的字节,才是稳的边界
+- 负结果: 给 v1 旧格式找「可信 range」是伪解:v1 行自带的 base/sha 由被校验方提供,怎么算都是自证;正确做法是降级为结构校验并 WARN,数字权威收敛到 v2
+- 负结果: WARN 不阻断绿闸:任何「可被篡改但只 WARN」的机检字段等于可绕过;要么 ERROR,要么在契约里明确它不构成证据
+- 负结果: git branch --contains 输出行带 '*' 或 '+' 前缀(+ = 已被 linked worktree 检出),解析必须先剥标记,否则任务分支永远匹配不上
+- 负结果: 三处一致断言只查「行存在」会把分歧固化进测试:必须比对阈值/判定/开关键名等内容
+- 留给下一个: 红灯脚本已存在且当前为红(manifest 读 6 / LOG 2 / TASKS 3 / git 6);目标 = 1/1/1 且 git ≤4,sync 恒 0。不要引入模块级缓存(manifest 会话间可变 = 第二真相源)。
+
+## 2026-11-01 23:46 | model=dsh-lead-deepseek-v4.1 | task=T025 完成
+- 摘要: T025 provenance 发布前置:package.json 补 repository(git+https://github.com/KentQi/relay-mcp.git)与 bugs(…/issues);smoke-pack 增加 2 条机检断言(28→30),打包边界 46 文件断言不回归;npm test 14 套 573 断言全绿
+- 事实(v2): mode=managed | 文件 2 | ± +10/-0 | base=bbf250f74f9989f3d2a21c6fea10319a83efbd79 | sha=93b68c161441638c244ea609ea30afc23a75e4ad | branch=relay/T025 || 验收: 通过 | verify: PASS 15·WARN 0·ERROR 0 | 耗时: 28s
+- worktree: branch=relay/T025; sha=93b68c161441638c244ea609ea30afc23a75e4ad; 已验收,未合并(是否合并由人工决定)
+- 负结果: provenance 字段必须机器可验:只加 repository 字符串不够,冒烟要断言 url 指向真实仓库/ issues,否则拼错域名也能绿
+- 负结果: package.json 的 files 白名单不含 scripts/,冒烟脚本改了不进包——发布面与开发面要分开看
+- 负结果: T025 原验收是 node -e 自由文本,验收执行门只跑 test: 路径与 npm test,自由文本永不执行;改成 test:scripts/smoke-pack.mjs 才是可执行绿灯
+- 留给下一个: 数据闸已自然越过:LOG 22 条目 / 17 完成条目;决策动作=在 DECISIONS.md 追加标题含 T018 的条目,锚定 T017 提交 sha 与对应 LOG 原文,写可测复评阈值(LOG ≥ 30 条),断言脚本用 git log 反查 sha 真实存在
+
+## 2026-11-01 23:43 | model=dsh-lead-deepseek-v4.1 | task=T024 完成
+- 摘要: T024 LOG 边界规则 R12:活跃区(归档指针之前的行)>150 或完成条目 >20 → WARN(manifest.logBoundary.strict=true 升 ERROR),只报警不自动归档;归档指针语义与落地硬约束写入 CONTRACT;CONTRACT/relay_rules/AGENTS 模板三处一致;新增 13 断言冒烟并接入 npm test;perf 规模不变量改为 R12 单列断言
+- 事实(v2): mode=managed | 文件 12 | ± +159/-19 | base=56cfed8d9983946703b2c0aceefa07f32dc06b54 | sha=aff8eeb950e23877dffc9db6f5ca5f3fb4db4ab5 | branch=relay/T024 || 验收: 通过 | verify: PASS 15·WARN 0·ERROR 0 | 耗时: 28s
+- worktree: branch=relay/T024; sha=aff8eeb950e23877dffc9db6f5ca5f3fb4db4ab5; 已验收,未合并(是否合并由人工决定)
+- 负结果: R12 与 T022 的「规模不变量」天然冲突:边界规则按设计随 LOG 规模变化,perf 冒烟必须把 R12 从全规则一致性比较中剔除、单独断言(20 条≈62 行 PASS / 100 条≈302 行 WARN)
+- 负结果: fillLog(n) 是 3n+2 行而不是 n 行:按「100 条 LOG」直觉设阈值会在 302 行时误判,阈值断言必须用真实行数
+- 负结果: R12 只在 controlRoot 跑:executionRoot 的 LOG 是 baseSha 快照,拿它判边界会得到陈旧结论(同 R7/R9/R10/R11 边界)
+- 负结果: 归档指针必须让 R12 停止计数:没有指针语义时「活跃区」= 全文,归档后规则仍会响,归档等于白做
+- 负结果: 阈值不做 manifest 可配置:否则「把阈值调大」会成为消音手段;只留 strict 升级开关
+- 留给下一个: 在 scripts/smoke-pack.mjs 增加断言:package.json 含 repository(url 指向 github.com/KentQi/relay-mcp)与 bugs(url/issues),并保留现有 46 文件/129kB 打包断言
+
+## 2026-11-01 23:36 | model=dsh-lead-deepseek-v4.1 | task=T023 完成
+- 摘要: T023 事实行 v2 + R10 去 fail-open:机检段(mode/文件数/±/base/sha/branch)与叙述段(验收/verify/耗时)以 || 分隔;机检段逐字段对账 + 结构自洽(mode/branch 篡改直接 ERROR),无法定位提交 → WARN 永不 PASS;v1 旧行向后兼容;CONTRACT/relay_rules/AGENTS 模板三处同步,冒烟 33 断言
+- 事实(v2): mode=managed | 文件 12 | ± +226/-65 | base=baf2e87ac5bf5cb1fad91f0b725f7489116906cc | sha=dd816d6939459a077951d94f369d7d7b45026d12 | branch=relay/T023 || 验收: 通过 | verify: PASS 14·WARN 0·ERROR 0 | 耗时: 28s
+- worktree: branch=relay/T023; sha=dd816d6939459a077951d94f369d7d7b45026d12; 已验收,未合并(是否合并由人工决定)
+- 负结果: R10 的 fail-open 不是小瑕疵:重算不出来时返回 PASS 等于给伪造事实行背书,必须 WARN 且永不 PASS
+- 负结果: 机检段全对账不可行:验收/verify/耗时是写时快照,检查时点重算不出;强行对账只能产假绿或死锁
+- 负结果: 只对 ± 对账不够:mode 被改成 single 会跳过 ± 检查,必须先做机检段结构自洽(managed 必须有 base/sha 且 branch 以 relay/ 开头)
+- 负结果: npm test 接 tail/管道会吞掉退出码:必须 set -o pipefail,否则套件失败被当成全绿
+- 负结果: 验收行 test:路径 后不能跟自由文本(gate 把整串当路径):细节写 断言:/备注: 续行
+- 负结果: relay_sync 会留 AGENTS.md.relay-bak-* 备份:提交前要删,否则进顶层文件清单
+- 留给下一个: 阈值 150 行 / 20 完成条目按现状设定(本仓库当前 117 行 / 20 条,落地即绿);断言脚本需覆盖 151 行 WARN / 120 行绿,并断言 CONTRACT 规则表含 | R12 | 行、README 提及 R12(修宪三处一致)
+
+## 2026-11-01 23:21 | model=dsh-lead-deepseek-v4.1 | task=T022 完成
+- 摘要: T022 runChecks 单快照 + git 收敛 + 根解析快路径:LOG/TASKS/manifest 读取 4/2/2→1/1/1;git 子进程 9→2–4 且 async 路径零同步 spawn(isGitRepoAsync);R2 单次 ls-files、R5/R6 共用一次 log-20、R10 复用 HEAD subject;resolveRelayRoots 普通仓库 fs 快路径(recall/get git 2→0);RELAY_TRACE_FILE 计数钩子 + smoke-perf(22 断言);13 套冒烟全绿。
+- 事实(v1): 改动 10 文件(+300/-74) | 验收: 通过 | verify: PASS 14·WARN 0·ERROR 0 | 分支: relay/T022 @6096407 base=e45cc9d | 耗时: 31s
+- worktree: branch=relay/T022; sha=60964079974269d36f3f74a4c2b7f8a5828352be; 已验收,未合并(是否合并由人工决定)
+- 负结果: 验收行写成 test:<路径>(详情) 会被验收门整段当路径,安检直接拒收;test: 路径后不能跟任何说明文字,细节只能进备注/断言行
+- 负结果: RELAY_TRACE_FILE 必须放在夹具目录之外:落在仓库根会成为未跟踪顶层条目,R2 直接报越界
+- 负结果: resolveRelayRoots 的 fs 快路径只对 root/.git 是目录(普通仓库)生效;linked worktree 的 .git 是文件,必须继续走 git 解析,否则丢双根语义
+- 负结果: R7 的详情天然随维护条目数变化,规模不变量只能断言「ID+判定结果」,不能整表逐字比较
+- 负结果: 双根模式下 runChecks 与 runTaskTreeChecks 各自 collectMeta 会把 manifest 读两次;必须把 meta 透传给两者
+
 ## 2026-11-01 14:56 | model=dsh-lead-deepseek-v4.1 | task=T020 完成
 - 摘要: T020 npm 分发面:移除 private,新增 bin(relay-mcp→src/index.mjs,入口自带 shebang)、files 白名单(src/templates/安装器/README/LICENSE)、engines.node>=18;npm pack 46 文件约129kB,协议状态与开发文档不进包;npm publish --dry-run --provenance 通过(发布动作仍需人类批准);新增 smoke-pack(28 断言);README/CONTRACT 同步。
 - 事实(v1): 改动 4 文件(+79/-2) | 验收: 通过 | verify: PASS 13·WARN 1·ERROR 0 | 分支: relay/T020 @efab4fc | 耗时: 30s

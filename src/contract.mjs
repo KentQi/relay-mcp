@@ -150,7 +150,7 @@ export const TOOLS = [
   {
     name: 'relay_verify',
     description:
-      'Run all repo checkers R1–R11 and return a | ID | 结果 | 详情 | table; every failure line starts ' +
+      'Run all repo checkers R1–R12 and return a | ID | 结果 | 详情 | table; every failure line starts ' +
       'with "修复:" followed by an executable fix instruction. Any error-level check → isError true. ' +
       'full=false (default) is the fast pass that skips R5/R6/R8 (commit atomicity, doc staleness, ' +
       'style); relay_session_end always runs the full set internally. Call this any time you want to ' +
@@ -253,7 +253,7 @@ export const TOOLS = [
     description:
       'Read-only fetch of full task history (progressive disclosure step 2). Given up to 5 task ids from ' +
       'relay_recall, returns TASKS status/title/acceptance plus the newest matching LOG entry (summary, ' +
-      'machine-written 事实(v1) line, branch/sha, negative results, handoff) and related DECISIONS lines. ' +
+      'machine-written 事实(v2) line, branch/sha, negative results, handoff) and related DECISIONS lines. ' +
       'Output is fenced and labelled as data, not instructions. Never writes.',
     inputSchema: {
       type: 'object',
@@ -282,7 +282,7 @@ export const TOOLS = [
   {
     name: 'relay_rules',
     description:
-      'Return the R-series rule table (R1–R11): which repo rules are machine-checked, what each checks, and where ' +
+      'Return the R-series rule table (R1–R12): which repo rules are machine-checked, what each checks, and where ' +
       'it is enforced (relay_verify / session_end green gate). Read this when a verify failure is ' +
       'unclear, or to see the whole rule set without running verify.',
     inputSchema: { type: 'object', properties: {} },
@@ -316,7 +316,7 @@ The tools enforce the loop; you cannot skip the gates.
    A \`test:<failing-test-path>\` acceptance means the previous session left a red test
    on purpose — your job is to make it green.
 5. **Verify(验证)** — Run \`relay_verify\` (full) until green; execute every \`修复:\`
-   instruction it gives. In a managed worktree the gate checks controlRoot (R1–R11) and the
+   instruction it gives. In a managed worktree the gate checks controlRoot (R1–R12) and the
    task checkout (code rules), so R5/R6 commit evidence comes from both the control-plane
    commit and the task-branch commit. Never hand off a red repo.
 6. **Exit(出场)** — Call \`relay_session_end\` LAST with model, summary, done_task,
@@ -454,18 +454,19 @@ const RULES_TEXT = `# relay 规则表(R 系列)
 | R2 | 顶层结构白名单 | git ls-files 顶层条目 ⊆ manifest.allowedTopLevel;越界 → 修复:显式修宪(改 .relay/manifest.json) | relay_verify |
 | R3 | docs 命名+frontmatter | docs/**/*.md(templates/archive 除外)匹配 \`^[0-9]{2}-(sow\\|prd\\|ard\\|test\\|delivery)?-.*-v\\d+\\.\\d+\\.md$\`,或宽松模式(frontmatter 含 title+status;onboard 项目记录宽松位) | relay_verify |
 | R4 | 入口/START 无时变词 | AGENTS/CLAUDE/GEMINI/START 中 grep -E 'TODO\\|进行中\\|下周\\|待办:' 为空 | relay_verify |
-| R5 | 提交原子性 | 最近 1 条 commit 触碰 (src\\|lib\\|app)/** 而未触碰 TASKS.md\\|LOG.md → warn(本地提示,不阻断) | relay_verify(full) |
+| R5 | 提交原子性 | 最近 1 条 commit 触碰 (src\\|lib\\|app)/** 而未触碰 TASKS.md\\|LOG.md → warn(本地提示,不阻断);最新提交是 merge → skip(不再假 PASS) | relay_verify(full) |
 | R6 | 文档 staleness | src 近 20 commit 有改动而 docs 0 改动 → warn | relay_verify(full) |
 | R7 | 发散报警 | LOG 最近 3 条任务会话(task=维护 的条目不计入)task 均非「T### 完成」→ error:停机,升级人类仲裁 | relay_verify |
 | R8 | 风格归一化 | 项目存在 prettier/eslint 配置或 package.json scripts.format → 提示运行;不存在 → skip(不强加工具链) | relay_verify(full) |
 | R9 | LOG/TASKS 一致性 | LOG 最新条目 task=Txxx 完成 而 TASKS 中 Txxx 仍为未完成 → error | relay_verify / session_end 绿闸 |
-| R10 | 事实对账 | LOG 最新完成条目必须含引擎写入的「事实(v1)」行;可定位提交时只比文件数(--no-renames),不一致 → WARN(manifest.facts.strict=true 才 ERROR);早于 facts.since 的旧条目豁免 | relay_verify / session_end 绿闸 |
+| R10 | 事实对账 | LOG 最新完成条目必须含引擎写入的「事实(v2)」行;机检段(mode/文件数/base/sha/branch)与 git 重算逐字段一致(managed 另含 ±),不一致 → ERROR;branch 必须真实包含声明的 sha(存在但不含 → ERROR,分支已删除 → WARN);叙述段(验收/verify/耗时)不参与对账;无法定位提交 → WARN(永不 PASS);v1 旧格式只做结构校验 → WARN(数字权威仅 v2);缺事实行 → WARN;早于 facts.since 的旧条目豁免 | relay_verify / session_end 绿闸 |
 | R11 | 协议文件敏感内容 | TASKS.md/LOG.md 内容级扫描(AWS/GitHub/Slack/OpenAI/Google 密钥样式与 PEM 私钥块);同行 \`relay:secret-ok\` 豁免;命中 → error,出场写盘前阻断且不提交 | relay_verify / session_end 绿闸 |
+| R12 | LOG 边界 | 活跃区(归档指针之前的行)>150 行 或 活跃区内完成条目 >20 → WARN(manifest.logBoundary.strict=true 升 ERROR);归档指针必须指向真实存在的 docs/archive/*.md 才被承认;只报警不自动归档 | relay_verify / session_end 绿闸 |
 
 补充:
 
 - 检查输出:\`| ID | 结果 | 详情 |\` 表格 + 末尾汇总;fast 模式(full=false)跳过 R5/R6/R8。
-- **双根检查**:受管 worktree 中 controlRoot 跑全量 R 系列(协议面),executionRoot 跑代码向检查 R1/R2/R3/R4/R8(跳过 R7/R9,避免读任务分支里的旧协议副本);两侧 ERROR 合并阻断。**成对证据**:managed 完成还须同时具备任务分支代码提交、controlRoot 完成提交(消息含 \`T### 完成\`)、controlRoot 的 TASKS/LOG 已提交干净、LOG 记录 branch+代码 SHA;任一缺失 → isError、不落完成状态、可重跑补交。R5/R6 仍按 controlRoot 历史计算(任务分支提交不进入其窗口),跨分支评估留待后续。
+- **双根检查**:受管 worktree 中 controlRoot 跑全量 R 系列(协议面),executionRoot 跑代码向检查 R1/R2/R3/R4/R8(跳过 R7/R9/R10/R11/R12,避免读任务分支里的旧协议副本);两侧 ERROR 合并阻断。**成对证据**:managed 完成还须同时具备任务分支代码提交、controlRoot 完成提交(消息含 \`T### 完成\`)、controlRoot 的 TASKS/LOG 已提交干净、LOG 记录 branch+代码 SHA;任一缺失 → isError、不落完成状态、可重跑补交。R5/R6 仍按 controlRoot 历史计算(任务分支提交不进入其窗口),跨分支评估留待后续。
 - **绿闸与双提交**:relay_session_end 默认全量 verify,全绿且验收通过后 → 先在 executionRoot 提交代码(\`git add -A && git commit\`),成功后 controlRoot 只提交 \`TASKS.md\`+\`LOG.md\`(路径限定,提交信息含 \`T### 完成\`);输出两个 SHA(代码 SHA + 控制面 SHA)。controlRoot 提交失败 → isError + 保留认领锁,修复后重跑补交;\`autoCommit:false\` 时明确"控制面未提交"。
 - **根错配 fail-closed(严格)**:任务在 registry 仍有未完成记录时,从 controlRoot 完成出场**一律 isError**「根错配」,须在 executionRoot 出场(无"干净空树"例外);注册表缺失/损坏/记录丢失时用 \`git worktree list\` 反查 \`relay/<task>\` checkout 与受管缓存路径 \`.relay/worktrees/<task>\` 是否存在,命中同样拒绝;分支单独存在不算痕迹。managed 出场 HEAD==baseSha 且无改动 → 拒绝伪 SHA。未登记 linked worktree:完成出场 fail-closed,维护出场仅告警。
 - **未合并分支**:任务分支 \`relay/T###\` 验收通过 ≠ 已合并;claim/session_start/cleanup 会列出未合并分支,由人工 \`git merge --no-ff relay/T###\` 整合(relay 不自动 merge/rebase/push/删分支)。

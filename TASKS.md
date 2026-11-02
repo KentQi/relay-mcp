@@ -14,17 +14,9 @@
 (空——认领后由 relay_claim 移入;认领锁在 .relay/claims/,TTL 4 小时,崩溃会话的认领到期自动可接管)
 
 ## 待办
-- [ ] T022 runChecks 单快照 + git 收敛 + 根解析快路径(P3-25/26/27,性能视角 A+B):LOG 4→1、TASKS 2→1、manifest 2→1;repo 探测 4→1 且全 async(async 路径 execFileSync→promisify(execFile));R2 两次 ls-files 合一次、R5/R6 共用一次 log-20;resolveRelayRoots 在 root/.git 是目录时走 fs 快路径(省 2 个 git)
-  验收: test:scripts/smoke-perf.mjs(计数钩子,不用计时阈值):full 模式 LOG/TASKS/manifest 各读 1 次、git 进程 ≤4、同步 spawn=0;fast 模式 git ≤3;普通仓库下 relay_recall/relay_get 的 git 进程=0 且输出与 golden 逐字一致;12 套既有 smoke 全绿
-  备注: 实测依据(perf-eng,median 5):full verify 9 个 spawn≈60-75ms,远大于 500 条时 LOG 4× 读放大(+1.8ms),所以子进程收敛优先于读放大;isGitRepo 同步阻塞实测 4 次≈40ms 事件循环冻结(async 等价 ≤3ms);recall/get 15ms 里 ~14ms 是 resolveRelayRoots 的 2 个 git;增长率≈220 条/年,不按"LOG 会很大"立项
-- [ ] T023 事实行 v2 + R10 去 fail-open(P3-31):按「可复算性」拆机检段/叙述段——机检段=文件数、±行数(managed)、range/base、sha、分支(检查时点全部从 git 重算);叙述段=验收结果、耗时、verify 汇总(写时快照,不可重算,仅结构校验、不构成交接证据);verify.mjs:381 的「无可定位提交→PASS」改为 WARN/SKIP,永不 PASS
-  验收: test:scripts/smoke-facts.mjs 扩展:篡改机检段任一字段 → R10 红;改叙述段 → 不误红;伪造 sha / 删除提交 → WARN 或 SKIP 而非 PASS;npm test + ./verify 全绿 且 新增断言:CONTRACT.md 的事实行字段清单与 v2 拆段一致(规则改动走修宪,三处一致才算完整)
-  备注: 拒绝"8 项全对账"(protocol-eng 复核):验收/耗时/verify 汇总是写时快照,检查时点重算不出,强行对账只能产假绿或死锁;R10 当前是装饰绿——"未验证的确信"比空白更危险
-- [ ] T024 LOG 边界规则(P3-32 / T001 最小触发):新增 R12,LOG 活跃区 >150 行或完成条目 >20 → WARN(facts.strict 同款 strict 可升 ERROR);归档动作留人工
-  验收: test:scripts/smoke-r12-boundary.mjs:151 行 LOG fixture → R12 WARN;120 行 → 全绿 且 CONTRACT.md 规则表含 `| R12 |` 行 且 README 规则清单提及 R12 且 npm test 全绿
-  备注: 阈值按现状设定——本仓库当前 117 行 / 20 完成条目,低于阈值,落地即绿,避免"裁判刚立就响"稀释真警报(审计方实测指出原 100 行阈值今天已越过);不做归档引擎;完整归档的触发条件 = R12 WARN 连续两次或完成条目 >20。归档实现时的硬约束(protocol-eng):只从尾部搬、永不触碰头部;边界严格早于最新完成条目(否则 R10 逃逸);live 保留 ≥3 条任务会话(R7 窗口不退化);控制面提交白名单/PROTOCOL_FILES/R11 扫描面必须同步扩展,否则归档文件进不了控制提交=新漂移;归档只能 git move+指针,不压缩不删历史
-- [ ] T025 补 package.json 的 repository / bugs 字段(provenance 发布前置)
-  验收: node -e "const p=require('./package.json'); if(!p.repository||!p.bugs) process.exit(1)" 退出 0
+- [ ] T026 session_start 读放大收敛(PR #8 审计 P1-6 残留):session_start 实测 manifest 读 6 次 / git 7 次,relay_verify 已 1/1/1;把 manifest 配置在 session_start 内单轮只读一次(collectMeta 预加载 + 沿调用链传递),不引入跨调用缓存
+  验收: test:scripts/smoke-session-perf.mjs
+  备注: 同步 spawn 已在 PR #8 审计修复中清零(整棵 src 静态断言),本任务只处理读/子进程放大;不要为了省读引入模块级缓存(manifest 在会话之间可能被改,跨调用缓存=第二真相源)
 - [ ] T021 检索寻址(T018)收益复核:数据闸未过(LOG 16 < 20),按实测决定去留
   验收: test:scripts/smoke-t021-decision.mjs
   备注: 完成动作 = 在 DECISIONS.md 追加一条标题含 T018 的决策条目,且必须锚定不可变证据(T017 的提交 sha + 对应 LOG 条目原文)与可测复评阈值(如 LOG ≥ 30 条),断言脚本会用 git log 反查 sha 是否真实存在——只写「保留」两个字不算通过;调用次数与「取回失败」无法机检(recall 零持久化、无遥测),只作为决策理由的人工依据;回退方式 = 移除 relay_recall/relay_get 注册,协议面与事实底账不受影响;数据闸现状如实记录:实测 16 条 → 当前 20 条,已自然越过闸门
@@ -44,6 +36,21 @@
   验收: verify 全绿 且 `npm test` 通过 且 新增并发认领回归断言(两模型同时 claim 不同任务,两条认领均不丢失)
 
 ## 已完成
+- [x] T025 补 package.json 的 repository / bugs 字段(provenance 发布前置)  (2026-11-01)
+  验收: test:scripts/smoke-pack.mjs
+  断言: package.json 含 repository(指向 github.com/KentQi/relay-mcp)与 bugs(指向 /issues);现有 46 文件/129kB 打包断言不回归
+- [x] T024 LOG 边界规则(P3-32 / T001 最小触发):新增 R12,LOG 活跃区 >150 行或完成条目 >20 → WARN(facts.strict 同款 strict 可升 ERROR);归档动作留人工  (2026-11-01)
+  验收: test:scripts/smoke-r12-boundary.mjs
+  断言: 151 行 LOG fixture → R12 WARN;120 行 → 全绿;CONTRACT.md 规则表含 `| R12 |` 行且 README 规则清单提及 R12(修宪三处一致:CONTRACT + relay_rules + AGENTS 模板)
+  备注: 阈值按现状设定——本仓库当前 117 行 / 20 完成条目,低于阈值,落地即绿,避免"裁判刚立就响"稀释真警报(审计方实测指出原 100 行阈值今天已越过);不做归档引擎;完整归档的触发条件 = R12 WARN 连续两次或完成条目 >20。归档实现时的硬约束(protocol-eng):只从尾部搬、永不触碰头部;边界严格早于最新完成条目(否则 R10 逃逸);live 保留 ≥3 条任务会话(R7 窗口不退化);控制面提交白名单/PROTOCOL_FILES/R11 扫描面必须同步扩展,否则归档文件进不了控制提交=新漂移;归档只能 git move+指针,不压缩不删历史
+- [x] T023 事实行 v2 + R10 去 fail-open(P3-31):按「可复算性」拆机检段/叙述段——机检段=文件数、±行数(managed)、range/base、sha、分支(检查时点全部从 git 重算);叙述段=验收结果、耗时、verify 汇总(写时快照,不可重算,仅结构校验、不构成交接证据);verify.mjs:381 的「无可定位提交→PASS」改为 WARN/SKIP,永不 PASS  (2026-11-01)
+  验收: test:scripts/smoke-facts.mjs
+  断言: 篡改机检段任一字段(文件数/±/mode/branch)→ R10 红;改叙述段 → 不误红;伪造 sha/base → WARN 而非 PASS;CONTRACT 机检段/叙述段字段清单与 v2 一致(修宪三处一致:CONTRACT + relay_rules + AGENTS 模板)
+  备注: 拒绝"8 项全对账"(protocol-eng 复核):验收/耗时/verify 汇总是写时快照,检查时点重算不出,强行对账只能产假绿或死锁;R10 当前是装饰绿——"未验证的确信"比空白更危险
+- [x] T022 runChecks 单快照 + git 收敛 + 根解析快路径(P3-25/26/27,性能视角 A+B):LOG 4→1、TASKS 2→1、manifest 2→1;repo 探测 4→1 且全 async(async 路径 execFileSync→promisify(execFile));R2 两次 ls-files 合一次、R5/R6 共用一次 log-20;resolveRelayRoots 在 root/.git 是目录时走 fs 快路径(省 2 个 git)  (2026-11-01)
+  验收: test:scripts/smoke-perf.mjs
+  断言: 计数钩子(不用计时阈值)——full 模式 LOG/TASKS/manifest 各读 1 次、git 进程 ≤4、同步 spawn=0;fast 模式 git ≤3;普通仓库下 relay_recall/relay_get 的 git 进程=0 且输出可复放;13 套既有 smoke 全绿
+  备注: 实测依据(perf-eng,median 5):full verify 9 个 spawn≈60-75ms,远大于 500 条时 LOG 4× 读放大(+1.8ms),所以子进程收敛优先于读放大;isGitRepo 同步阻塞实测 4 次≈40ms 事件循环冻结(async 等价 ≤3ms);recall/get 15ms 里 ~14ms 是 resolveRelayRoots 的 2 个 git;增长率≈220 条/年,不按"LOG 会很大"立项
 - [x] T020 npm 分发:去 private + bin + files 白名单(发布动作需人类批准,本任务只做可 dry-run 的打包面)  (2026-11-01)
   验收: npm pack --dry-run 输出不含 .relay/ 与 docs-design/ 且 npm publish --dry-run --provenance 通过
 - [x] T018 检索寻址:relay_recall / relay_get(只读派生;数据闸未过 16<20,按用户指令推进)  (2026-11-01)

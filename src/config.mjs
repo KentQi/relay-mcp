@@ -86,11 +86,17 @@ export const matchesIgnore = (ignores, rel, isDir = false) =>
 const strArr = (v) => (Array.isArray(v) ? v.filter((x) => typeof x === 'string' && x.trim()) : []);
 
 // 读 manifest 并归一全部策略项。manifest 缺失/损坏 → 全部走默认(= 补丁前行为)。
-export const readManifestConfig = async (root) => {
-  const raw = await readFileSafe(join(root, '.relay', 'manifest.json'), null);
+// manifest 可预解析传入(T022):runChecks 已经把 manifest.json 读/解析一次,
+// 这里不再重复读盘——单轮 verify 对 manifest 的读取次数恒为 1。
+export const readManifestConfig = async (root, { manifest: preloaded } = {}) => {
   let m = null;
-  if (raw != null) {
-    try { const p = JSON.parse(raw); if (p && typeof p === 'object') m = p; } catch { m = null; }
+  if (preloaded && typeof preloaded === 'object') {
+    m = preloaded;
+  } else {
+    const raw = await readFileSafe(join(root, '.relay', 'manifest.json'), null);
+    if (raw != null) {
+      try { const p = JSON.parse(raw); if (p && typeof p === 'object') m = p; } catch { m = null; }
+    }
   }
   const codeRoots = strArr(m && m.codeRoots);
   const docsRoots = strArr(m && m.docsRoots);
@@ -120,6 +126,11 @@ export const readManifestConfig = async (root) => {
       enabled: !!(m && m.facts && m.facts.enabled === true),
       since: m && m.facts && typeof m.facts.since === 'string' && m.facts.since.trim() ? m.facts.since.trim() : null,
       strict: !!(m && m.facts && m.facts.strict === true),
+    },
+    // LOG 边界(T024/R12):活跃区行数/完成条目数超限 → WARN;strict 同 facts.strict 风格可升 ERROR。
+    // 阈值固定(150 行 / 20 完成条目),不做可配置——避免"把阈值调大"成为消音手段。
+    logBoundary: {
+      strict: !!(m && m.logBoundary && m.logBoundary.strict === true),
     },
     // 简报字符预算(T015):非有限数/非正数 → 回退默认;不改变既有行为(只影响告警阈值)。
     contextBudget: m && Number.isFinite(m.contextBudget) && m.contextBudget > 0 ? m.contextBudget : DEFAULT_CONTEXT_BUDGET,

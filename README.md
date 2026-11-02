@@ -5,7 +5,7 @@
 [![Node](https://img.shields.io/badge/node-%E2%89%A518-brightgreen)](package.json)
 [![deps](https://img.shields.io/badge/dependencies-0-blue)](package.json)
 
-**多模型、多会话开发的接力协议 MCP server。** 状态存放在仓库文件中，由 R 系列机检规则（R1–R11）与可执行验收共同守门。
+**多模型、多会话开发的接力协议 MCP server。** 状态存放在仓库文件中，由 R 系列机检规则（R1–R12）与可执行验收共同守门。
 
 **[中文](#中文) | [English](#english)**
 
@@ -71,7 +71,7 @@ npx relay-mcp             # 启动 stdio server（等价 node src/index.mjs）
 
 **简报有界（T015）**：入场简报的每条 LOG 摘要硬上限 200 字符（负结果/交接提示 120），超长条目只截断展示并标注"全文见 LOG.md"；总长超过 `manifest.contextBudget`（默认 6000）时追加显式告警而**不裁剪任何段落**（裁剪即静默降级）。
 
-**事实底账（R10）**：出场时由引擎写入一行 `- 事实(v1): 改动 N 文件(+x/-y) | 验收: 通过 | verify: PASS … | 分支: … @sha | 耗时: …s`，模型不得手写或改写。`relay_verify` 会核对它与 git 事实的文件数（`--no-renames`，只比文件数不比行数）：不一致默认 WARN，`manifest.facts.strict=true` 时升级为 ERROR；`manifest.facts.since` 之前的旧条目豁免，保证升级项目不被历史卡住。
+**事实底账（R10）**：出场时由引擎写入一行 `- 事实(v2): mode=… | 文件 N | ± +x/-y | base=… | sha=… | branch=… || 验收: … | verify: PASS a·WARN b·ERROR c | 耗时: Ns`，模型不得手写或改写。以 ` || ` 拆两段：**机检段**（mode/文件数/base/sha/branch；± 仅 managed 可复算）由 `relay_verify` 与 git 重算逐字段对账，不一致即 ERROR；**branch 归属**也校验——声称的分支必须真实包含声明的 sha（存在但不含 → ERROR，分支已删除 → WARN）；**叙述段**（验收/verify 汇总/耗时）是写时快照，检查时点重算不出，不参与对账、不构成交接证据。无法定位对应提交（伪造 sha、历史被改写）→ WARN，**永不 PASS**；v1 旧行只做结构校验并 WARN（数字权威仅 v2）；`manifest.facts.since` 之前的旧条目豁免，保证升级项目不被历史卡住。
 
 ### 任务级 worktree
 
@@ -123,6 +123,7 @@ worktree 清理默认 dry-run：只删除已登记、已过期、非活跃、干
 ### 安全与边界
 
 - 密钥守卫：`.env*`、`*secret*`、`*credential*`、`*.key`、`*.pem`、`id_rsa` 不自动提交。
+- LOG 边界（R12）：LOG 活跃区（归档指针之前的行）超过 150 行、或完成条目超过 20 条 → `relay_verify` 报 WARN（`manifest.logBoundary.strict=true` 升 ERROR）；只报警不自动归档，归档动作由人工决定（`docs/archive/` + 指针）。
 - 内容级密钥闸（R11）：`TASKS.md` / `LOG.md` 命中 AWS / GitHub / Slack / OpenAI / Google 密钥样式或 PEM 私钥块 → `relay_verify` 报 ERROR，出场写盘前直接阻断（不写、不提交）；误报可在同一行标注 `relay:secret-ok` 豁免。扫描输出只给前 4 字符预览，绝不回显完整密钥。
 - 受保护路径：`verify`、`.relay/**`、`tests/**` 与测试文件改动不自动提交；最终防线是 CI 与人工审核。
 - 锁：仓库写锁带心跳与写前 fencing；任务认领锁刻意关闭心跳，保留 240 分钟 TTL 崩溃恢复。并发会话必须使用不同 `model` 标识（同名 model 无法区分持有者）。
@@ -166,7 +167,9 @@ node src/cli.mjs relay_worktree_cleanup --root /path/to/project --json confirm=t
 
 ### 自举
 
-本仓库使用自身协议开发：`START.md` 是入口，`TASKS.md` 是 backlog，`LOG.md` 记录会话。`npm test` 覆盖 5 套端到端冒烟（协议、补丁、worktree、升级兼容、安装器），CI 覆盖 Node 22/24/26。
+本仓库使用自身协议开发：`START.md` 是入口，`TASKS.md` 是 backlog，`LOG.md` 记录会话。`npm test` 覆盖 13 套端到端冒烟（协议、补丁、worktree、升级兼容、安装器、密钥闸、事实底账、简报、doctor、检索、打包、评审回归、性能计数），CI 覆盖 Node 22/24/26。
+
+`relay_verify` 的单轮成本是可观测的：只读一次 LOG/TASKS/manifest，git 子进程收敛到必要数量；设 `RELAY_TRACE_FILE=<path>` 可让进程退出时写出 `{reads, git, sync}` 计数（测试用，生产无行为变化）。
 
 设计与接口契约见 [docs-design/](docs-design/)。贡献与安全问题见 [CONTRIBUTING.md](CONTRIBUTING.md)、[SECURITY.md](SECURITY.md)。
 
@@ -174,7 +177,7 @@ node src/cli.mjs relay_worktree_cleanup --root /path/to/project --json confirm=t
 
 ## English
 
-relay-mcp is an MCP server for reliable handoff across coding models and sessions. Handoff state lives in repository files (`START / SPEC / DECISIONS / TASKS / LOG`), and an exit gate verifies the work with machine-checked rules (R1–R11) plus the project's executable acceptance tests before anything is committed.
+relay-mcp is an MCP server for reliable handoff across coding models and sessions. Handoff state lives in repository files (`START / SPEC / DECISIONS / TASKS / LOG`), and an exit gate verifies the work with machine-checked rules (R1–R12) plus the project's executable acceptance tests before anything is committed.
 
 - Zero runtime dependencies, Node ≥ 18, no build step; 13 MCP tools over stdio (`node src/index.mjs`)
 - `AGENTS.md` is the required project entry; `CLAUDE.md` / `GEMINI.md` are optional projections

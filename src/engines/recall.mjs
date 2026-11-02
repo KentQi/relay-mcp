@@ -9,7 +9,7 @@
 import { readFileSafe } from '../util.mjs';
 import { join } from 'node:path';
 import { TASK_LINE_RE, LOG_TITLE_RE } from './verify.mjs';
-import { FACT_LINE_RE, FACT_LINE_PREFIX } from './facts.mjs';
+import { FACT_LINE_RE, FACT_LINE_PREFIX_RE } from './facts.mjs';
 import { resolveRelayRoots } from './worktree.mjs';
 
 const MAX_IDS = 5;
@@ -189,7 +189,8 @@ export const relayGet = async (args = {}) => {
     if (e) {
       parts.push(`日志: ${e.time} | model=${e.model} | task=${e.task}`);
       const factRaw = e.block.find((l) => FACT_LINE_RE.test(String(l)));
-      if (factRaw) parts.push(`事实: ${String(factRaw).replace(FACT_LINE_PREFIX, '').trim()}`);
+      // P2-10(审计):v1 旧行的前缀也要剥离,否则输出双前缀「事实: - 事实(v1): …」
+      if (factRaw) parts.push(`事实: ${String(factRaw).replace(FACT_LINE_PREFIX_RE, '').trim()}`);
       const wt = field(e.block, 'worktree');
       if (wt) parts.push(`分支: ${wt}`);
       const body = e.block.filter((l) => /^- (摘要|负结果|留给下一个):/.test(String(l))).join('\n');

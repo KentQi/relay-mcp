@@ -27,7 +27,7 @@
 以下为修复轮补充的现行语义,覆盖上文同名字段的早期表述:
 
 - **出场双提交**:绿闸(verify 全量 + 验收执行门)通过后,executionRoot 提交任务分支代码(`relay/T###`,SHA₁);成功后 controlRoot **只** `git add -- TASKS.md LOG.md` 并提交(SHA₂,提交信息含 `T### 完成`)。输出两个 SHA;代码提交或控制面提交任一失败 → isError、TASKS/LOG 不改完成状态、保留认领锁,修复后重跑补交。`autoCommit:false` 明确"控制面未提交"。executionRoot 内出现 TASKS/LOG 改动时拒绝/排除,协议文件只由 controlRoot 写。
-- **双根 verify / 成对证据**:受管 worktree 中 controlRoot 跑全量 R 系列,executionRoot 跑代码向检查(R1/R2/R3/R4/R8;跳过 R7/R9 以免读任务分支里的旧协议副本);两侧 ERROR 合并阻断。managed 完成额外校验四项成对证据:任务分支代码提交、controlRoot 完成提交(消息含 `T### 完成`)、controlRoot 的 TASKS/LOG 已提交干净、LOG 记录 branch+代码 SHA;任一缺失 → isError、不落完成状态、可重跑补交。R5/R6 仍按 controlRoot 历史计算(任务分支提交不进入其窗口),跨分支评估留待后续。
+- **双根 verify / 成对证据**:受管 worktree 中 controlRoot 跑全量 R 系列,executionRoot 跑代码向检查(R1/R2/R3/R4/R8;跳过 R7/R9/R10/R11/R12 以免读任务分支里的旧协议副本);两侧 ERROR 合并阻断。managed 完成额外校验四项成对证据:任务分支代码提交、controlRoot 完成提交(消息含 `T### 完成`)、controlRoot 的 TASKS/LOG 已提交干净、LOG 记录 branch+代码 SHA;任一缺失 → isError、不落完成状态、可重跑补交。R5/R6 仍按 controlRoot 历史计算(任务分支提交不进入其窗口),跨分支评估留待后续。
 - **根错配 fail-closed(严格)**:任务在 registry 中仍有未完成记录时,从 controlRoot 完成出场**一律 isError**「根错配」并提示在 executionRoot 出场;不再有"干净空树可单根完成"的兼容例外。注册表缺失/损坏/记录丢失时,用 `git worktree list` 反查 `relay/<task>` 是否仍被某 worktree checkout,并检查受管缓存路径 `.relay/worktrees/<task>` / 残留记录路径是否存在——命中同样拒绝(给出重建登记或 executionRoot 出场的修复指令);分支单独存在不视为痕迹。managed 出场 HEAD==baseSha 且无改动 → 拒绝伪 SHA。未登记 linked worktree 的完成出场 fail-closed,维护出场仅告警。
 - **未合并分支可见性与人工合并**:任务分支验收通过 ≠ 已合并;relay 不自动 merge/rebase/push、不删分支。claim/session_start/cleanup 输出未合并 `relay/T###` 清单;人工流程 `git log <控制面分支>..relay/T###` → `git merge --no-ff relay/T###` → 可选 `git branch -d`。
 - **清理保护(ignored)**:清理前用 `git status --porcelain --ignored=matching -uall` 检查;含未跟踪或 ignored 本地内容(`.env`、`node_modules`、构建产物)的 worktree 默认保留并给出理由,不自动删除;删除只走非强制 `git worktree remove`,分支保留。
@@ -177,13 +177,14 @@ export const startServer = async ({ onInit, onMethod }) => {
 | R2 | 顶层结构白名单 | git ls-files 未跟踪+已跟踪的顶层条目 ⊆ allowedTopLevel;越界 → 修复:改 .relay/manifest.json(显式修宪) |
 | R3 | docs 命名+frontmatter | docs/**/*.md(templates/archive 除外)匹配 `^[0-9]{2}-(sow|prd|ard|test|delivery)?-.*-v\d+\.\d+\.md$` **或** 已有项目宽松模式(有 frontmatter title+status 即可);onboard 项目记录宽松位 |
 | R4 | 入口/START 无时变词 | AGENTS/CLAUDE/GEMINI/START 中 grep -E 'TODO|进行中|下周|待办:' 为空 |
-| R5 | 提交原子性 | 存在 git 时:最近 1 条 commit 若触碰 (src|lib|app)/** 而未触碰 TASKS.md|LOG.md → warn(本地提示,不阻断) |
+| R5 | 提交原子性 | 存在 git 时:最近 1 条 commit 若触碰 (src|lib|app)/** 而未触碰 TASKS.md|LOG.md → warn(本地提示,不阻断);**最新提交是 merge 时 → skip**(git log --name-only 不列 merge 文件,不再假 PASS;双根由成对证据兜底) |
 | R6 | 文档 staleness | src 与 docs 同期对比:src 最近 20 commit 内有改动而 docs 0 改动 → warn |
 | R7 | 发散报警 | LOG 最近 3 条任务会话(task=维护 的条目不计入)task 均非「T### 完成」→ error:停机,升级人类仲裁 |
 | R8 | 风格归一化 | 项目存在 prettier/eslint 配置或 package.json scripts.format → 提示运行;不存在 → skip(不强加工具链) |
 | R9 | LOG/TASKS 一致性 | LOG 最新条目里 task=Txxx 完成 而 TASKS 中 Txxx 仍为未完成 → error |
-| R10 | 事实对账 | LOG **最新完成条目**必须含引擎写入的「事实(v1)」行;可定位提交时只比文件数(`--no-renames`,用事实行自带的 base sha 对齐 range),不一致 → warn(`facts.strict=true` 才 error);缺事实行 → warn(旧条目豁免靠 `facts.since`,避免锁死出场) |
+| R10 | 事实对账 | LOG **最新完成条目**必须含引擎写入的「事实(v2)」行;机检段(mode/文件数/base/sha/branch)与 git 重算逐字段一致(managed 另含 ±),不一致 → error;**branch 必须真实包含声明的 sha**(存在但不含 → error,分支已删除 → warn);叙述段(验收/verify/耗时)不参与对账;无法定位提交 → warn(**永不 PASS**);v1 旧格式只做结构校验 → warn(数字权威仅 v2);缺事实行 → warn |
 | R11 | 协议文件敏感内容 | TASKS.md/LOG.md 内容级扫描(AWS/GitHub/Slack/OpenAI/Google 密钥样式 + PEM 私钥块);同行 `relay:secret-ok` 豁免;命中 → error,`relay_session_end` 在任何写盘前阻断 |
+| R12 | LOG 边界 | 活跃区(归档指针之前的行)>150 行 或 活跃区内完成条目 >20 → warn(`manifest.logBoundary.strict=true` 升 error);归档指针必须指向真实存在的 `docs/archive/*.md` 才被承认(否则按全文计算);只报警不自动归档 |
 
 - 检查输出:`| ID | 结果 | 详情 |` 表格 + 末尾汇总;任一 error → isError:true(fast 模式跳过 R5/R6/R8,session_end 默认 fast=false 全量)
 - **受保护路径**:`verify`(脚本)、`.relay/**`、`*/tests/**`、`*.test.*`、`*.spec.*` —— relay_session_end 若检测到本会话改动了这些文件,则**不自动 commit**,输出"涉及受保护路径(护栏),需人类批准后手动提交"并列出文件
@@ -212,22 +213,29 @@ export const startServer = async ({ onInit, onMethod }) => {
 - **冒烟**:`scripts/smoke-content-guard.mjs` 覆盖命中/豁免/阻断/无半写四类断言,已接入 `npm test` 链。
 ## 2026-11-01 T013 补充契约(事实底账 / R10)
 
-- **写入**:`relay_session_end` 在 LOG 条目「摘要」之后追加一行 `- 事实(v1): …`,内容由引擎确定性派生,**模型不得手写或改写**。字段:改动文件数与 ± 行数、验收执行结果、verify 汇总(PASS/WARN/ERROR 计数)、分支与代码 SHA(单根未提交时标 `@未提交`)、耗时。
+- **写入**:`relay_session_end` 在 LOG 条目「摘要」之后追加一行 `- 事实(v2): …`,由引擎确定性派生,**模型不得手写或改写**。
+- **两段式(v2,以 `||` 分隔)**:
+  - **机检段**:`mode=<managed|single> | 文件 N | ± +x/-y | base=<sha|-> | sha=<sha|-> | branch=<name|->`——检查时点可从 git 重算:文件数恒可复算,± 仅 managed 可复算(单根写 ± 时未跟踪文件还没进 numstat),branch 由「是否包含声明 sha」复算;
+  - **叙述段**:`验收: … | verify: PASS a·WARN b·ERROR c | 耗时: Ns`——写时快照,检查时点不可重算,仅结构校验、不构成交接证据。
 - **口径**:
-  - managed(受管 worktree):`git diff --name-only --no-renames <baseSha>..HEAD`(executionRoot 任务分支)。
-  - 单根:工作区 vs HEAD(`git diff HEAD`),此时代码尚未提交,故不写 SHA。
-  - 非 git / git 不可读:退化为 `git status` 文件数,± 记 0(不假装知道)。
+  - managed(受管 worktree):`git diff --numstat --no-renames <baseSha>..HEAD`(文件数与 ± 都可对账);
+  - 单根:文件数取 `git status`(含未跟踪文件),± 取工作区 vs HEAD(未跟踪不计入 ±,故 single 的 ± 只是写时近似、不构成机检字段,只对 managed 对账 ±);
+  - 非 git / git 不可读:退化为 status 文件数,± 记 0(不假装知道);
   - 协议文件 `TASKS.md`/`LOG.md` 恒不计入改动文件数。
 - **校验 R10**(仅 controlRoot,同 R7/R9 边界):
-  - 10.1 最新完成条目缺「事实(v1)」行 → **ERROR**(防手写伪造完成条目);
+  - 10.1 最新完成条目缺事实行 → **WARN**(由 ERROR 降级:ERROR 会锁死出场,而修复动作正是被阻断的调用);
   - 10.2 行格式不可解析 → **ERROR**(说明被手改或引擎回退);
-  - 10.3 可定位提交时重算文件数,不一致 → **WARN**;`manifest.facts.strict=true` → **ERROR**;
-  - 10.4 `manifest.facts.enabled` 未开 / `since` 未设 / 条目早于 `since` → **SKIP**(升级兼容)。
+  - 10.3 v2 机检段逐字段对账(文件数;managed 另对 ±),不一致 → **ERROR**;叙述段不参与对账;
+  - 10.3b 机检段结构自洽(不依赖 git):managed 必须有 base/sha 且 branch 以 `relay/` 开头;single 必须无 base/sha——篡改 mode/branch 直接 **ERROR**;
+  - 10.3c **branch 归属**:managed 用 `git branch --contains <sha>` 校验——分支存在但不含 → **ERROR**;分支已删除/不可读 → **WARN**(不可验证,绝不 PASS)。single 代码未提交,只校验分支存在性(伪造分支名 → **WARN**),不校验 sha 归属;
+  - 10.4 **v1 旧格式只做结构校验 → WARN**:v1 行自带的 base/sha 由被校验方提供,用它算出的「一致」是自证;数字权威仅 v2 机检段,绝不 PASS;
+  - 10.5 **无法定位提交 → WARN,永不 PASS**(fail-open 修复:未验证的确信比空白更危险);
+  - 10.6 `manifest.facts.enabled` 未开 / `since` 未设 / 条目早于 `since` → **SKIP**(升级兼容)。
 - **配置**(`.relay/manifest.json`):
   `"facts": { "enabled": true, "since": "YYYY-MM-DD HH:mm", "strict": false }`。
   `relay_init` / `relay_onboard` 默认写入 `enabled:true` 与启用时刻 `since`;旧项目缺席即旧行为(不写事实行、R10 跳过),`relay_sync` 输出升级提示但不改写 manifest(非破坏)。
-- **为何只比文件数**:行级 ±x/-y 会被 CRLF、重命名、合并与跨多提交污染,成为恒过或恒错的假裁判;文件数在同一 `--no-renames` 口径下稳定可复现。
-- **冒烟**:`scripts/smoke-facts.mjs` 覆盖写入/存在性/数字 WARN/strict ERROR/升级 SKIP 五类断言,已接入 `npm test` 链。
+- **为何拆段而不是全对账**:验收结果/verify 汇总/耗时是写时快照,检查时点重算不出;强行全对账只能产假绿或死锁。机检段必须可复算,叙述段显式不构成证据。
+- **冒烟**:`scripts/smoke-facts.mjs` 覆盖 v2 写入、机检段篡改、叙述段不误红、伪造 sha、managed ±、升级 SKIP、CONTRACT 一致性,已接入 `npm test` 链。
 ## 2026-11-01 T015 补充契约(简报有界化 / 预算告警)
 
 - **字段上限**:入场简报中每条 LOG 摘要最多 200 字符(负结果、留给下一个仍为 120),超限以 `…[截断 N 字,全文见 LOG.md]` 标注;**只截断展示,不改 LOG 本体**。
@@ -289,3 +297,43 @@ export const startServer = async ({ onInit, onMethod }) => {
 - **P2-21/22**:新增 `scripts/smoke-review-regressions.mjs`(managed 密钥不落 git / 多提交对账 / 未跟踪文件 / worktree 双根 / 发布护栏,19 断言);smoke-doctor 的零写盘断言扩展到整棵仓库树。
 - **P2-23**:简报「生效配置」回显真实 worktree 生效值(enabled/cacheDir/ttl/autoCleanup)。
 - **P3-21/22/24/28/33**:去掉无用字段与未使用 import;同号任务取首条;numstat 单次调用;模板 TASKS 示例改为待办(不再声称未记录的完成)。
+## 2026-11-01 T022 补充契约(verify 单快照 / git 收敛 / 根解析快路径)
+
+- **单快照**:一次 `relay_verify` 只读一次 `LOG.md` / `TASKS.md` / `manifest.json`;R7/R9/R10/R11 消费同一份快照——同一条日志不会在两条规则下看到不同版本。
+- **git 收敛**:repo 探测走 `isGitRepoAsync`(root/.git 是目录或文件 → 零子进程;否则回退 `git rev-parse`,兼容「root 是仓库子目录」);R2 用一次 `git ls-files -z --cached --others --exclude-standard` 同时拿已跟踪+未跟踪;R5/R6 共用一次 `git log -20 --name-only`;R10 复用快照的 HEAD subject,只额外起一次 diff。
+- **根解析快路径**:`resolveRelayRoots` 在 `root/.git` 是**目录**时直接返回(普通仓库,省 2 个 git);linked worktree 的 `.git` 是**文件**,继续走 git 解析,不丢双根语义。
+- **计数可观测(测试专用)**:设置 `RELAY_TRACE_FILE` 时,进程退出写 `{reads, git, sync}` 计数;生产行为不变。`scripts/smoke-perf.mjs` 用它做**确定性断言**,不用计时阈值(CI 抖动不会造成假红)。
+- **async 路径禁止同步 git 探测**:同步 `isGitRepo()`(execFileSync)已从 `src/util.mjs` 删除,全部引擎(verify/facts/session/claim/doctor/bootstrap/restructure)统一走 `isGitRepoAsync`;`smoke-perf` 对整棵 `src/` 做静态断言(无 `execFileSync`、无同步 `isGitRepo(` 调用),长驻 MCP 进程不再被同步 spawn 冻结。
+- **规模不变量**:LOG 20/100/500 条时,读次数(1/1/1)与 git 进程数不变,R1–R12 **判定结果**一致(R7 详情里的「另排除 N 条维护条目」随规模变化属正常,不作断言)。
+## 2026-11-01 T023 补充契约(事实行 v2 / R10 去 fail-open)
+
+- 事实行升 **v2**:机检段(可复算)与叙述段(写时快照)以 ` || ` 分隔,详见 T013 修订段;分隔符按「空格||空格」解析(分支名可含 `|`,叙述段可含 `||`)。
+- R10 不再有 fail-open:无法定位提交(伪造 sha、提交被重写、历史被裁剪)→ **WARN**,绝不 PASS。
+- 机检段篡改 → **ERROR**(默认,不再依赖 `facts.strict`);叙述段篡改**不误红**。
+- **branch 归属**(2026-11-02 审计补):managed 下声称的分支必须真的包含声明的 sha(存在但不含 → ERROR,已删除 → WARN);single 下代码未提交,只校验分支存在性(伪造分支名 → WARN)。
+- **向后兼容**:v1 旧行继续可解析,但**只做结构校验并 WARN**(数字权威仅 v2)——v1 行自带的 base/sha 由被校验方提供,不能用于自证对账。
+## 2026-11-01 T024 补充契约(LOG 边界 R12)
+
+- 新增 **R12 LOG 边界**(controlRoot only,同 R7/R9/R10/R11):活跃区(归档指针之前的行)>150 行 或 完成条目 >20 条 → **WARN**;`manifest.logBoundary.strict=true` 升 **ERROR**。
+- **只报警不自动归档**:R12 是触发器不是执行器——归档涉及"哪些条目算历史"的语义判断,机器不做;人工动作 = 把较早条目 `git mv` 到 `docs/archive/LOG-YYYY.md`,并在 LOG.md 留一行指针(`<!-- relay:log-archive: docs/archive/LOG-YYYY.md -->`)。
+- **活跃区定义**:LOG.md 从顶部到归档指针(不含)的行数;无指针 = 全文。行数轴与完成条目轴**共用同一个活跃区**(审计 P1-7:两轴口径必须一致)。
+- **指针有效性**:`<!-- relay:log-archive: docs/archive/LOG-YYYY.md -->` 必须指向**真实存在且非空**的 `docs/archive/*.md`,否则不承认它划定的边界(按全文计算并显式标注「指针未被承认」)——一行字不能把活跃区归零。
+- **阈值固定**,不做 manifest 可配置:否则"把阈值调大"会变成消音手段。
+- **归档落地的硬约束(实现前必读)**:只从尾部搬、永不触碰头部;边界严格早于最新完成条目(否则 R10 逃逸);live 保留 ≥3 条任务会话(R7 窗口不退化);控制面提交白名单/PROTOCOL_FILES/R11 扫描面同步扩展,否则归档文件进不了控制提交 = 新漂移;归档只 `git mv` + 指针,不压缩不删历史。
+- **修宪三处一致**:CONTRACT 规则表 + `relay_rules` + AGENTS 模板规则表;冒烟脚本对此做机检。
+
+## 2026-11-02 PR #8 审计修复(HIGH×2 / MEDIUM×5 / LOW×5)
+
+审计报告:`docs/04-test/06-audit-pr8-v1.0.md`。逐条修复与回归:
+
+- **P0-1 哨兵伪造(回归)**:`collectGit` 不再用文本哨兵 `__COMMIT__` 分隔提交——`git log --name-only` 把文件名混入同一行流,同名文件可伪造提交头让 R5 静默失明。改用 **NUL 记录前缀**(`%x00%H%x09%s`):文件名不可能含 NUL,提交头只可能出现在 chunk 首行。回归:`smoke-review-regressions` F 段(白名单修宪允许该文件后 R5 仍 WARN)。
+- **P0-2 v1 自证 range**:v1 事实行的 base/sha 由被校验方提供,用它算出的「一致」是自证;R10 对 v1 只做结构校验 → **WARN**,数字权威仅 v2。回归:`smoke-facts` v1 用例(数字恰好对上也只 WARN、绝不 PASS)。
+- **P1-3 branch 归属**:`git branch --contains <sha>` 校验声明分支;分支存在但不含 → **ERROR**,分支已删除/不可读 → **WARN**(不可验证,绝不 PASS);single 模式不校验(出场后分支可能已切换)。回归:`smoke-facts` 三分支用例。
+- **P1-4 single ± 契约化**:single 的 ± 是写时近似(未跟踪文件写时还没进 numstat),不构成机检字段;契约统一为「文件数恒对账;managed 另对 ±」,规则表与实现一致。
+- **P1-5 三处一致断言升级**:R12 的 CONTRACT / `relay_rules` / AGENTS 模板三处行必须同时含阈值 150/20、判定 WARN、开关键名 `logBoundary.strict`;README 中英文两半的 R1–R12 与 `src/**` 无 `R1–R11` 残留纳入静态断言。
+- **P1-6 会话层同步探测**:删除同步 `isGitRepo()`(execFileSync);session/claim/doctor/bootstrap/restructure 全部改 `isGitRepoAsync`;`smoke-perf` 静态检查覆盖整棵 `src/`。
+- **P1-7 R12 指针消音**:归档指针必须指向**真实存在且非空**的 `docs/archive/*.md`,否则不承认边界(按全文计算并标注「未被承认」);行数轴与完成条目轴共用同一活跃区。回归:`smoke-r12-boundary` 假指针/真指针对照。
+- **P2-8/9 分隔符解析**:v2 按「空格||空格」切分——分支名含 `|` 不被截断,叙述段含 `||` 不丢段。
+- **P2-10 recall v1 前缀**:`FACT_LINE_PREFIX_RE` 同时剥离 v1/v2 前缀,升级前条目不再输出双前缀。
+- **P2-11 任务树 git**:`runTaskTreeChecks` 只取 `ls-files`(不取提交历史),省一次 git;任务树检查本就不需要提交历史。
+- **P2-12 R12 修复文案**:删除「或拆小任务粒度」——拆小任务只会产生更多 LOG 行,与阈值方向相反。

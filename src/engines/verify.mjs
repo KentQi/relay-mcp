@@ -1,11 +1,11 @@
-// relay-mcp — W4 验证引擎:R 系列检查器(R1–R11)与 relay_verify。
+// relay-mcp — W4 验证引擎:R 系列检查器(R1–R12)与 relay_verify。
 // 依据 CONTRACT.md「检查器规则表」「仓库文件格式」「安全与降级」。
 // TASKS 任务行与 LOG 条目标题的正则与契约逐字符一致,绝不改动;
 // 每条非 PASS 结果都附一条以「修复:」开头的可执行指令。
-import { readFileSafe, isGitRepo, gitRun, scanSecrets, formatSecretHits, SECRET_OK_MARKER } from '../util.mjs';
-import { FACT_LINE_RE, parseFactLine, recomputeCommitFileCount } from './facts.mjs';
+import { readFileSafe, isGitRepoAsync, gitRun, scanSecrets, formatSecretHits, SECRET_OK_MARKER } from '../util.mjs';
+import { FACT_LINE_RE, parseFactLine, recomputeCommitStats } from './facts.mjs';
 import { readManifestConfig, underRoots, matchesIgnore, DEFAULT_CODE_ROOTS, DEFAULT_DOCS_ROOTS } from '../config.mjs';
-import { readdir } from 'node:fs/promises';
+import { readdir, stat } from 'node:fs/promises';
 import { join } from 'node:path';
 
 // —— 契约正则(逐字符照抄)——
@@ -26,15 +26,65 @@ const readText = async (p) => {
   return typeof t === 'string' ? t : null;
 };
 
-const readManifest = async (root) => {
+// —— 单轮 verify 的读取/子进程快照(T022) ——
+// 一次 runChecks 只读一次 LOG.md / TASKS.md / manifest.json,只起必要数量的 git 子进程;
+// R7/R9/R10/R11/R12 全部消费同一份快照,避免「同一条日志在两条规则下看到不同版本」。
+const collectMeta = async (root) => {
   const t = await readText(join(root, '.relay', 'manifest.json'));
-  if (t == null) return null;
-  try {
-    const m = JSON.parse(t);
-    return m && typeof m === 'object' ? m : null;
-  } catch {
-    return null;
+  let manifest = null;
+  if (t != null) {
+    try { const m = JSON.parse(t); manifest = m && typeof m === 'object' ? m : null; } catch { manifest = null; }
   }
+  const cfg = await readManifestConfig(root, { manifest });
+  return { manifest, cfg };
+};
+
+const collectGit = async (root, { commits = true } = {}) => {
+  const isRepo = await isGitRepoAsync(root);
+  const ctx = { isRepo, tops: null, commits: [] };
+  if (!isRepo) return ctx;
+  // 一次 ls-files 同时拿已跟踪 + 未跟踪(R2 原来要两次子进程)
+  const ls = await gitRun(root, '-c', 'core.quotePath=false', 'ls-files', '-z', '--cached', '--others', '--exclude-standard');
+  if (ls.ok) {
+    const tops = new Set();
+    for (const p of ls.stdout.split('\0')) {
+      const s = p.trim();
+      if (s) tops.add(s.split('/')[0]);
+    }
+    ctx.tops = tops;
+  }
+  // 任务树结构检查只用 tops(R1/R2/R3/R4/R8),不需要提交历史:省一次 git(P2-11 审计)。
+  if (!commits) return ctx;
+  // 一次 log-20 同时拿:第 1 条提交(R5)、近 20 条文件并集(R6)、HEAD subject(R10 单根定位)。
+  // P0-1(审计):不能用文本哨兵分隔提交——git log --name-only 把文件名混在同一行流里,
+  // 名为 __COMMIT__* 的文件会被当成提交头,让 R5 静默失明(base 版无哨兵,是本 PR 引入的回归)。
+  // 改用 NUL 作**记录前缀**:文件名不可能含 NUL,因此每个 NUL 之后的第一个行必然是提交头,
+  // 路径只可能落在该 chunk 的后续行——文件名再也无法伪造提交边界。
+  // 头格式 = sha \t parents(空格分隔) \t subject:%P 让 R5 能识别 merge 提交(N2 复审)。
+  const log = await gitRun(root, '-c', 'core.quotePath=false', 'log', '-20', '--name-only', '--pretty=format:%x00%H%x09%P%x09%s');
+  if (log.ok) {
+    for (const chunk of log.stdout.split('\0')) {
+      const rows = chunk.replace(/\r\n/g, '\n').split('\n');
+      const header = rows.shift() || '';
+      const hm = header.match(/^([0-9a-f]{40})\t([0-9a-f ]*)\t(.*)$/);
+      if (!hm) continue; // 空 chunk / 非提交头行(理论上不存在)
+      const cur = { sha: hm[1], parents: hm[2].trim() ? hm[2].trim().split(' ') : [], subject: hm[3], files: [] };
+      for (const row of rows) {
+        const line = row.trim();
+        if (line) cur.files.push(line);
+      }
+      ctx.commits.push(cur);
+    }
+  }
+  return ctx;
+};
+
+const collectSnapshot = async (root, preloadedMeta = null) => {
+  const meta = preloadedMeta || await collectMeta(root);
+  const logText = await readText(join(root, 'LOG.md'));
+  const tasksText = await readText(join(root, 'TASKS.md'));
+  const git = await collectGit(root);
+  return { ...meta, logText, tasksText, git };
 };
 
 // LOG 条目解析(最新在上:文件顺序即时间倒序)
@@ -74,26 +124,14 @@ const checkR1 = async (root, manifest) => {
 
 // —— R2 顶层结构白名单 ——
 // 注:git 默认 core.quotePath 会把非 ASCII 路径加引号转义,统一关闭以保证顶层段准确。
-const topLevelFromGit = async (root) => {
-  const tops = new Set();
-  const tracked = await gitRun(root, '-c', 'core.quotePath=false', 'ls-files');
-  if (tracked.ok) for (const l of tracked.stdout.split('\n')) { const p = l.trim(); if (p) tops.add(p.split('/')[0]); }
-  const untracked = await gitRun(root, '-c', 'core.quotePath=false', 'ls-files', '--others', '--exclude-standard');
-  if (untracked.ok) for (const l of untracked.stdout.split('\n')) { const p = l.trim(); if (p) tops.add(p.split('/')[0]); }
-  return tracked.ok || untracked.ok ? tops : null;
-};
-
-const checkR2 = async (root, manifest) => {
+const checkR2 = async (root, manifest, git) => {
   if (!manifest || !Array.isArray(manifest.allowedTopLevel)) {
     return skip('R2', '无 manifest.allowedTopLevel 白名单,跳过', '先 relay_init / relay_onboard 生成 .relay/manifest.json');
   }
   const allowed = new Set(manifest.allowedTopLevel);
   let tops = null;
   let via = '';
-  if (isGitRepo(root)) {
-    const t = await topLevelFromGit(root);
-    if (t) { tops = t; via = 'git ls-files(已跟踪+未跟踪)'; }
-  }
+  if (git && git.isRepo && git.tops) { tops = git.tops; via = 'git ls-files(已跟踪+未跟踪,单次调用)'; }
   if (!tops) {
     try {
       const entries = await readdir(root);
@@ -220,11 +258,20 @@ const stripUserRulesBlock = (text) => {
 };
 
 // —— R5 提交原子性(full only)——
-const checkR5 = async (root, cfg) => {
-  if (!isGitRepo(root)) return skip('R5', '非 git 仓库,跳过', '初始化 git 后本检查自动生效');
-  const r = await gitRun(root, '-c', 'core.quotePath=false', 'log', '-1', '--name-only', '--pretty=format:');
-  if (!r.ok) return skip('R5', '仓库尚无提交,跳过', '产生首个提交后本检查自动生效');
-  const files = r.stdout.split('\n').map((s) => s.trim()).filter(Boolean);
+const checkR5 = async (root, cfg, git) => {
+  if (!git || !git.isRepo) return skip('R5', '非 git 仓库,跳过', '初始化 git 后本检查自动生效');
+  const newest = git.commits && git.commits[0];
+  if (!newest) return skip('R5', '仓库尚无提交,跳过', '产生首个提交后本检查自动生效');
+  // N2(复审):merge 提交在 `git log --name-only` 里不列文件 → 旧实现 code.length===0 直接 PASS,
+  // 让 R5 在「HEAD 是 merge」时静默空转(本项目提交史里 Merge T0xx 很常见)。
+  // merge 是集成提交、不是原子性单元;双根场景由 session_end 的成对证据兜底 —— 这里显式 SKIP,
+  // 不再假 PASS(需要逐提交核对时用 `git show --name-only -m <merge-sha>`)。
+  if (Array.isArray(newest.parents) && newest.parents.length > 1) {
+    return skip('R5', `最近一次提交是 merge 提交(${newest.sha.slice(0, 12)},${newest.parents.length} 个父),` +
+      'git log --name-only 不列 merge 文件,原子性无法判定(不是通过)',
+      '逐提交核对用 `git show --name-only -m <merge-sha>`;双根场景由 session_end 的成对证据(代码提交 + 控制面提交)校验');
+  }
+  const files = newest.files;
   const roots = (cfg && cfg.codeRoots) || DEFAULT_CODE_ROOTS;
   const code = files.filter((f) => underRoots(roots, f)); // P4:原 /^(src|lib|app)\// 的配置化形态
   const touchProtocol = files.includes('TASKS.md') || files.includes('LOG.md');
@@ -235,11 +282,10 @@ const checkR5 = async (root, cfg) => {
 };
 
 // —— R6 文档 staleness(full only)——
-const checkR6 = async (root, cfg) => {
-  if (!isGitRepo(root)) return skip('R6', '非 git 仓库,跳过', '初始化 git 后本检查自动生效');
-  const r = await gitRun(root, '-c', 'core.quotePath=false', 'log', '-20', '--name-only', '--pretty=format:');
-  if (!r.ok) return skip('R6', '仓库尚无提交,跳过', '产生首个提交后本检查自动生效');
-  const files = new Set(r.stdout.split('\n').map((s) => s.trim()).filter(Boolean));
+const checkR6 = async (root, cfg, git) => {
+  if (!git || !git.isRepo) return skip('R6', '非 git 仓库,跳过', '初始化 git 后本检查自动生效');
+  if (!git.commits || !git.commits.length) return skip('R6', '仓库尚无提交,跳过', '产生首个提交后本检查自动生效');
+  const files = new Set(git.commits.flatMap((c) => c.files));
   const croots = (cfg && cfg.codeRoots) || DEFAULT_CODE_ROOTS;
   const droots = (cfg && cfg.docsRoots) || DEFAULT_DOCS_ROOTS;
   const srcChanged = [...files].some((f) => underRoots(croots, f)); // P4:原 f.startsWith('src/')
@@ -256,8 +302,8 @@ const checkR6 = async (root, cfg) => {
 export const DONE_TASK_RE = /^T\d+\s*完成$/;
 const isDoneTaskField = (t) => DONE_TASK_RE.test(String(t || '').trim());
 
-const checkR7 = async (root) => {
-  const t = await readText(join(root, 'LOG.md'));
+const checkR7 = async (root, snap) => {
+  const t = snap ? snap.logText : await readText(join(root, 'LOG.md'));
   if (t == null) return skip('R7', 'LOG.md 不存在', '先 relay_init/onboard 建立 LOG.md;出场会写入首条日志');
   const entries = parseLogEntries(t);
   if (!entries.length) return skip('R7', 'LOG.md 无条目', '首个会话出场后自动产生条目');
@@ -296,8 +342,8 @@ const checkR8 = async (root) => {
 };
 
 // —— R9 LOG/TASKS 一致性 ——
-const checkR9 = async (root) => {
-  const logText = await readText(join(root, 'LOG.md'));
+const checkR9 = async (root, snap) => {
+  const logText = snap ? snap.logText : await readText(join(root, 'LOG.md'));
   if (logText == null) return skip('R9', 'LOG.md 不存在,无从对账', '出场(relay_session_end)会同时写 LOG 与 TASKS,自动保持一致');
   const entries = parseLogEntries(logText);
   if (!entries.length) return skip('R9', 'LOG.md 无条目,无从对账', '出场后会自动建立 LOG↔TASKS 关联');
@@ -310,7 +356,7 @@ const checkR9 = async (root) => {
     return skip('R9', `最新条目 task 字段无任务号(“${newest.task}”)`, 'LOG 条目标题 task 字段应为「Txxx 完成」,请修正该条目');
   }
   const id = idm[0];
-  const tasksText = await readText(join(root, 'TASKS.md'));
+  const tasksText = snap ? snap.tasksText : await readText(join(root, 'TASKS.md'));
   if (tasksText == null) {
     return bad('R9', 'ERROR', `LOG 最新条目声明 ${id} 完成,但 TASKS.md 不存在`, `补建 TASKS.md 并将 ${id} 标为 [x](YYYY-MM-DD, sha),或修正 LOG 条目 task 字段`);
   }
@@ -330,12 +376,27 @@ const checkR9 = async (root) => {
 
 // —— R10 事实对账(T013)——
 // 事实行由 relay_session_end 的引擎确定性写入,模型不得手写/改写;本检查负责:
-//   10.1 存在性:最新完成条目必须有「事实(v1)」行(防手写伪造完成条目);
+//   10.1 存在性:最新完成条目必须有事实行(缺 → WARN,ERROR 会锁死出场;防手写伪造完成条目);
 //   10.2 可解析性:格式坏了即 ERROR(说明被手改或引擎回退);
-//   10.3 数字对账:可定位提交时只比**文件数**(--no-renames);不一致 → WARN,strict 才 ERROR。
+//   10.3 v2 机检段对账:文件数(managed 另含 ±)从 git 重算,不一致 → ERROR;叙述段不参与;
+//   10.4 branch 归属:声称的分支必须真的包含声明的 sha(存在但不含 → ERROR;分支已删除 → WARN);
+//   10.5 无法定位提交 → WARN(永不 PASS);v1 旧格式只做结构校验 → WARN(数字权威仅 v2,绝不 PASS)。
 // 只跑 controlRoot(executionRoot 里的 LOG 是 baseSha 快照,同 R7/R9 边界)。
 // 向后兼容:manifest.facts.enabled 未开 / since 未设 / 条目早于 since → SKIP。
-const checkR10 = async (root, cfg) => {
+// 分支归属(P1-3 审计):快乐路径只多一次 git branch --contains;只有「不在列表」时才补一次
+// rev-parse 区分「分支存在但不含该提交」(ERROR:篡改/张冠李戴)与「分支已删除」(WARN:不可验证)。
+const branchContainsSha = async (root, sha, branch) => {
+  const r = await gitRun(root, '-c', 'core.quotePath=false', 'branch', '--contains', sha);
+  if (!r.ok) return { state: 'unverifiable', detail: (r.stderr || '').split('\n')[0] || 'git branch --contains 失败' };
+  // git branch 的标记列:* = 当前分支,+ = 已被某个 linked worktree 检出(任务分支就是这种)
+  const names = new Set(r.stdout.split('\n')
+    .map((l) => l.replace(/^[*+]\s*/, '').trim())
+    .filter((l) => l && !l.startsWith('(')));
+  if (names.has(branch)) return { state: 'contains' };
+  const exists = await gitRun(root, 'rev-parse', '--verify', '--quiet', `refs/heads/${branch}`);
+  return exists.ok && exists.stdout.trim() ? { state: 'not-contains' } : { state: 'missing' };
+};
+const checkR10 = async (root, cfg, snap) => {
   const facts = (cfg && cfg.facts) || { enabled: false, since: null, strict: false };
   if (!facts.enabled) {
     return skip('R10', 'manifest.facts.enabled 未开启,跳过事实对账', '新项目由 relay_init/onboard 开启;旧项目在 .relay/manifest.json 写入 facts.enabled=true 与 facts.since 后生效');
@@ -343,7 +404,7 @@ const checkR10 = async (root, cfg) => {
   if (!facts.since) {
     return skip('R10', 'manifest.facts.since 未设置,跳过(避免旧条目误报)', '在 manifest.facts.since 写入启用时刻(YYYY-MM-DD HH:mm)后本检查生效');
   }
-  const t = await readText(join(root, 'LOG.md'));
+  const t = snap ? snap.logText : await readText(join(root, 'LOG.md'));
   if (t == null) return skip('R10', 'LOG.md 不存在', '出场会写入首条日志');
   const lines = t.replace(/\r\n/g, '\n').split('\n');
   // P1-16:找**最新完成条目**,而不是最新条目。LOG 顶部常是 task=无 的维护条目,
@@ -368,35 +429,90 @@ const checkR10 = async (root, cfg) => {
   if (factIdx < 0) {
     // P1-14:这里若判 ERROR,出场绿闸会永久卡死,而唯一的修复动作(重跑 session_end)
     // 正是被阻断的那个调用,且引擎从不回填历史条目 —— 死锁。降为 WARN 并给可执行出路。
-    return bad('R10', 'WARN', `最新完成条目(${entry.time} ${entry.task})缺少机器写入的「事实(v1)」行`,
-      '该条目由旧版本引擎或手工写入,引擎不会回填历史条目;把 .relay/manifest.json 的 facts.since 前移到该条目之后即可豁免,或人工补一行格式正确的 事实(v1) 行');
+    return bad('R10', 'WARN', `最新完成条目(${entry.time} ${entry.task})缺少机器写入的「事实(v2)」行`,
+      '该条目由旧版本引擎或手工写入,引擎不会回填历史条目;把 .relay/manifest.json 的 facts.since 前移到该条目之后即可豁免,或人工补一行格式正确的 事实(v2) 行');
   }
   const parsed = parseFactLine(block[factIdx]);
   if (!parsed) {
-    return bad('R10', 'ERROR', `「事实(v1)」行格式不可解析:${block[factIdx].slice(0, 80)}`,
+    return bad('R10', 'ERROR', `「事实(v1/v2)」行格式不可解析:${block[factIdx].slice(0, 80)}`,
       '删除该行后重跑 relay_session_end 由引擎重写(该行是机器产物,不允许手改)');
   }
-  const recomputed = await recomputeCommitFileCount(root, parsed);
-  if (recomputed == null) {
-    return pass('R10', `事实行存在(声明 ${parsed.files} 文件);无可定位提交,跳过数字对账`);
+  if (parsed.version === 1) {
+    // P0-2(审计):v1 旧行没有可信的 range 来源——行自带的 base/sha 由被校验方提供,
+    // 用它算出来的「一致」是自证。数字对账一律不做,只保留结构校验并 WARN(绝不 PASS)。
+    return bad('R10', 'WARN', `最新完成条目(${entry.time} ${entry.task})的事实行是 v1 旧格式,只做结构校验(数字对账仅 v2 机检段权威)`,
+      '该行由旧版本引擎写入;删除后重跑 relay_session_end 会写入 v2(机检段可独立对账),或把 manifest.facts.since 前移到该条目之后豁免');
   }
-  if (recomputed !== parsed.files) {
-    const detail = `事实行声明 ${parsed.files} 文件,git 实测 ${recomputed} 文件(只比文件数,--no-renames)`;
-    return facts.strict
-      ? bad('R10', 'ERROR', detail, '事实行必须由引擎写入;删除该行后重跑 relay_session_end 重写')
-      : bad('R10', 'WARN', detail, '先确认不是跨多提交/合并造成的口径差异;确认后可把 manifest.facts.strict 置 true 升级为 ERROR');
+  // T023:机检段结构自洽(mode 决定 base/sha 是否必须存在;managed 分支恒为 relay/T###)。
+  // 这条不依赖 git —— 篡改 mode/branch 会直接暴露,而不是靠「± 恰好没被检查」的偶然性。
+  const struct = [];
+  if (parsed.mode === 'managed') {
+    if (!parsed.base) struct.push('mode=managed 但 base 缺失');
+    if (!parsed.sha) struct.push('mode=managed 但 sha 缺失');
+    if (!/^relay\//.test(parsed.branch)) struct.push(`mode=managed 但 branch=${parsed.branch || '(空)'} 不是 relay/T### 任务分支`);
+  } else {
+    if (parsed.base) struct.push('mode=single 却带 base(单根出场时代码尚未提交)');
+    if (parsed.sha) struct.push('mode=single 却带 sha(单根出场时代码尚未提交)');
+    if (!parsed.branch) struct.push('branch 缺失');
   }
-  return pass('R10', `事实对账一致(${parsed.files} 文件,${parsed.branch || '单根'})`);
+  if (struct.length) {
+    return bad('R10', 'ERROR', `事实行机检段自相矛盾:${struct.join('; ')}`,
+      '事实行是引擎产物,不允许手改;删除该行后重跑 relay_session_end 重写(机检段=mode/文件数/base/sha/branch)');
+  }
+  // 复用快照里的 git 结果:不再单独起 isGitRepo / git log(R10 只需一次 diff)
+  const stats = await recomputeCommitStats(root, parsed, {
+    isRepo: snap && snap.git ? snap.git.isRepo : undefined,
+    headSubject: snap && snap.git && snap.git.commits[0] ? snap.git.commits[0].subject : null,
+  });
+  if (!stats) {
+    // T023:fail-open 修复 —— 「算不了」绝不能 PASS(未验证的确信比空白更危险);
+    // 伪造 sha / 提交被重写 / 历史被裁剪都会走到这里,降 WARN 并给出可执行出路。
+    return bad('R10', 'WARN', `事实行存在(声明 ${parsed.files} 文件),但无法定位对应提交,数字对账无法完成`,
+      '确认该条目引用的 base/sha 仍在仓库历史中;若是旧版本引擎写入或历史被重写,把 manifest.facts.since 前移到该条目之后豁免');
+  }
+  // P1-3(审计):branch 必须真的与 git 对得上。
+  // managed:声称的分支必须包含声明的 sha(存在但不含 → ERROR;已删除/不可读 → WARN)。
+  // single:代码尚未提交,无法校验 sha 归属;但分支名至少必须真实存在(zzz/zzz、relay/T999 这类伪造 → WARN)。
+  if (parsed.mode === 'managed') {
+    const bc = await branchContainsSha(root, parsed.sha, parsed.branch);
+    if (bc.state === 'not-contains') {
+      return bad('R10', 'ERROR', `事实行机检段 branch=${parsed.branch} 不包含声明的 sha=${String(parsed.sha).slice(0, 12)}(分支与提交不匹配)`,
+        '事实行是引擎产物,不允许手改;删除该行后重跑 relay_session_end 重写');
+    }
+    if (bc.state === 'missing' || bc.state === 'unverifiable') {
+      return bad('R10', 'WARN', `事实行 branch=${parsed.branch} 无法验证(${bc.state === 'missing' ? '分支不存在,可能已合并删除' : bc.detail}),数字对账无法完成`,
+        '若分支已按人工流程合并删除,把 manifest.facts.since 前移到该条目之后豁免;若分支仍在,说明事实行被篡改,删除该行后重跑 relay_session_end 重写');
+    }
+  } else if (parsed.branch && parsed.branch !== '无 git' && parsed.branch !== '未知' && (!snap || !snap.git || snap.git.isRepo)) {
+    const exists = await gitRun(root, 'rev-parse', '--verify', '--quiet', `refs/heads/${parsed.branch}`);
+    if (!(exists.ok && exists.stdout.trim())) {
+      return bad('R10', 'WARN', `事实行 branch=${parsed.branch} 在仓库中不存在(单根模式只校验分支存在性,不校验 sha 归属)`,
+        '若该分支已按人工流程删除,把 manifest.facts.since 前移到该条目之后豁免;否则事实行被篡改,删除该行后重跑 relay_session_end 重写');
+    }
+  }
+  // 机检段逐字段对账(叙述段=验收/verify/耗时,写时快照不可重算,刻意不校验;
+  // single 的 ± 是写时近似——未跟踪文件在写时还没进 numstat,提交后才可得——故只对 managed 对账 ±)。
+  const fails = [];
+  if (stats.files !== parsed.files) fails.push(`文件数 声明 ${parsed.files} / 实测 ${stats.files}`);
+  if (parsed.mode === 'managed' && (stats.insertions !== parsed.insertions || stats.deletions !== parsed.deletions)) {
+    fails.push(`±行数 声明 +${parsed.insertions}/-${parsed.deletions} / 实测 +${stats.insertions}/-${stats.deletions}`);
+  }
+  if (fails.length) {
+    return bad('R10', 'ERROR', `事实行机检段与 git 事实不一致:${fails.join('; ')}`,
+      '事实行是引擎产物,不允许手改;删除该行后重跑 relay_session_end 重写(机检段=mode/文件数/base/sha/branch,managed 另含 ±,叙述段=验收/verify/耗时)');
+  }
+  return pass('R10', `事实对账一致(v2 机检段:${parsed.files} 文件${parsed.mode === 'managed' ? `,±+${parsed.insertions}/-${parsed.deletions}` : ''},${parsed.branch || '单根'}${parsed.mode === 'managed' ? ` 含 sha ${String(parsed.sha).slice(0, 12)}` : ''})`);
 };
 
 // —— R11 协议文件敏感内容 ——
 // 路径级守卫见 findSensitiveChanges(H3);本检查补内容级:密钥写进 LOG 就进了 git 历史,事后不可撤回。
 // 只扫 controlRoot 的协议文件;executionRoot 里的 TASKS/LOG 只是 baseSha 快照(同 R7/R9 的边界)。
-const checkR11 = async (root) => {
+const checkR11 = async (root, snap) => {
   const hits = [];
   let exempted = 0;
+  const texts = { 'TASKS.md': snap ? snap.tasksText : null, 'LOG.md': snap ? snap.logText : null };
   for (const f of ['TASKS.md', 'LOG.md']) {
-    const t = await readText(join(root, f));
+    const t = snap ? texts[f] : await readText(join(root, f));
     if (t == null) continue;
     // 探测器允许 relay:secret-ok 豁免(写入原语不接受),但豁免必须可见:行数写进输出。
     for (const h of scanSecrets(t, { allowMarker: true })) hits.push({ file: f, ...h });
@@ -413,39 +529,89 @@ const checkR11 = async (root) => {
   return pass('R11', `TASKS/LOG 无密钥样式内容${exempted ? `(另有 ${exempted} 行标注 relay:secret-ok 被豁免,请人工复核)` : ''}`);
 };
 
+// —— R12 LOG 边界(T024 / T001 最小触发)——
+// LOG 只增不减与「有限上下文」公理冲突;本检查只报警,归档动作留给人工(不自动搬移/删除)。
+// 活跃区 = 归档指针之前的行;行数轴与完成条目轴**共用同一个活跃区**(审计 P1-7:两轴口径必须一致)。
+// 指针必须指向真实存在的 docs/archive/*.md 才被承认——否则一行字就能把活跃区归零,比调大阈值更容易消音。
+export const R12_MAX_LOG_LINES = 150;
+export const R12_MAX_DONE_ENTRIES = 20;
+const LOG_ARCHIVE_POINTER_RE = /^\s*<!--\s*relay:log-archive:\s*(\S+)\s*-->\s*$/;
+const ARCHIVE_REL_RE = /^docs\/archive\/[^/\\]+\.md$/;
+const findArchiveBoundary = async (root, lines) => {
+  for (let i = 0; i < lines.length; i++) {
+    const m = lines[i].match(LOG_ARCHIVE_POINTER_RE);
+    if (!m) continue;
+    const rel = m[1];
+    if (!ARCHIVE_REL_RE.test(rel)) continue;
+    try {
+      const st = await stat(join(root, rel));
+      if (st.isFile() && st.size > 0) return i;
+    } catch { /* 指针目标不存在 → 不承认它划定的边界 */ }
+  }
+  return -1;
+};
+const checkR12 = async (root, cfg, snap) => {
+  const t = snap ? snap.logText : await readText(join(root, 'LOG.md'));
+  if (t == null) return skip('R12', 'LOG.md 不存在,无从度量', '出场(relay_session_end)会写入首条日志');
+  const lines = t.replace(/\r\n/g, '\n').split('\n');
+  const boundary = await findArchiveBoundary(root, lines);
+  const area = boundary < 0 ? lines : lines.slice(0, boundary);
+  const activeLines = area.filter((l, i) => !(i === area.length - 1 && l === '')).length; // 去掉末尾换行造成的空行
+  const doneEntries = parseLogEntries(area.join('\n')).filter((e) => isDoneTaskField(e.task)).length;
+  const dangling = boundary < 0 && lines.some((l) => LOG_ARCHIVE_POINTER_RE.test(l))
+    ? ';归档指针未被承认(目标文件不存在或不在 docs/archive/,活跃区按全文计算)' : '';
+  const overLines = activeLines > R12_MAX_LOG_LINES;
+  const overDone = doneEntries > R12_MAX_DONE_ENTRIES;
+  if (!overLines && !overDone) {
+    return pass('R12', `LOG 活跃区 ${activeLines} 行 / 完成条目 ${doneEntries} 条,在边界内(>${R12_MAX_LOG_LINES} 行或 >${R12_MAX_DONE_ENTRIES} 条才告警)${dangling}`);
+  }
+  const over = [
+    overLines ? `活跃区 ${activeLines} 行 > ${R12_MAX_LOG_LINES}` : '',
+    overDone ? `完成条目 ${doneEntries} 条 > ${R12_MAX_DONE_ENTRIES}` : '',
+  ].filter(Boolean).join(';');
+  const fix = '归档较早条目:人工决定把尾部历史 git move 到 docs/archive/LOG-YYYY.md,并在 LOG.md 留一行指针 <!-- relay:log-archive: docs/archive/LOG-YYYY.md -->(指针目标必须真实存在,否则不计入边界;relay 不自动归档,R12 只是触发器);manifest.logBoundary.strict=true 可升级为 ERROR';
+  return (cfg && cfg.logBoundary && cfg.logBoundary.strict)
+    ? bad('R12', 'ERROR', `LOG 边界超限:${over}${dangling}`, fix)
+    : bad('R12', 'WARN', `LOG 边界超限:${over}${dangling}`, fix);
+};
+
 // —— 双根:任务树结构检查(R1/R2/R3/R4/R8)——
 // managed 场景下真正待提交的代码在 executionRoot,结构检查必须覆盖它;
 // 协议面检查(R5/R6/R7/R9)属于 controlRoot,这里刻意不跑——worktree 里的
 // TASKS/LOG 只是 baseSha 快照,跑 R7/R9 会得到陈旧甚至相反的结论。
-export const runTaskTreeChecks = async (executionRoot, controlRoot = executionRoot) => {
-  const manifest = await readManifest(controlRoot); // 白名单/入口清单以 controlRoot 为准(修宪只认协议面)
-  const cfg = await readManifestConfig(controlRoot);
+export const runTaskTreeChecks = async (executionRoot, controlRoot = executionRoot, { meta: preloadedMeta = null } = {}) => {
+  // 白名单/入口清单以 controlRoot 为准(修宪只认协议面);git 上下文取 executionRoot(真正待提交的任务树)
+  const meta = preloadedMeta || await collectMeta(controlRoot);
+  const git = await collectGit(executionRoot, { commits: false }); // 任务树只用 tops,不取提交历史(P2-11)
   return [
-    await checkR1(executionRoot, manifest),
-    await checkR2(executionRoot, manifest),
-    await checkR3(executionRoot, manifest, cfg),
-    await checkR4(executionRoot, manifest),
+    await checkR1(executionRoot, meta.manifest),
+    await checkR2(executionRoot, meta.manifest, git),
+    await checkR3(executionRoot, meta.manifest, meta.cfg),
+    await checkR4(executionRoot, meta.manifest),
     await checkR8(executionRoot),
   ];
 };
 
 // —— 检查编排:fast(默认)跳过 R5/R6/R8 ——
-export const runChecks = async (root, { full = false } = {}) => {
-  const manifest = await readManifest(root);
-  const cfg = await readManifestConfig(root); // P3/P4:新增策略项的默认值在此固化
+export const runChecks = async (root, { full = false, meta: preloadedMeta = null } = {}) => {
+  // T022:单轮 verify 只读一次 LOG/TASKS/manifest,git 子进程收敛到必要数量;
+  // 所有检查消费同一份快照(同一条日志不会在 R7 与 R10 下看到不同版本)。
+  const snap = await collectSnapshot(root, preloadedMeta);
+  const { manifest, cfg } = snap;
   const fastSkip = (id, name) => skip(id, `fast 模式跳过 ${name}`, '出场(relay_session_end)会全量执行;需要立即全量:relay_verify {full:true}');
   return [
     await checkR1(root, manifest),
-    await checkR2(root, manifest),
+    await checkR2(root, manifest, snap.git),
     await checkR3(root, manifest, cfg),
     await checkR4(root, manifest),
-    full ? await checkR5(root, cfg) : fastSkip('R5', '(R5 提交原子性)'),
-    full ? await checkR6(root, cfg) : fastSkip('R6', '(R6 文档 staleness)'),
-    await checkR7(root),
+    full ? await checkR5(root, cfg, snap.git) : fastSkip('R5', '(R5 提交原子性)'),
+    full ? await checkR6(root, cfg, snap.git) : fastSkip('R6', '(R6 文档 staleness)'),
+    await checkR7(root, snap),
     full ? await checkR8(root) : fastSkip('R8', '(R8 风格归一化)'),
-    await checkR9(root),
-    await checkR10(root, cfg),
-    await checkR11(root),
+    await checkR9(root, snap),
+    await checkR10(root, cfg, snap),
+    await checkR11(root, snap),
+    await checkR12(root, cfg, snap),
   ];
 };
 
@@ -488,8 +654,10 @@ export const relayVerify = async (args = {}) => {
     const hasError = results.some((r) => r.result === 'ERROR');
     return { content: [{ type: 'text', text: formatChecks(results, { root: roots.controlRoot, full }) }], isError: hasError };
   }
-  const controlResults = await runChecks(roots.controlRoot, { full });
-  const taskResults = await runTaskTreeChecks(roots.executionRoot, roots.controlRoot);
+  // 双根:meta 只解析一次,两套检查共用(manifest 读取次数恒为 1)
+  const meta = await collectMeta(roots.controlRoot);
+  const controlResults = await runChecks(roots.controlRoot, { full, meta });
+  const taskResults = await runTaskTreeChecks(roots.executionRoot, roots.controlRoot, { meta });
   const hasError = [...controlResults, ...taskResults].some((r) => r.result === 'ERROR');
   const lines = [
     '# relay verify — 双根模式',
@@ -500,7 +668,7 @@ export const relayVerify = async (args = {}) => {
     '',
     formatChecks(controlResults, { root: roots.controlRoot, full, mode: 'controlRoot 全量' }),
     '',
-    formatChecks(taskResults, { root: roots.executionRoot, full: false, mode: 'executionRoot 任务树(R5/R6/R7/R9 只在 controlRoot 跑)' }),
+    formatChecks(taskResults, { root: roots.executionRoot, full: false, mode: 'executionRoot 任务树(R5/R6/R7/R9/R10/R11/R12 只在 controlRoot 跑)' }),
   ];
   if (roots.linkedWorktree && !roots.managed) {
     lines.push('', `> ⚠ 该 worktree 未被 relay 注册(registryState=${roots.registryState});session_end 的完成出场会 fail-closed 拒绝。`);

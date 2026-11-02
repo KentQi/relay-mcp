@@ -5,6 +5,30 @@
 
 ## [Unreleased]
 
+### Changed
+- `relay_verify` 单轮只读一次 LOG/TASKS/manifest(此前 4/2/2 次),git 子进程从 9 收敛到 2–4;`resolveRelayRoots` 对普通仓库走 fs 快路径(recall/get 的 git 调用 2→0);async 路径不再同步探测 git(T022)
+- 新增 `scripts/smoke-perf.mjs`(24 断言,计数钩子而非计时阈值)接入 `npm test`;`RELAY_TRACE_FILE` 可观测单轮读取/子进程计数
+
+### Changed(T023)
+- **事实行升 v2**:以 `||` 拆两段——机检段 `mode | 文件 N | ± +x/-y | base | sha | branch`(检查时点可从 git 重算)与叙述段 `验收 | verify 汇总 | 耗时`(写时快照,仅结构校验)。机检段任一字段与 git 重算不符 → R10 **ERROR**(不再依赖 `facts.strict`);叙述段被改**不误红**
+- **R10 去 fail-open**:无法定位对应提交(伪造 sha、提交被重写、历史被裁剪)→ **WARN,永不 PASS**;缺事实行维持 WARN;v1 旧行继续可解析,只对文件数
+
+### Added(T024)
+- **R12 LOG 边界**:LOG 活跃区(归档指针之前的行)>150 行 或 完成条目 >20 → WARN(`manifest.logBoundary.strict=true` 升 ERROR);只报警、不自动归档,归档动作留人工;阈值按现状设定(本仓库当前 139 行 / 16 完成条目,落地即绿)
+- `scripts/smoke-r12-boundary.mjs`(18 断言)接入 `npm test`
+
+### Added(T025)
+- `package.json` 补 `repository` / `bugs`(npm provenance 发布前置);`smoke-pack` 增加 2 条机检断言(28→30),打包边界不回归
+
+### Fixed(PR #8 审计,详见 `docs/04-test/06-audit-pr8-v1.0.md`)
+- **HIGH**:`collectGit` 的 `__COMMIT__` 文本哨兵改为 NUL 记录前缀——同名文件不再能伪造提交头让 R5 静默失明
+- **HIGH**:v1 事实行不再参与数字对账(行自带的 base/sha 是自证),只做结构校验并 WARN;数字权威仅 v2
+- **MEDIUM**:R10 增加 branch 归属校验(分支存在但不含声明 sha → ERROR,分支已删除 → WARN);single 模式 ± 明确为写时近似、不构成机检字段;三处一致断言升级为内容比对并清掉 README 英文半边与 `src/**` 的 `R1–R11` 残留;同步 `isGitRepo()` 删除、全引擎改 async;R12 归档指针必须指向真实存在的 `docs/archive/*.md`(否则按全文计算),两轴共用同一活跃区
+- **LOW**:v2 分隔符改按「空格||空格」解析(分支名含 `|`、叙述段含 `||` 均不再截断);recall 同时剥离 v1/v2 事实行前缀;任务树检查不再取提交历史(省一次 git);R12 修复文案删除「拆小任务粒度」
+- **复审 N1**:`smoke-perf` 的 managed 用例改跑**真双根**(从 executionRoot verify),断言双根分支 + `manifest` 读 1 次 + git ≤8(实测 5–7);此前 `git=2` 是单根路径误测
+- **复审 N2**:R5 在最新提交为 merge 时改为**显式 SKIP**(不再因 `git log --name-only` 不列 merge 文件而假 PASS),双根由成对证据兜底
+- 回归规模:`npm test` 14 套 / 604 断言;新增 `smoke-session-perf.mjs`(红灯,T026)登记 session_start 读放大残留
+
 ## [1.4.1] - 2026-11-01
 
 ### Fixed
