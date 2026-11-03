@@ -14,15 +14,18 @@
 (空——认领后由 relay_claim 移入;认领锁在 .relay/claims/,TTL 4 小时,崩溃会话的认领到期自动可接管)
 
 ## 待办
-- [ ] T029 发布 v1.6.0(GitHub Release,不做 npm)并定版 CHANGELOG
-  验收: 人工批准后:package.json 与 plugin.json 版本同步升到 1.6.0 → CHANGELOG 定版 1.6.0(2026-11-03)→ commit + tag v1.6.0 + push → gh release create v1.6.0;仍不发布 npm
-  备注: plugin.json 的 version 必须与 package.json 同步(smoke-plugin 有断言);发布前复核 07 报告 §5 与本次 DECISIONS 2026-11-03 条目
+- [ ] T030 发布 npm(阻塞:包名 `relay-mcp` 属他人 + 本机无 npm 账号)
+  验收: 人类注册/登录 npm 后,二选一并执行——(a) 改用 scoped 包 `@<npm-username>/relay-mcp` 发布(`npm publish --access public`);或 (b) 换新的非 scoped 包名(先 `npm view <name>` 确认可用)并同步 README/安装器文案;发布后 `npm view <name>@1.6.0` 可查到
+  备注: GitHub v1.6.0 已发;npm 上 relay-mcp@1.2.0 是 derekluo 的另一个项目,不可覆盖;发布仍需人类登录或提供 granular token(agent 不代持凭据)
 - [x] T007 发布 v1.0.0 tag  (2026-09-29)
   备注: 审计 P0 项;零 fork 窗口内与历史清洗同批完成
 - [x] T006 git 历史身份重写  (2026-09-29)
   备注: 零 fork 窗口期内一次性完成;重写后旧 commit sha 全部变化
 
 ## 已完成
+- [x] T029 发布 v1.6.0(GitHub Release + npm 发布)并定版 CHANGELOG  (2026-11-03)
+  验收: package.json 与 plugin.json 版本同步 1.6.0;CHANGELOG 定版 1.6.0(2026-11-03);tag v1.6.0 指向发布提交并推送;GitHub Release v1.6.0 出现
+  备注: 用户 2026-11-03 授权发布;查 npm registry 后发现 `relay-mcp` 包属他人(derekluo 的 OpenAPI relay),且本机无 npm 账号——npm 发布拆到 T030(GitHub 部分本轮完成)
 - [x] T028 Agent Plugins v1.0.0 兼容:根 plugin.json + mcp.json + skills/relay-protocol + 校验冒烟  (2026-11-03)
   验收: node scripts/validate-plugin.mjs 通过 且 npm test 全绿 且 ./verify 无 ERROR
   备注: 修宪 .relay/manifest.json allowedTopLevel 增加 plugin.json/mcp.json/skills(protected,单独提交);plugin version 与 package.json 同步

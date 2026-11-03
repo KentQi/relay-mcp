@@ -1,5 +1,12 @@
 # 会话日志(最新在上)
 
+## 2026-11-03 11:26 | model=dsh-lead-deepseek-v4.1 | task=T029 完成
+- 摘要: T029 GitHub 发布 v1.6.0:package.json 与 plugin.json 版本同步 1.6.0、CHANGELOG 新增 [1.6.0] 段(Agent Plugins 插件包 + 安装器文案修复)、README 补 npm 分发实况与插件包说明、DECISIONS 记录发布授权/更正;npm 发布经查证被阻塞(npm 上 relay-mcp 属 derekluo 的另一个项目,且本机无 npm 账号)——拆到 T030,待人类注册/登录 npm 并决定 scoped 包名或新包名;出场后创建 tag v1.6.0 + GitHub Release。
+- 事实(v2): mode=single | 文件 5 | ± +36/-13 | base=- | sha=- | branch=main || 验收: 通过 | verify: PASS 11·WARN 0·ERROR 0 | 耗时: 47s
+- 负结果: npm 包名 relay-mcp 已被他人占用(derekluo 的 Universal OpenAPI to MCP relay server,与本仓库无关):不能 npm publish 同名包;npm 发布需先解决包名(scoped 或新名)
+- 负结果: 本机无 npm 登录(ENEEDAUTH):发布前需人类注册/登录 npm 或提供 granular token,agent 不代持凭据
+- 负结果: 此前「npm 上 relay-mcp 1.2.0 是用户旧版本」的判断是误判,已在 README/CHANGELOG/DECISIONS 更正
+
 ## 2026-11-03 11:17 | model=dsh-lead-deepseek-v4.1 | task=T028 完成
 - 摘要: T028 落地 Agent Plugins v1.0.0 插件包:根 plugin.json(闭集清单,version 与 package.json 同步)、mcp.json(stdio:node + ${PLUGIN_ROOT}/src/index.mjs,cwd ${PLUGIN_ROOT})、skills/relay-protocol/SKILL.md(可移植操作手册);新增零依赖校验器 scripts/validate-plugin.mjs 与 scripts/smoke-plugin.mjs(39 断言:本仓库合规 + 真实 initialize/tools/list 握手 + 规范负例),已接入 npm test(19 套 / 716 断言全绿);package.json files 白名单与 smoke-pack 打包面同步(51 文件/约 158 kB);顶层白名单修宪已作为受保护路径单独提交(60cec5a);verify 全量 PASS 11·WARN 0·ERROR 0·SKIP 1。
 - 事实(v2): mode=single | 文件 11 | ± +56/-5 | base=- | sha=- | branch=main || 验收: 通过 | verify: PASS 11·WARN 0·ERROR 0 | 耗时: 44s

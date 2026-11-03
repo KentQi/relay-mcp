@@ -57,16 +57,18 @@ node scripts/smoke-plugin.mjs           # 39 断言：合规 + 真实 initialize
 ```
 
 不支持插件包的客户端继续用下面的安装器（`mcpServers` 片段）。
-### npm 分发（发布需人工批准）
+### npm 分发（尚未发布）
+
+**注意**：npm 上的 `relay-mcp` 是另一个项目（derekluo 的 OpenAPI relay server），不是本仓库；本仓库尚未发布 npm，当前通过 GitHub Release / `git clone` / Agent Plugins 插件包分发。
 
 包内只含 `src/`、`templates/`、`skills/`、`plugin.json`、`mcp.json`、安装器/校验器与 README/LICENSE（`files` 白名单）；协议状态（`.relay/`、TASKS/LOG）与开发文档不进包。
 
 ```sh
-npm pack --dry-run        # 校验打包面（51 个文件，约 158 kB）
-npx relay-mcp             # 启动 stdio server（等价 node src/index.mjs）
+npm pack --dry-run        # 本地校验打包面（51 个文件，约 158 kB）
+node src/cli.mjs relay_session_start --root .   # 或直接运行 stdio server：node src/index.mjs
 ```
 
-发布动作（`npm publish`）属人类修宪级决策，仓库不做自动发布；`scripts/smoke-pack.mjs` 在 CI 中守住打包边界。
+npm 发布拆到 TASKS T030：需人类 npm 账号，并改用 scoped 包名（如 `@<npm-username>/relay-mcp`）或新的非 scoped 包名；`npm publish` 由 `scripts/check-publish-guard.mjs` 的 `RELAY_ALLOW_PUBLISH=1` 显式放行。
 
 ### 快速开始
 

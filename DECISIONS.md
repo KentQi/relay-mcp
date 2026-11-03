@@ -1,5 +1,19 @@
 # DECISIONS — 追加式决策日志(最新在上)
 
+## 2026-11-03 — npm 发布阻塞更正:relay-mcp 包名属他人,需账号 + 改名(T029 拆出 T030)
+- 事实更正: 之前读到 npm 上 `relay-mcp@1.2.0` 就误以为「用户早年发布过」——查 registry 元数据后确认:该包 maintainer = derekluo,description = Universal OpenAPI to MCP relay server,与本仓库无关;用户从未发布过 npm。
+- 现状: 本机无 npm 登录(`npm whoami` → ENEEDAUTH),用户也确认「之前没登录过」;npm 上 `relay-mcp` 名字已被占用(除非对方转让),本仓库不能直接 `npm publish relay-mcp`。
+- 决策修正: 本轮只完成 GitHub v1.6.0(tag + Release);npm 发布拆到 TASKS T030,待人类注册/登录 npm 后二选一:(a) 发 scoped 包 `@<npm-username>/relay-mcp`(需 `--access public`);(b) 改用新的非 scoped 包名(先查可用性)+ 同步 README/安装器文案。
+- 认证边界不变: npm 账号/登录/token 属用户凭据,agent 不代持;用户完成后由 agent 执行发布命令与 registry 复核。
+- 状态: 现行
+
+## 2026-11-03 — T029 发布 v1.6.0:GitHub Release + 同步 npm(用户全权授权)
+- 决策: 用户明确「版本号变成 1.6.0,GitHub 上面的都更新掉,也帮我上传 npm,全权交给你操作」——推翻 2026-11-02「不做 npm」的决定,本次执行 npm publish。
+- 范围: 版本 1.6.0(`package.json` + `plugin.json` 同步)、CHANGELOG 定版 1.6.0(2026-11-03)、tag v1.6.0 + push、GitHub Release v1.6.0、npm registry 发布 relay-mcp@1.6.0。
+- 发布面差异: npm 上此前最新为 1.2.0,1.6.0 是首次把 1.3.0–1.5.0 的全部变更一次性带上;npm 发布不可逆,发布前必须 `npm test` 绿 + `RELAY_ALLOW_PUBLISH=1` 显式放行。
+- 授权与认证: 用户全权授权发布操作;npm 认证是账号级动作(本机 `npm login` 或 granular token),agent 不代持用户凭据——登录由用户完成,发布命令由 agent 执行。
+- 状态: 现行
+
 ## 2026-11-03 — Agent Plugins v1.0.0 兼容:仓库根即插件包(plugin.json + mcp.json + skills/)
 - 背景: 用户要求按 agent-plugins.org 规范优化 relay-mcp;规范 1.0.0 只定义插件包(根 plugin.json 闭集 + skills/ + mcp.json),SKILL.md 格式与 MCP 线协议分别以 Agent Skills / MCP 规范为准。
 - 取舍: **仓库根直接作为插件根**(而不是 plugin/ 子目录或另一个分发仓)——git clone 即插件,与现有 npm / installer 分发面并存;代价是顶层新增 3 个条目,必须修宪 allowedTopLevel 并单独提交(protected 路径)。

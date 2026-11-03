@@ -1,7 +1,7 @@
 {
   "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
   "name": "relay-mcp",
-  "version": "1.5.0",
+  "version": "1.6.0",
   "description": "仓库即交接棒:多模型 / 多会话接力开发的 MCP server(14 个 relay_* 工具 + R1–R12 机检规则 + 可执行验收绿闸)",
   "author": {
     "name": "kent",

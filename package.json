@@ -1,6 +1,6 @@
 {
   "name": "relay-mcp",
-  "version": "1.5.0",
+  "version": "1.6.0",
   "type": "module",
   "description": "relay — 多模型接力开发 MCP:仓库即交接棒",
   "author": "kent <kirroyu@126.com>",
