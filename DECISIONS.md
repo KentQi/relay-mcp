@@ -1,5 +1,14 @@
 # DECISIONS — 追加式决策日志(最新在上)
 
+## 2026-11-03 — Agent Plugins v1.0.0 兼容:仓库根即插件包(plugin.json + mcp.json + skills/)
+- 背景: 用户要求按 agent-plugins.org 规范优化 relay-mcp;规范 1.0.0 只定义插件包(根 plugin.json 闭集 + skills/ + mcp.json),SKILL.md 格式与 MCP 线协议分别以 Agent Skills / MCP 规范为准。
+- 取舍: **仓库根直接作为插件根**(而不是 plugin/ 子目录或另一个分发仓)——git clone 即插件,与现有 npm / installer 分发面并存;代价是顶层新增 3 个条目,必须修宪 allowedTopLevel 并单独提交(protected 路径)。
+- 取舍: **mcp.json 用裸 `node` + `${PLUGIN_ROOT}/src/index.mjs`**,不做 ./bin 包装——裸 command 由客户端按平台搜索解析,Windows/macOS/Linux 行为一致;插件未打包可执行文件,故不触发「必须用插件相对 command」的要求(规范 §7.2.1)。
+- 取舍: **加 skills/relay-protocol**——插件包同时展示 skills + MCP 两个组件;skill 只写操作手册,不含工具实现,避免第二真相源。
+- 取舍: **校验器零依赖、只做静态 + 握手两层**——静态查 manifest/MCP/skill 结构与 realpath 逃逸,握手用真实 initialize/tools/list 证明 mcp.json 可加载;不实现客户端宿主(non-goal,宿主行为由客户端规范约束)。
+- 否决: 把 plugin.json 放 templates/ 或子目录(破坏「plugin root = 目录根」);为插件包删减 npm files 白名单里的开发文档(与既有打包边界冲突,收益低);为 plugin 单独发 npm 包(引入第二分发面)。
+- 状态: 现行
+
 ## 2026-11-02 — T027 发布决策:npm 不发布,只做 GitHub Release(用户拍板)
 - 决策: 用户明确「不做 npm,只把项目更新到 GitHub」;v1.5.0 走 GitHub tag + Release 分发,npm registry 保持最新 1.2.0。
 - 理由: npm 发布不可逆,且本机无 npm 认证(实测 ENEEDAUTH);用户只要求 GitHub 更新,发布面收敛为版本号 / CHANGELOG 定版 / tag / Release 四项。

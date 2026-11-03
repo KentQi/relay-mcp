@@ -38,12 +38,31 @@ node scripts/install-mcp.mjs --target dsh --dsh-profile desktop
 
 未内置的 harness 使用 `--print-json` 获取标准片段，粘贴到其 `mcpServers` 配置。安装后重启对应客户端，工具名为 `mcp__relay-mcp__relay_*`。
 
-### npm 分发（发布需人工批准）
+### Agent Plugins 插件包（v1.0.0）
 
-包内只含 `src/`、`templates/`、安装器与 README/LICENSE（`files` 白名单）；协议状态（`.relay/`、TASKS/LOG）与开发文档不进包。
+仓库根目录同时是一个符合 [Agent Plugins 1.0.0](https://agent-plugins.org/specification) 的插件包，支持该标准的客户端可以直接把仓库目录当插件加载：
+
+```text
+relay-mcp/
+├── plugin.json                     # 清单：$schema + name/version/description/…（闭集字段）
+├── mcp.json                        # stdio MCP server：node + ${PLUGIN_ROOT}/src/index.mjs
+└── skills/relay-protocol/SKILL.md  # 可移植 Skill：relay 协议操作手册
+```
+
+`mcp.json` 使用插件变量：`args: ["${PLUGIN_ROOT}/src/index.mjs"]`、`cwd: "${PLUGIN_ROOT}"`；`PLUGIN_ROOT` / `PLUGIN_DATA` 由客户端展开并注入子进程。静态校验（零依赖）与退出码：
 
 ```sh
-npm pack --dry-run        # 校验打包面（46 个文件，约 129 kB）
+node scripts/validate-plugin.mjs        # 校验 plugin.json / mcp.json / skills/**/SKILL.md
+node scripts/smoke-plugin.mjs           # 39 断言：合规 + 真实 initialize/tools/list + 规范负例
+```
+
+不支持插件包的客户端继续用下面的安装器（`mcpServers` 片段）。
+### npm 分发（发布需人工批准）
+
+包内只含 `src/`、`templates/`、`skills/`、`plugin.json`、`mcp.json`、安装器/校验器与 README/LICENSE（`files` 白名单）；协议状态（`.relay/`、TASKS/LOG）与开发文档不进包。
+
+```sh
+npm pack --dry-run        # 校验打包面（51 个文件，约 158 kB）
 npx relay-mcp             # 启动 stdio server（等价 node src/index.mjs）
 ```
 
@@ -168,7 +187,7 @@ node src/cli.mjs relay_worktree_cleanup --root /path/to/project --json confirm=t
 
 ### 自举
 
-本仓库使用自身协议开发：`START.md` 是入口，`TASKS.md` 是 backlog，`LOG.md` 记录会话。`npm test` 覆盖 18 套端到端冒烟（协议、补丁、worktree、升级兼容、安装器、密钥闸、事实底账、简报、doctor、检索、打包、评审回归、性能计数、LOG 边界、会话性能、并发、归档、安全），CI 覆盖 Node 22/24/26。
+本仓库使用自身协议开发：`START.md` 是入口，`TASKS.md` 是 backlog，`LOG.md` 记录会话。`npm test` 覆盖 19 套端到端冒烟（协议、补丁、worktree、升级兼容、安装器、密钥闸、事实底账、简报、doctor、检索、打包、评审回归、性能计数、LOG 边界、会话性能、并发、归档、安全、Agent Plugins 插件包），CI 覆盖 Node 22/24/26。
 
 `relay_verify` 的单轮成本是可观测的：只读一次 LOG/TASKS/manifest，git 子进程收敛到必要数量；设 `RELAY_TRACE_FILE=<path>` 可让进程退出时写出 `{reads, git, sync}` 计数（测试用，生产无行为变化）。
 
@@ -182,6 +201,7 @@ relay-mcp is an MCP server for reliable handoff across coding models and session
 
 - Zero runtime dependencies, Node ≥ 18, no build step; 14 MCP tools over stdio (`node src/index.mjs`)
 - `AGENTS.md` is the required project entry; `CLAUDE.md` / `GEMINI.md` are optional projections
+- The repo root is also a conformant [Agent Plugins v1.0.0](https://agent-plugins.org/specification) package: root `plugin.json`, `mcp.json` (stdio, `${PLUGIN_ROOT}` placeholders), and `skills/relay-protocol/SKILL.md`. Validate with `node scripts/validate-plugin.mjs`.
 - Task worktrees: `relay_claim` returns `controlRoot` and `executionRoot`. Exit makes two commits (task branch code plus controlRoot TASKS/LOG) and reports both SHAs. Accepted is not merged: merge manually with `git merge --no-ff relay/T###`.
 - Cleanup is dry-run by default and never removes dirty, active, or local-content (`.env`, `node_modules`) worktrees; branches are preserved.
 - No automatic merge/rebase/push, and no abort/release/status/sessionId yet. Use unique `model` ids for concurrent sessions.

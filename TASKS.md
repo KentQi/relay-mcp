@@ -14,12 +14,18 @@
 (空——认领后由 relay_claim 移入;认领锁在 .relay/claims/,TTL 4 小时,崩溃会话的认领到期自动可接管)
 
 ## 待办
+- [ ] T029 发布 v1.6.0(GitHub Release,不做 npm)并定版 CHANGELOG
+  验收: 人工批准后:package.json 与 plugin.json 版本同步升到 1.6.0 → CHANGELOG 定版 1.6.0(2026-11-03)→ commit + tag v1.6.0 + push → gh release create v1.6.0;仍不发布 npm
+  备注: plugin.json 的 version 必须与 package.json 同步(smoke-plugin 有断言);发布前复核 07 报告 §5 与本次 DECISIONS 2026-11-03 条目
 - [x] T007 发布 v1.0.0 tag  (2026-09-29)
   备注: 审计 P0 项;零 fork 窗口内与历史清洗同批完成
 - [x] T006 git 历史身份重写  (2026-09-29)
   备注: 零 fork 窗口期内一次性完成;重写后旧 commit sha 全部变化
 
 ## 已完成
+- [x] T028 Agent Plugins v1.0.0 兼容:根 plugin.json + mcp.json + skills/relay-protocol + 校验冒烟  (2026-11-03)
+  验收: node scripts/validate-plugin.mjs 通过 且 npm test 全绿 且 ./verify 无 ERROR
+  备注: 修宪 .relay/manifest.json allowedTopLevel 增加 plugin.json/mcp.json/skills(protected,单独提交);plugin version 与 package.json 同步
 - [x] T027 发布 v1.5.0 与 GitHub Release(不发布 npm;人类修宪级动作,已获批准)  (2026-11-02)
   验收: package.json 版本为 1.5.0 且 CHANGELOG 已定版;git tag v1.5.0 指向 T027 完成提交并推送;GitHub Releases 出现 v1.5.0 且说明引用 docs/04-test/05 与 07;npm publish 明确不做
   备注: 用户 2026-11-02 决策「不做 npm,只把项目更新到 GitHub」;发布前人工复核 07 报告 §5 已知边界

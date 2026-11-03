@@ -365,3 +365,13 @@ export const startServer = async ({ onInit, onMethod }) => {
 - **P2-5 幂等与备份**:重复出场/本次无改动时,提交段输出「无变更可提交(幂等跳过)」而不是降级报「git commit 失败」;`backupFile` 同一秒内多次备份加序号,不再互相覆盖;`relay_onboard` 生成内容与既有文件一致时不重写 manifest、不新建备份、不刷新 `onboardedAt`。
 - **P2-6 bare 仓库**:`relay_init` 初始化前 `git rev-parse --is-bare-repository` 为 true → 直接拒绝并给 `git clone <bare> <dir>` 修复指令(裸仓库无工作区,init 会留下嵌套 `.git` 与无法提交的文件)。
 - **回归**:新增 `scripts/smoke-security.mjs`(25 断言:符号链接写穿/项目名注入/半写/acceptance 注入/R11 扫描面/R12 指针/R10 劫持/备份/幂等/bare)并接入 `npm test`;`smoke-archive-log.mjs` 18→25(方向、R7 洗绿、符号链接、幂等 no-op);`smoke-compat.mjs` C1 期望改为幂等(onboardedAt 保持、无新备份)。
+## 2026-11-03 Agent Plugins v1.0.0 兼容(仓库根即插件包)
+
+- **规范边界**:Agent Plugins 1.0.0 只定义插件包(根 `plugin.json` 闭集清单 + `skills/` + `mcp.json`);`SKILL.md` 格式与 MCP 线协议分别以 Agent Skills / MCP 规范为准,本仓库不自定义。
+- **插件根 = 仓库根**:根目录放 `plugin.json`(name=relay-mcp,version 与 `package.json` 同步)、`mcp.json`(仅 `$schema` + `mcpServers`;stdio:command 单 token `node`、args 用 `${PLUGIN_ROOT}/src/index.mjs`、cwd `${PLUGIN_ROOT}`)、`skills/relay-protocol/`(可移植操作手册)。`git clone` 即插件,与 npm / installer 分发面并存。
+- **不打包可执行文件**:stdio command 用裸 `node`(客户端按平台搜索解析);不引入 `./bin` 包装,避免 Windows 可执行位/解释器差异(规范 §7.2.1 允许裸名;若将来打包可执行文件则必须改插件相对 command)。
+- **技能合规**:`skills/` 的马上级子目录含 `SKILL.md` 才算 skill;frontmatter 仅 name/description/license/compatibility/metadata/allowed-tools,name 必须等于目录名、≤64 且小写连字符,description 1–1024;不递归搜索更深层。
+- **失败隔离**(规范 §6.2/§7.2.2):manifest 除未知顶层字段/非对象 extensions 外任一 schema 违规 → 拒绝整个插件;mcp.json 无效只禁用 MCP;单个 server/skill 无效只跳过该组件,其他组件继续加载。
+- **校验器**:`scripts/validate-plugin.mjs`(零依赖)按规范做静态校验(manifest 闭集/MCP 变体与占位符/skills frontmatter/realpath 不逃出插件根),`node scripts/validate-plugin.mjs` 退出码 0/1;`scripts/smoke-plugin.mjs`(39 断言,含 13 个负例与真实 initialize/tools/list 握手)接入 `npm test`。
+- **打包面**:`package.json files` 加入 `plugin.json` / `mcp.json` / `skills/` / `scripts/validate-plugin.mjs`;`smoke-pack` 断言插件文件进包、开发文档不进包。
+- **修宪**:`.relay/manifest.json allowedTopLevel` 增加 `plugin.json` / `mcp.json` / `skills`(受保护路径,单独提交,人类可审计)。

@@ -1,5 +1,13 @@
 # 会话日志(最新在上)
 
+## 2026-11-03 11:17 | model=dsh-lead-deepseek-v4.1 | task=T028 完成
+- 摘要: T028 落地 Agent Plugins v1.0.0 插件包:根 plugin.json(闭集清单,version 与 package.json 同步)、mcp.json(stdio:node + ${PLUGIN_ROOT}/src/index.mjs,cwd ${PLUGIN_ROOT})、skills/relay-protocol/SKILL.md(可移植操作手册);新增零依赖校验器 scripts/validate-plugin.mjs 与 scripts/smoke-plugin.mjs(39 断言:本仓库合规 + 真实 initialize/tools/list 握手 + 规范负例),已接入 npm test(19 套 / 716 断言全绿);package.json files 白名单与 smoke-pack 打包面同步(51 文件/约 158 kB);顶层白名单修宪已作为受保护路径单独提交(60cec5a);verify 全量 PASS 11·WARN 0·ERROR 0·SKIP 1。
+- 事实(v2): mode=single | 文件 11 | ± +56/-5 | base=- | sha=- | branch=main || 验收: 通过 | verify: PASS 11·WARN 0·ERROR 0 | 耗时: 44s
+- 负结果: plugin.json 是闭集 schema:不得加闭集外顶层字段(未知字段仅报告并忽略,其余 schema 违规会拒绝整个插件);version 必须与 package.json 同步
+- 负结果: mcp.json 的 command 只能是单个裸名或 ./ 相对路径,不能是 shell 串/占位符表达式;占位符只允许出现在 args/env/cwd
+- 负结果: .relay/manifest.json 属受保护路径:顶层白名单变更必须单独提交并由人类过目,不能混进 session_end 自动提交
+- 留给下一个: plugin.json 的 version 必须与 package.json 同步(smoke-plugin 有断言);发布前复核 07 报告 §5 与本次 DECISIONS 2026-11-03 条目
+
 ## 2026-11-02 22:31 | model=dsh-lead-deepseek-v4.1 | task=无
 - 摘要: 维护:本机全 harness 的 relay-mcp 更新到当前检出(v1.5.0,14 工具)——Claude Code(移除旧 relay 条目→relay-mcp)、Gemini CLI、Claude Desktop、Claude-3p、Codex(TOML 路径修正)、VS Code(user profile mcp.json)、DSH desktop+web 双 profile、mavis/minimax(relay 条目路径+版本)、copilot/kimi-code(新增 relay-mcp);顺带修复 scripts/install-mcp.mjs 的 DSH 提示语写死「共 10 个 relay_* 工具」(实际 14,已删除写死计数)。配置备份在 ~/.relay-mcp-install-backup-20261102-222357。
 - 事实(v2): mode=single | 文件 1 | ± +1/-1 | base=- | sha=- | branch=main || 验收: 通过 | verify: PASS 11·WARN 0·ERROR 0 | 耗时: 34s

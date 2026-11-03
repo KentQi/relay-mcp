@@ -40,7 +40,7 @@ try {
 ok(files.length > 0, '拿到打包文件清单', `${files.length} 个`);
 
 const has = (p) => files.some((f) => f === p || f.startsWith(`${p}/`));
-const must = ['src/index.mjs', 'src/engines/session.mjs', 'templates/AGENTS.md.tpl', 'scripts/install-mcp.mjs', 'package.json', 'README.md', 'LICENSE'];
+const must = ['src/index.mjs', 'src/engines/session.mjs', 'templates/AGENTS.md.tpl', 'scripts/install-mcp.mjs', 'scripts/validate-plugin.mjs', 'plugin.json', 'mcp.json', 'skills/relay-protocol/SKILL.md', 'package.json', 'README.md', 'LICENSE'];
 for (const m of must) ok(has(m), `进包: ${m}`);
 
 const forbidden = ['.relay', 'docs-design', 'docs', '.github', 'scripts/smoke.mjs', 'scripts/smoke-facts.mjs', 'TASKS.md', 'LOG.md', 'START.md', 'SPEC.md', 'DECISIONS.md', 'verify', '.gitignore'];

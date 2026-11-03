@@ -44,6 +44,13 @@
 
 - 回归规模:`npm test` 18 套 / 677 断言全绿(含第五轮审计新增安全回归)
 
+### Added(Agent Plugins v1.0.0)
+
+- **仓库根即插件包**:根 `plugin.json`(闭集清单,`$schema` 指向 1.0.0;version 与 `package.json` 同步)+ `mcp.json`(stdio:`node` + `${PLUGIN_ROOT}/src/index.mjs`,cwd `${PLUGIN_ROOT}`)+ `skills/relay-protocol/SKILL.md`(可移植操作手册)
+- 新增 `scripts/validate-plugin.mjs`(零依赖校验器:manifest 闭集/name 约束/MCP 三种变体与保留变量/skills frontmatter/realpath 不逃逸插件根);新增 `scripts/smoke-plugin.mjs`(39 断言:合规 + 真实 initialize/tools/list 握手 + 规范负例)接入 `npm test`
+- 打包面:`files` 白名单加入插件包文件;`smoke-pack` 断言 `plugin.json`/`mcp.json`/`skills/relay-protocol/SKILL.md` 进包
+- 修宪:`.relay/manifest.json allowedTopLevel` 增加 `plugin.json` / `mcp.json` / `skills`(protected,单独提交)
+
 ## [1.4.1] - 2026-11-01
 
 ### Fixed
