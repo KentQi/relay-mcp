@@ -27,8 +27,11 @@
     "TASKS.md",
     "docs",
     "docs-design",
+    "mcp.json",
     "package.json",
+    "plugin.json",
     "scripts",
+    "skills",
     "src",
     "templates",
     "verify"
