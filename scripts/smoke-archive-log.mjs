@@ -97,7 +97,9 @@ try {
     run(tmp2, 'relay_init', { name: 'sym' });
     const outside = mkdtempSync(path.join(tmpdir(), 'relay-outside-'));
     rmSync(path.join(tmp2, 'docs'), { recursive: true, force: true });
-    symlinkSync(outside, path.join(tmp2, 'docs'));
+    // Windows 无 SeCreateSymbolicLinkPrivilege(未开开发者模式)时目录符号链接建不出来(EPERM);
+    // 改用 junction——普通用户即可创建,Node lstat 同样识别为符号链接,写穿防线照常可测
+    symlinkSync(outside, path.join(tmp2, 'docs'), process.platform === 'win32' ? 'junction' : 'dir');
     writeFileSync(path.join(tmp2, 'LOG.md'), makeLog(30));
     const symRun = run(tmp2, 'relay_archive_log', { confirm: true });
     ok(symRun.status === 1 && /符号链接|拒绝/.test(out(symRun)), 'docs 符号链接 → 归档拒绝(不写仓库外)', out(symRun).slice(0, 300));

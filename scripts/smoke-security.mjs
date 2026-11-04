@@ -26,13 +26,15 @@ try {
   {
     const root = fresh();
     const outside = path.join(base, 'outside-docs'); mkdirSync(outside);
-    symlinkSync(outside, path.join(root, 'docs'));
+    // Windows 无 SeCreateSymbolicLinkPrivilege 时目录符号链接建不出来(EPERM);改用 junction
+    // (普通用户即可创建,Node lstat 同样识别为符号链接,写穿防线照常可测)
+    symlinkSync(outside, path.join(root, 'docs'), process.platform === 'win32' ? 'junction' : 'dir');
     const r = run(root, 'relay_init', { name: 'x', preset: 'node' });
     ok(r.status === 1 && /符号链接|拒绝/.test(out(r)), 'init:docs 是符号链接 → 拒绝', out(r).slice(0, 300));
     ok(readdirSync(outside).length === 0, 'init:仓库外目录未被写入');
     const root2 = fresh();
     const outside2 = path.join(base, 'outside-relay'); mkdirSync(outside2);
-    symlinkSync(outside2, path.join(root2, '.relay'));
+    symlinkSync(outside2, path.join(root2, '.relay'), process.platform === 'win32' ? 'junction' : 'dir');
     const r2 = run(root2, 'relay_onboard', {});
     ok(r2.status === 1 && /符号链接|拒绝/.test(out(r2)), 'onboard:.relay 是符号链接 → 拒绝', out(r2).slice(0, 300));
     ok(!existsSync(path.join(outside2, 'manifest.json')), 'onboard:仓库外未出现 manifest');

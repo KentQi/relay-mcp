@@ -86,7 +86,9 @@ try {
   const vars = { pluginRoot: ROOT, pluginData: dataDir };
   const expArgs = (server.args || []).map((a) => expandPlaceholders(a, vars));
   const expCwd = expandPlaceholders(server.cwd || '${PLUGIN_ROOT}', vars);
-  ok(expArgs.length === 1 && expArgs[0] === join(ROOT, 'src', 'index.mjs'), 'args 展开为仓库内入口绝对路径', expArgs.join(' '));
+  // `${PLUGIN_ROOT}/src/index.mjs` 展开后是混合分隔符路径(Windows:反斜杠根 + 正斜杠模板),
+  // 与 join 产物做字符串全等必败;按 resolve 归一后比较,跨平台等价
+  ok(expArgs.length === 1 && resolve(expArgs[0]) === resolve(join(ROOT, 'src', 'index.mjs')), 'args 展开为仓库内入口绝对路径', expArgs.join(' '));
   ok(expArgs[0] && existsSync(expArgs[0]), '展开后的入口文件真实存在');
   ok(expCwd === ROOT, 'cwd 展开为插件根', expCwd);
   const hs = await handshake(server.command, expArgs, expCwd, { ...process.env, PLUGIN_ROOT: ROOT, PLUGIN_DATA: dataDir });

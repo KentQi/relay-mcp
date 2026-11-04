@@ -30,7 +30,11 @@ const indexText = readFileSync(path.join(RELAY, 'src', 'index.mjs'), 'utf8');
 ok(indexText.startsWith('#!/usr/bin/env node'), 'bin 入口带 shebang(可直接执行)');
 
 console.log('\n== npm pack --dry-run 产物边界 ==');
-const r = spawnSync('npm', ['pack', '--dry-run', '--json'], { cwd: RELAY, encoding: 'utf8', timeout: 120000 });
+// Windows 下 npm 是 .cmd shim,Node 不允许不经 shell 直接 spawn(.cmd/.bat 安全限制),必须走 shell;
+// POSIX 保留参数数组不经 shell,防 alias 劫持语义(与 src/engines/session.mjs 的 npm test 同口径)
+const r = process.platform === 'win32'
+  ? spawnSync('npm pack --dry-run --json', { cwd: RELAY, encoding: 'utf8', timeout: 120000, shell: true })
+  : spawnSync('npm', ['pack', '--dry-run', '--json'], { cwd: RELAY, encoding: 'utf8', timeout: 120000 });
 ok(r.status === 0, 'npm pack --dry-run 成功', (r.stderr || '').slice(0, 300));
 let files = [];
 try {

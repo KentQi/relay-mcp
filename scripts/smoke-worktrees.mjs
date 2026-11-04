@@ -12,9 +12,15 @@ const RELAY = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const tmpDirs = [];
 let pass = 0;
 let fail = 0;
+let skipped = 0;
 const ok = (condition, label, extra = '') => {
   if (condition) { pass += 1; console.log(`  ✓ ${label}`); }
   else { fail += 1; console.log(`  ✗ FAIL ${label}${extra ? ` — ${String(extra).slice(0, 500)}` : ''}`); }
+};
+// 环境建不出符号链接(Windows 无 SeCreateSymbolicLinkPrivilege 时 symlinkSync 抛 EPERM)时,
+// 显式跳过并计入汇总;绝不静默假装通过——那会把防线断言洗成假绿
+const skip = (label, reason) => {
+  skipped += 1; console.log(`  ↷ SKIP ${label} — ${reason}`);
 };
 const mkTmp = (tag) => {
   const dir = mkdtempSync(path.join(tmpdir(), `relay-worktree-${tag}-`));
@@ -654,14 +660,19 @@ try {
     mkdirSync(path.join(symRoot, '.relay'), { recursive: true });
     const outsideLock = path.join(mkTmp('lock-symlink-outside'), 'outside.lock');
     writeFileSync(outsideLock, serializeLock({ holder: 'outside', token: 'outside-token-0001' }));
-    symlinkSync(outsideLock, lockFileOf(symRoot));
-    let symErr = '';
-    try { await acquireRepoLock(symRoot, 'holder-F', { waitMs: 0 }); } catch (e) { symErr = e?.message || String(e); }
-    ok(/符号链接/.test(symErr), 'L9-R08: 锁文件是符号链接时拒绝接管(不跟随)', symErr);
-    const symRel = await releaseRepoLock(symRoot, 'outside-token-0001');
-    ok(!symRel.ok && /符号链接/.test(symRel.warning), 'L9-R08: 符号链接锁拒绝释放', JSON.stringify(symRel));
-    ok(existsSync(lockFileOf(symRoot)) && readFileSync(outsideLock, 'utf8').includes('outside'),
-      'L9-R08: 符号链接锁未被删除/外部目标文件未被改写');
+    let lockSymLinked = true;
+    try { symlinkSync(outsideLock, lockFileOf(symRoot)); } catch { lockSymLinked = false; }
+    if (lockSymLinked) {
+      let symErr = '';
+      try { await acquireRepoLock(symRoot, 'holder-F', { waitMs: 0 }); } catch (e) { symErr = e?.message || String(e); }
+      ok(/符号链接/.test(symErr), 'L9-R08: 锁文件是符号链接时拒绝接管(不跟随)', symErr);
+      const symRel = await releaseRepoLock(symRoot, 'outside-token-0001');
+      ok(!symRel.ok && /符号链接/.test(symRel.warning), 'L9-R08: 符号链接锁拒绝释放', JSON.stringify(symRel));
+      ok(existsSync(lockFileOf(symRoot)) && readFileSync(outsideLock, 'utf8').includes('outside'),
+        'L9-R08: 符号链接锁未被删除/外部目标文件未被改写');
+    } else {
+      skip('L9-R08: 锁文件符号链接防线(3 断言)', '本机无符号链接特权(symlinkSync EPERM);由 Linux CI 覆盖');
+    }
 
     const b = await acquireRepoLock(root, 'holder-B');
     const badRel = await releaseRepoLock(root, 'not-the-token');
@@ -752,15 +763,20 @@ try {
     const tasksPath = path.join(root, 'TASKS.md');
     const savedTasks = readFileSync(tasksPath, 'utf8');
     rmSync(tasksPath);
-    symlinkSync(outside, tasksPath);
-    const bad = await dispatch('relay_session_end', { root, model: 'model-A', summary: 'symlink 劫持', done_task: 'T003' });
-    ok(bad.isError && /符号链接/.test(resultText(bad)), 'L9-R08: TASKS.md 为符号链接时出场 fail-closed', resultText(bad));
-    ok(readFileSync(outside, 'utf8') === '# 仓库外文件,不得被改写\n', 'L9-R08: 仓库外目标文件未被写入');
-    ok(existsSync(path.join(root, '.relay', 'claims', 'T003.lock')), 'L9-R08: 拒绝后认领锁保留');
-    rmSync(tasksPath);
-    writeFileSync(tasksPath, savedTasks);
-    const okEnd = await dispatch('relay_session_end', { root, model: 'model-A', summary: '恢复后正常出场', done_task: 'T003' });
-    ok(!okEnd.isError && /\[x\] T003/.test(readFileSync(tasksPath, 'utf8')), 'L9-R08: 移除符号链接后正常出场(非误伤)', resultText(okEnd));
+    let tasksSymLinked = true;
+    try { symlinkSync(outside, tasksPath); } catch { tasksSymLinked = false; writeFileSync(tasksPath, savedTasks); }
+    if (tasksSymLinked) {
+      const bad = await dispatch('relay_session_end', { root, model: 'model-A', summary: 'symlink 劫持', done_task: 'T003' });
+      ok(bad.isError && /符号链接/.test(resultText(bad)), 'L9-R08: TASKS.md 为符号链接时出场 fail-closed', resultText(bad));
+      ok(readFileSync(outside, 'utf8') === '# 仓库外文件,不得被改写\n', 'L9-R08: 仓库外目标文件未被写入');
+      ok(existsSync(path.join(root, '.relay', 'claims', 'T003.lock')), 'L9-R08: 拒绝后认领锁保留');
+      rmSync(tasksPath);
+      writeFileSync(tasksPath, savedTasks);
+      const okEnd = await dispatch('relay_session_end', { root, model: 'model-A', summary: '恢复后正常出场', done_task: 'T003' });
+      ok(!okEnd.isError && /\[x\] T003/.test(readFileSync(tasksPath, 'utf8')), 'L9-R08: 移除符号链接后正常出场(非误伤)', resultText(okEnd));
+    } else {
+      skip('L9-R08: TASKS.md 符号链接防线(4 断言)', '本机无符号链接特权(symlinkSync EPERM);由 Linux CI 覆盖');
+    }
   }
   {
     // 复核项 R1:.gitignore 为符号链接时,基线补齐(claim/sync/onboard)不得写穿仓库外。
@@ -769,11 +785,17 @@ try {
     const outside = path.join(outsideDir, 'outside-ignore.txt');
     writeFileSync(outside, '# 仓库外,不得被追加\n');
     const gi = path.join(root, '.gitignore');
+    const savedGi = readFileSync(gi, 'utf8');
     rmSync(gi, { force: true });
-    symlinkSync(outside, gi);
-    const c = await dispatch('relay_claim', { root, task: 'T003', model: 'model-A' });
-    ok(c.isError && /符号链接/.test(resultText(c)), 'L9-R08: .gitignore 为符号链接时 claim 拒绝写穿', resultText(c));
-    ok(readFileSync(outside, 'utf8') === '# 仓库外,不得被追加\n', 'L9-R08: 仓库外 .gitignore 目标未被追加基线');
+    let giSymLinked = true;
+    try { symlinkSync(outside, gi); } catch { giSymLinked = false; writeFileSync(gi, savedGi); }
+    if (giSymLinked) {
+      const c = await dispatch('relay_claim', { root, task: 'T003', model: 'model-A' });
+      ok(c.isError && /符号链接/.test(resultText(c)), 'L9-R08: .gitignore 为符号链接时 claim 拒绝写穿', resultText(c));
+      ok(readFileSync(outside, 'utf8') === '# 仓库外,不得被追加\n', 'L9-R08: 仓库外 .gitignore 目标未被追加基线');
+    } else {
+      skip('L9-R08: .gitignore 符号链接防线(2 断言)', '本机无符号链接特权(symlinkSync EPERM);由 Linux CI 覆盖');
+    }
   }
   {
     // 复核项 R3:受管记录缺 baseSha 时不得放行零改动完成(伪 SHA 闸不能被绕过)。
@@ -846,8 +868,12 @@ try {
     ok(!existsSync(path.join(root, '.relay/worktrees.json')), 'L9-strict: 单根完成不产生受管注册记录');
   }
 
+} catch (e) {
+  // 套件中途未捕获异常(权限/环境/竞态)必须显式判负——吞进 finally 再 exit(0) 会把"没跑完"洗成假绿
+  fail += 1;
+  console.log(`\n✗ FATAL: 套件中途未捕获异常,判失败\n${e?.stack || e}`);
 } finally {
-  console.log(`\n========== worktree 冒烟结果: ${pass} 通过 / ${fail} 失败 ==========`);
+  console.log(`\n========== worktree 冒烟结果: ${pass} 通过 / ${fail} 失败${skipped ? ` / ${skipped} 跳过` : ''} ==========`);
   for (const dir of tmpDirs) rmSync(dir, { recursive: true, force: true });
   process.exit(fail ? 1 : 0);
 }
