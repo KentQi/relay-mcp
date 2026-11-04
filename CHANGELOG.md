@@ -3,6 +3,15 @@
 本项目遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 格式;
 版本号遵循 [SemVer](https://semver.org/lang/zh-CN/)。
 
+## [1.6.1] - 2026-11-04
+
+### Fixed(冒烟测试 Windows 可移植性 + 假绿治理;引擎运行时零改动)
+
+- `smoke-pack`:Windows 下 `spawnSync('npm')` ENOENT(npm 是 `.cmd` shim,Node 禁止不经 shell 直接 spawn `.cmd/.bat`)→ win32 走 `shell: true`,POSIX 保持参数数组不经 shell(与 `src/engines/session.mjs` 的 `npm test` 同口径);此前 Linux CI 全绿而 Windows 本机 `npm pack` 套件 9 断言连败
+- `smoke-archive-log` / `smoke-security`:目录符号链接夹具在无 `SeCreateSymbolicLinkPrivilege` 的 Windows(未开开发者模式/非特权)抛 EPERM 整套崩溃 → 改用 junction(普通用户即可创建,Node `lstat` 同样识别为符号链接);「仓库外写穿防线」断言照常真实执行并被引擎拦截,非跳过
+- `smoke-worktrees` 假绿:`try { … } finally { 打印汇总; process.exit(0) }` 无 `catch`,套件中途任何未捕获异常(如 EPERM)被洗成「107 通过 / 0 失败」——9 条 L9-R08 符号链接防线断言静默未执行 → 补 `catch` 显式判失败;符号链接夹具建不出来时显式 `SKIP` 并计入汇总(`N 跳过`),恢复夹具后再继续,不再静默假装通过
+- `smoke-plugin`(v1.6.0 新增):`${PLUGIN_ROOT}/src/index.mjs` 展开后为混合分隔符路径,与 `path.join` 产物做字符串全等在 Windows 必败 → 两侧 `resolve` 归一后比较
+
 ## [1.6.0] - 2026-11-03
 
 ### Added(Agent Plugins v1.0.0)
