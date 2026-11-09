@@ -1,5 +1,11 @@
 # 会话日志(最新在上)
 
+## 2026-11-09 13:52 | model=zcode-agent | task=维护
+- 摘要: 发布 v1.7.0(上下文预算 14.6→9.9KB / 质量门编排 / relay-discipline 行为层技能)与 v1.8.0(P3 五项:失败签名、完成状态收敛、崩溃点矩阵+半写死锁修复、任务跨会话告警、白名单命令落点);两版均经 PR #10/#11 CI 三版本绿后 squash merge 并打 tag;npm test 22 套 791 断言全绿
+- 事实(v2): mode=single | 文件 0 | ± +0/-0 | base=- | sha=- | branch=main || 验收: 通过 | verify: PASS 10·WARN 1·ERROR 0 | 耗时: 121s
+- 负结果: 分支+PR 流程未走 relay_claim/session_end,本仓库 LOG 延迟记账(本次维护出场补记)
+- 负结果: PR #10 之后 R5 原子性 WARN 属分支流程预期,非回归
+
 ## 2026-11-03 11:26 | model=dsh-lead-deepseek-v4.1 | task=T029 完成
 - 摘要: T029 GitHub 发布 v1.6.0:package.json 与 plugin.json 版本同步 1.6.0、CHANGELOG 新增 [1.6.0] 段(Agent Plugins 插件包 + 安装器文案修复)、README 补 npm 分发实况与插件包说明、DECISIONS 记录发布授权/更正;npm 发布经查证被阻塞(npm 上 relay-mcp 属 derekluo 的另一个项目,且本机无 npm 账号)——拆到 T030,待人类注册/登录 npm 并决定 scoped 包名或新包名;出场后创建 tag v1.6.0 + GitHub Release。
 - 事实(v2): mode=single | 文件 5 | ± +36/-13 | base=- | sha=- | branch=main || 验收: 通过 | verify: PASS 11·WARN 0·ERROR 0 | 耗时: 47s
