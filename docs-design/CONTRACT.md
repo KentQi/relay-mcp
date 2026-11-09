@@ -385,7 +385,7 @@ export const startServer = async ({ onInit, onMethod }) => {
 - **信任边界**:命中后经 **shell 执行,超时 180 秒**。白名单条目等价于仓库属主对一条命令的签字,因此文档要求外部工具锁版本、在 CI/容器内运行、禁止 relay 自动安装;`relay_doctor` 的 D9 会做命令落点体检:路径型首 token 指向仓库外 → WARN;裸命令名交给 PATH,不受影响。
 - **失败语义**:命令非零退出 → 验收门失败 → `relay_session_end` 不写 TASKS/LOG、不提交、保留认领锁,与测试文件验收失败完全同权。
 - **回归**:新增 `scripts/smoke-budget.mjs`(23 断言:体积预算、工具形状、规则条文仍可由 `relay_rules`/`relay://protocol` 取得)与 `scripts/smoke-meta.mjs`(套件不得假绿),接入 `npm test`;`smoke-compat` C4 文案断言改为"描述保留操作语义 + 规则表承载条文"。
-- **relay_doctor 扩为九检**:新增 D8 完成状态收敛(TASKS `[x]` ↔ LOG 完成条目 ↔ registry `controlCommitted`,不一致 → WARN)与 D9 白名单命令落点(路径型首 token 指向仓库外 → WARN);只读语义不变。
+- **relay_doctor 扩为九检**:新增 D8 完成状态收敛(TASKS `[x]` ↔ LOG + `docs/archive/*.md` 完成条目 ↔ registry `controlCommitted`,不一致 → WARN;归档指针悬空/越界 → WARN,fail-closed 不静默 PASS)与 D9 白名单命令落点(路径型首 token 指向仓库外 → WARN);只读语义不变。
 - **失败签名与任务粒度**:出场失败时把 ERROR 规则 ID 集合写入运行时诊断 `.relay/last-failure.json`(gitignore 基线,不入库);同一签名连续出现 → 出场/简报提示"同一前提连续失败,先重述前提或升级人类";简报对同一任务跨 ≥3 个会话 → 提示拆分任务粒度。
 - **半写恢复**:出场在 TASKS 写完后、LOG 写前崩溃(完成戳在、完成日志缺席)时,`completionOwnershipError` 允许**仍持有该任务认领锁的原模型**重跑补写;锁不在则维持拒绝。`RELAY_CRASH_AT_WRITE` / `RELAY_CRASH_BEFORE_COMMIT` 为测试钩子,生产不设置时行为不变。
 

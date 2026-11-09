@@ -1,4 +1,4 @@
-// relay-mcp — relay_doctor:只读环境自检(七检)。
+// relay-mcp — relay_doctor:只读环境自检(九检)。
 // 铁律:
 //   1) 只读:不写任何文件、不取仓库写锁、不自动修复(自动修=越 fail-closed,修复指令交给人类/下一个会话)。
 //   2) 每条非 OK 结果都以「修复:」开头,给可执行指令,且只引用 relay 原生命令(绝不输出 rm)。
@@ -9,7 +9,7 @@ import { generateEntryFiles } from './sync.mjs';
 import { collectUnknownManifestKeys, KNOWN_MANIFEST_KEYS, KNOWN_NESTED_KEYS } from '../config.mjs';
 import { TASK_LINE_RE, DONE_TASK_RE, parseLogEntries } from './verify.mjs';
 import { join, resolve, isAbsolute, sep } from 'node:path';
-import { readdir, lstat } from 'node:fs/promises';
+import { readdir, lstat, realpath, stat } from 'node:fs/promises';
 
 const CLAIM_TTL_MIN = 240; // 锁文件未记录 ttlMinutes 时的兜底(输出会注明)
 const ok = (id, name, detail) => ({ id, name, result: 'OK', detail, fix: null });
@@ -54,7 +54,19 @@ const suggestManifestKey = (key) => {
   return parent ? `${parent}.${best}` : best;
 };
 
-// D8 完成状态收敛:TASKS [x] ↔ LOG 完成条目 ↔ registry controlCommitted
+// D8 完成状态收敛:TASKS [x] ↔ LOG + docs/archive 完成条目 ↔ registry controlCommitted。
+// 证据面与 R11 扫描面一致(docs/archive/*.md):归档条目仍能证明完成,归档后不再永久 WARN;
+// 但归档指针本身必须可验证——悬空/越界指针 fail-closed 报警,不因任务恰好被 LOG 覆盖而静默 PASS。
+const ARCHIVE_POINTER_LINE_RE = /^\s*<!--\s*relay:log-archive:\s*(\S+)\s*-->\s*$/;
+const ARCHIVE_POINTER_PATH_RE = /^docs\/archive\/[^/\\]+\.md$/;
+const completionIdsOf = (text) => new Set(
+  parseLogEntries(text || '')
+    .map((e) => String(e.task || '').trim())
+    .filter((t) => DONE_TASK_RE.test(t))
+    .map((t) => (t.match(/^T\d+/) || [''])[0])
+    .filter(Boolean),
+);
+
 const checkCompletionConsistency = async (root) => {
   const tasks = await readText(join(root, 'TASKS.md'));
   const log = await readText(join(root, 'LOG.md'));
@@ -64,13 +76,41 @@ const checkCompletionConsistency = async (root) => {
     const m = line.match(TASK_LINE_RE);
     if (m && m[1] === 'x') doneIds.push(m[2]);
   }
-  const entries = log ? parseLogEntries(log) : [];
-  const completed = new Set(entries
-    .map((e) => String(e.task || '').trim())
-    .filter((t) => DONE_TASK_RE.test(t))
-    .map((t) => (t.match(/^T\d+/) || [''])[0])
-    .filter(Boolean));
-  const missing = doneIds.filter((id) => !completed.has(id));
+  const completed = completionIdsOf(log);
+  const archived = new Set();
+  let archiveNames = [];
+  try {
+    archiveNames = (await readdir(join(root, 'docs', 'archive'), { withFileTypes: true }))
+      .filter((e) => e.isFile() && /\.md$/i.test(e.name))
+      .map((e) => e.name)
+      .sort();
+  } catch { /* 无 docs/archive 目录不算漂移 */ }
+  for (const name of archiveNames) {
+    for (const id of completionIdsOf(await readText(join(root, 'docs', 'archive', name)))) archived.add(id);
+  }
+  const issues = [];
+  // 归档指针 fail-closed:已存在的指针必须指向真实、非空且仍在仓库内的 docs/archive/*.md。
+  const pointerRels = String(log ?? '').split('\n')
+    .map((l) => l.match(ARCHIVE_POINTER_LINE_RE))
+    .filter(Boolean)
+    .map((m) => m[1]);
+  const dangling = [];
+  if (pointerRels.length) {
+    let rootReal = null;
+    try { rootReal = await realpath(root); } catch { rootReal = null; }
+    for (const rel of pointerRels) {
+      if (!ARCHIVE_POINTER_PATH_RE.test(rel)) { dangling.push(`${rel}(不在 docs/archive/*.md)`); continue; }
+      try {
+        const abs = join(root, rel);
+        const st = await stat(abs);
+        const real = await realpath(abs);
+        const inRepo = rootReal && (real === rootReal || real.startsWith(rootReal + sep));
+        if (!st.isFile() || st.size <= 0 || !inRepo) dangling.push(`${rel}(目标不存在/为空/越出仓库)`);
+      } catch { dangling.push(`${rel}(目标不存在)`); }
+    }
+  }
+  if (dangling.length) issues.push(`归档指针未被承认:${dangling.join('; ')}`);
+  const missing = doneIds.filter((id) => !completed.has(id) && !archived.has(id));
   const regRaw = await readText(join(root, '.relay', 'worktrees.json'));
   const regTasks = [];
   if (regRaw) {
@@ -80,13 +120,13 @@ const checkCompletionConsistency = async (root) => {
     } catch { /* 注册表损坏由 doctor 其他项/引擎 fail-closed 处理 */ }
   }
   const regMissing = regTasks.filter((t) => !doneIds.includes(t));
-  const issues = [];
-  if (missing.length) issues.push(`TASKS 标 [x] 但 LOG 无完成条目:${missing.join(', ')}`);
+  if (missing.length) issues.push(`TASKS 标 [x] 但 LOG/归档无完成条目:${missing.join(', ')}`);
   if (regMissing.length) issues.push(`registry 记录控制面已提交但 TASKS 未完成:${regMissing.join(', ')}`);
   if (issues.length) {
-    return warn('D8', '完成状态', issues.join(';'), '补齐 LOG 完成条目或修正 TASKS 状态;证据不得删除,只可回填');
+    return warn('D8', '完成状态', issues.join('; '), '让归档指针指向真实存在且非空的 docs/archive/*.md(relay_archive_log 会自动维护);补齐 LOG/归档完成条目或修正 TASKS 状态;证据不得删除,只可回填');
   }
-  return ok('D8', '完成状态', `TASKS [x] ${doneIds.length} 条与 LOG 完成条目一致`);
+  const archiveNote = archived.size ? `,${archived.size} 个任务号来自归档` : '';
+  return ok('D8', '完成状态', `TASKS [x] ${doneIds.length} 条与 LOG${archived.size ? '+归档' : ''} 完成条目一致${archiveNote}`);
 };
 
 // D9 白名单命令落点:acceptance.commands 里的路径型首 token 不得指向仓库外
