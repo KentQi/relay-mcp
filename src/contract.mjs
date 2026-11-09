@@ -130,7 +130,7 @@ export const TOOLS = [
   {
     name: 'relay_verify',
     description:
-      'Run all repo checkers R1–R12 and return a | ID | 结果 | 详情 | table; every failure line starts with ' +
+      'Run all repo checkers R1–R13 and return a | ID | 结果 | 详情 | table; every failure line starts with ' +
       '"修复:" plus an executable fix. Any error-level check → isError. full=false (default) skips R5/R6/R8; ' +
       'relay_session_end always runs the full set. Call before handing off or to inspect repo health.',
     inputSchema: {
@@ -263,7 +263,7 @@ export const TOOLS = [
   {
     name: 'relay_rules',
     description:
-      'Return the R-series rule table (R1–R12): what each rule checks and where it is enforced (relay_verify / ' +
+      'Return the R-series rule table (R1–R13): what each rule checks and where it is enforced (relay_verify / ' +
       'session_end). Read this when a verify failure is unclear, or for the full rule set without running verify.',
     inputSchema: { type: 'object', properties: {} },
   },
@@ -296,7 +296,7 @@ The tools enforce the loop; you cannot skip the gates.
    A \`test:<failing-test-path>\` acceptance means the previous session left a red test
    on purpose — your job is to make it green.
 5. **Verify(验证)** — Run \`relay_verify\` (full) until green; execute every \`修复:\`
-   instruction it gives. In a managed worktree the gate checks controlRoot (R1–R12) and the
+   instruction it gives. In a managed worktree the gate checks controlRoot (R1–R13) and the
    task checkout (code rules), so R5/R6 commit evidence comes from both the control-plane
    commit and the task-branch commit. Never hand off a red repo.
 6. **Exit(出场)** — Call \`relay_session_end\` LAST with model, summary, done_task,
@@ -442,6 +442,7 @@ const RULES_TEXT = `# relay 规则表(R 系列)
 | R10 | 事实对账 | LOG 最新完成条目必须含引擎写入的「事实(v2)」行;机检段(mode/文件数/base/sha/branch)与 git 重算逐字段一致(managed 另含 ±),不一致 → ERROR;branch 必须真实包含声明的 sha(存在但不含 → ERROR;已删除但完成提交仍在当前分支历史 → PASS 带注记,否则 WARN);叙述段(验收/verify/耗时)不参与对账;无法定位提交 → WARN(永不 PASS);v1 旧格式只做结构校验 → WARN(数字权威仅 v2);缺事实行 → WARN;早于 facts.since 的旧条目豁免 | relay_verify / session_end 绿闸 |
 | R11 | 协议面敏感内容 | 协议面 8 个文件(TASKS/LOG/AGENTS/CLAUDE/GEMINI/START/SPEC/DECISIONS)+ docs/archive/**/*.md 内容级扫描(AWS/GitHub/Slack/OpenAI/Google 密钥样式与 PEM 私钥块);同行 \`relay:secret-ok\` 豁免;命中 → error,出场写盘前阻断且不提交 | relay_verify / session_end 绿闸 |
 | R12 | LOG 边界 | 活跃区(归档指针之前的行)>150 行 或 活跃区内完成条目 >20 → WARN(manifest.logBoundary.strict=true 升 ERROR);归档指针必须指向真实存在、非空且 realpath 仍在仓库内的 docs/archive/*.md 才被承认,否则指针不被承认且 R12 报 WARN(不静默 PASS);只报警不自动归档 | relay_verify / session_end 绿闸 |
+| R13 | 协议结构 | TASKS 任务行必须匹配契约正则且任务号唯一;[~] 必须带 (model, YYYY-MM-DD HH:mm),[x] 必须带 (YYYY-MM-DD);LOG 条目标题必须匹配「## 时间 ｜ model=名 ｜ task=…」;HTML 注释块与缩进行豁免;违规 → WARN(manifest.structure.strict=true 升 ERROR)——拼错的任务行/日志标题会被解析器静默跳过,本规则把「写错」与「没有」区分开 | relay_verify / session_end 绿闸 |
 
 补充:
 

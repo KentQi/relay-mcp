@@ -988,7 +988,7 @@ export const evidenceSummary = (controlResults, taskResults, acc) => {
 };
 
 // 失败签名(P3-1):只记 ERROR 规则 ID 集合,不写协议文件;`.relay/last-failure.json` 是运行时诊断,
-// 在 .gitignore 基线里(不入库、不参与 R1–R12)。同一签名连续出现 = 同一前提连续失败。
+// 在 .gitignore 基线里(不入库、不参与 R1–R13)。同一签名连续出现 = 同一前提连续失败。
 const FAILURE_MARK = '.relay/last-failure.json';
 const failureSignature = (results) => [...new Set((results || [])
   .filter((r) => r.result === 'ERROR')

@@ -1,4 +1,4 @@
-// relay-mcp — W4 验证引擎:R 系列检查器(R1–R12)与 relay_verify。
+// relay-mcp — W4 验证引擎:R 系列检查器(R1–R13)与 relay_verify。
 // 依据 CONTRACT.md「检查器规则表」「仓库文件格式」「安全与降级」。
 // TASKS 任务行与 LOG 条目标题的正则与契约逐字符一致,绝不改动;
 // 每条非 PASS 结果都附一条以「修复:」开头的可执行指令。
@@ -643,6 +643,62 @@ const checkR12 = async (root, cfg, snap) => {
     : bad('R12', 'WARN', `LOG 边界超限:${over}`, fix);
 };
 
+// —— R13 协议结构(T031):任务行/LOG 条目标题契约 ——
+// 解析器对不匹配的协议行是静默跳过:拼错的任务行从简报/待办枚举消失,拼错的 LOG 标题从
+// R7/R9/R10 窗口消失——「没有任务」与「任务写错了」不可区分,属于协议面的 fail-open。
+// 误报防线:先剥离 HTML 注释块(模板示例在注释里),再只认第 0 列;缩进行不属协议行。
+const HTML_COMMENT_BLOCK_RE = /<!--[\s\S]*?-->/g;
+const stripHtmlComments = (text) => String(text ?? '').replace(HTML_COMMENT_BLOCK_RE, '');
+const TASK_LINE_LIKE_RE = /^- \[/;
+const TRIM_META_RE = /^.+,\s*\d{4}-\d{2}-\d{2} \d{2}:\d{2}$/;
+const DONE_META_RE = /^\d{4}-\d{2}-\d{2}$/;
+const looksLikeLogEntry = (line) => /^## \d{4}-\d{2}-\d{2}/.test(line) || /\bmodel=/.test(line) || /\btask=/.test(line);
+
+const checkR13 = async (root, cfg, snap) => {
+  const tasksText = snap ? snap.tasksText : await readText(join(root, 'TASKS.md'));
+  const logText = snap ? snap.logText : await readText(join(root, 'LOG.md'));
+  if (tasksText == null && logText == null) {
+    return skip('R13', 'TASKS.md 与 LOG.md 均不存在,无从检查协议结构', '先 relay_init / relay_onboard 建立协议文件');
+  }
+  const violations = [];
+  if (tasksText != null) {
+    const lines = stripHtmlComments(tasksText).replace(/\r\n/g, '\n').split('\n');
+    const seen = new Map();
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i];
+      if (!TASK_LINE_LIKE_RE.test(line)) continue;
+      const m = line.match(TASK_LINE_RE);
+      if (!m) { violations.push(`TASKS.md:${i + 1} 疑似任务行无法解析(检查空格/任务号格式):${line.trim().slice(0, 80)}`); continue; }
+      const [, status, id, title, metaRaw] = m;
+      const meta = String(metaRaw ?? '').trim();
+      const at = seen.get(id);
+      if (at) violations.push(`TASKS.md:${i + 1} 任务号 ${id} 重复(首次出现于第 ${at} 行)`);
+      else seen.set(id, i + 1);
+      if (!String(title).trim()) violations.push(`TASKS.md:${i + 1} ${id} 任务标题为空`);
+      if (status === '~' && !TRIM_META_RE.test(meta)) violations.push(`TASKS.md:${i + 1} ${id} 已认领但缺少「(model, YYYY-MM-DD HH:mm)」`);
+      if (status === 'x' && !DONE_META_RE.test(meta)) violations.push(`TASKS.md:${i + 1} ${id} 已完成但缺少完成日期「(YYYY-MM-DD)」`);
+    }
+  }
+  if (logText != null) {
+    const lines = stripHtmlComments(logText).replace(/\r\n/g, '\n').split('\n');
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i];
+      if (!line.startsWith('## ')) continue;
+      if (LOG_TITLE_RE.test(line)) continue;
+      if (!looksLikeLogEntry(line)) continue; // 非条目形态的二级标题不属治理面
+      violations.push(`LOG.md:${i + 1} 疑似条目标题不符合契约:${line.trim().slice(0, 80)}`);
+    }
+  }
+  if (!violations.length) {
+    return pass('R13', '协议结构合规(TASKS 任务行/LOG 条目均匹配契约;HTML 注释与缩进行豁免)');
+  }
+  const detail = `协议结构不合规 ${violations.length} 处:${violations.slice(0, 4).join('; ')}${violations.length > 4 ? `;等 ${violations.length} 处` : ''}`;
+  const fix = '按契约修正:TASKS 任务行「- [ ] T004 标题」「- [~] T003 标题  (model, YYYY-MM-DD HH:mm)」「- [x] T002 标题  (YYYY-MM-DD)」,任务号全局唯一;LOG 条目「## YYYY-MM-DD HH:mm | model=<名> | task=<T### 动词短语>」;历史遗留人工核对后修,不做静默豁免;manifest.structure.strict=true 时本项为 ERROR';
+  return (cfg && cfg.structure && cfg.structure.strict)
+    ? bad('R13', 'ERROR', detail, fix)
+    : bad('R13', 'WARN', detail, fix);
+};
+
 // —— 双根:任务树结构检查(R1/R2/R3/R4/R8)——
 // managed 场景下真正待提交的代码在 executionRoot,结构检查必须覆盖它;
 // 协议面检查(R5/R6/R7/R9)属于 controlRoot,这里刻意不跑——worktree 里的
@@ -681,6 +737,7 @@ export const runChecks = async (root, { full = false, meta: preloadedMeta = null
     await checkR10(root, cfg, snap),
     await checkR11(root, snap),
     await checkR12(root, cfg, snap),
+    await checkR13(root, cfg, snap),
   ];
 };
 

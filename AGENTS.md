@@ -1,7 +1,7 @@
 <!-- relay:generated v1 -->
 # relay-mcp — 规范入口(canonical)
 
-本文件由 relay-mcp 单源投影生成(2026-11-02);CLAUDE.md 与 GEMINI.md 只是它的指针副本。
+本文件由 relay-mcp 单源投影生成(2026-11-09);CLAUDE.md 与 GEMINI.md 只是它的指针副本。
 规则要改:改 relay 引擎模板后运行 `relay_sync` 重投影;不要只手改其中一份(会漂移,R1 拦)。
 
 ## 项目身份
@@ -42,6 +42,7 @@
 | R10 | 完成条目必须带引擎写入的「事实(v2)」行:机检段(文件数/base/sha/branch,managed 另含 ±)与 git 重算逐字段一致,不一致 ERROR;branch 必须真实包含声明的 sha;叙述段(验收/verify/耗时)不参与对账;v1 旧行只做结构校验并 WARN |
 | R11 | 协议面(入口/协议/归档)不得含密钥样式内容;出场写盘前阻断,误报同行标注 `relay:secret-ok` 豁免 |
 | R12 | LOG 活跃区(归档指针之前的行)>150 行或活跃区内完成条目 >20 → WARN(manifest.logBoundary.strict 升 ERROR);归档指针必须指向真实存在且位于仓库内的 docs/archive/*.md(失效指针 → WARN);归档动作留人工 |
+| R13 | 协议结构:任务行/LOG 标题必须匹配契约正则(任务号唯一;`[~]` 带 model+时间;`[x]` 带完成日期;HTML 注释/缩进行豁免);违规 → WARN(manifest.structure.strict 升 ERROR)——防拼错的行被解析器静默跳过 |
 
 细则与执法点:`relay_rules`;完整规范见 relay-mcp 仓库与全局 CLAUDE-PROJECT-RULES。
 
