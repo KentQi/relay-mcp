@@ -938,6 +938,28 @@ const completionOwnershipError = async (root, doneTask, model) => {
 // ============================================================
 // relay_session_end — 出场协议(绿闸铁律)
 // ============================================================
+
+// 提交信息模板渲染(v1.7.0):{{task}}/{{taskId}}/{{summary}}/{{evidence}} 一处实现,managed 与单根共用。
+// 默认模板(不含 {{evidence}})上限仍是 80 字符——与 v1.0.0 逐字符一致;显式使用 {{evidence}} 时
+// 放宽到 240,否则证据会被截断成无意义前缀。codePointSafe 用于人工命令串(避免切碎代理对)。
+const renderCommitMessage = (tpl, vars, { maxLen = 80, codePointSafe = false } = {}) => {
+  const rendered = String(tpl)
+    .replaceAll('{{task}}', vars.task || '')
+    .replaceAll('{{taskId}}', vars.taskId || '')
+    .replaceAll('{{summary}}', vars.summary || '')
+    .replaceAll('{{evidence}}', vars.evidence || '');
+  return codePointSafe ? Array.from(rendered).slice(0, maxLen).join('') : rendered.slice(0, maxLen);
+};
+
+// 事实行/提交信息共用的证据摘要:verify 三态计数 + 验收执行数(不包含规则条文,保持一行可读)
+const evidenceSummary = (controlResults, taskResults, acc) => {
+  const rows = [...(controlResults || []), ...(taskResults || [])];
+  const count = (state) => rows.filter((r) => r.result === state).length;
+  const parts = [`verify ${count('PASS')}P/${count('WARN')}W/${count('ERROR')}E`];
+  if (acc && Number.isFinite(acc.executed)) parts.push(`验收 ${acc.executed} 项`);
+  return parts.join(' · ');
+};
+
 export const relaySessionEnd = async (args = {}) => {
   const startedAt = Date.now(); // 事实行的「耗时」:从进场到出场的墙钟时间
   const roots = await resolveRelayRoots(args.root || process.cwd());
@@ -1148,6 +1170,8 @@ export const relaySessionEnd = async (args = {}) => {
     return { content: [{ type: 'text', text: out.join('\n') }], isError: true };
   }
   const redLights = await redLightCheck(root, next, cfg, executionRoot);
+  // {{evidence}} 的数据源:此刻 verify 与验收均已通过(否则已提前返回),它们就是提交信息的证据
+  const evidenceLine = evidenceSummary(controlResults, taskResults, acc);
 
   // 2.6 仓库级写锁(H-C):TASKS/LOG 的读改写从此处到提交完成必须独占——
   // 两个会话并发出场时,败者的更新曾基于旧快照覆写胜者(实测丢更新)。持锁期间心跳(util 锁协议)
@@ -1224,11 +1248,13 @@ export const relaySessionEnd = async (args = {}) => {
     const record = roots.record || null;
     const branch = record?.branch || '';
     const managedHead = doneTask ? `${doneTask} 完成 · ` : '';
-    const managedMessage = ((cfg && cfg.commitMessageTemplate) || DEFAULT_COMMIT_TEMPLATE)
-      .replaceAll('{{task}}', managedHead)
-      .replaceAll('{{taskId}}', doneTask)
-      .replaceAll('{{summary}}', summary.split('\n')[0].trim())
-      .slice(0, 80);
+    const managedTpl = (cfg && cfg.commitMessageTemplate) || DEFAULT_COMMIT_TEMPLATE;
+    const managedMessage = renderCommitMessage(managedTpl, {
+      task: managedHead,
+      taskId: doneTask,
+      summary: summary.split('\n')[0].trim(),
+      evidence: evidenceLine,
+    }, { maxLen: managedTpl.includes('{{evidence}}') ? 240 : 80 });
     const rejectCommit = (reason) => {
       out.push('## 代码提交失败 — 未更新 TASKS/LOG', '', reason, '',
         `controlRoot 的 ${doneTask || '(本次会话)'} 保持原状态,认领锁保留。修复 executionRoot 后重跑出场。`);
@@ -1444,16 +1470,15 @@ export const relaySessionEnd = async (args = {}) => {
   const firstLine = summary.split('\n')[0].trim();
   const head = doneTask ? `${doneTask} 完成 · ` : '';
   // P6 模板变量:{{task}} = 任务前缀(含「 · 」分隔符,与补丁前 head 逐字符一致),
-  // {{taskId}} = 纯任务号(供 [[{{taskId}}] {{summary}}] 这类干净模板使用),{{summary}} = 摘要首行。
+  // {{taskId}} = 纯任务号(供 [[{{taskId}}] {{summary}}] 这类干净模板使用),{{summary}} = 摘要首行,
+  // {{evidence}} = verify 三态计数 + 验收执行数(v1.7.0;只有显式使用时才放宽到 240 字符)。
   const tpl = (cfg && cfg.commitMessageTemplate) || DEFAULT_COMMIT_TEMPLATE;
-  const commitMsg = tpl
-    .replaceAll('{{task}}', head)
-    .replaceAll('{{taskId}}', doneTask)
-    .replaceAll('{{summary}}', firstLine)
-    .slice(0, 80);
+  const tplVars = { task: head, taskId: doneTask, summary: firstLine, evidence: evidenceLine };
+  const commitMaxLen = tpl.includes('{{evidence}}') ? 240 : 80;
+  const commitMsg = renderCommitMessage(tpl, tplVars, { maxLen: commitMaxLen });
   // 人工建议命令串专用:码点安全截断 + POSIX 双引号内元字符转义(防 summary 自由文本注入);
   // 自动提交不走此串(gitRun 以 argv 传参,无 shell 解析)
-  const commitMsgSh = Array.from(commitMsg).slice(0, 80).join('')
+  const commitMsgSh = renderCommitMessage(tpl, tplVars, { maxLen: commitMaxLen, codePointSafe: true })
     .replace(/\\/g, '\\\\')
     .replace(/"/g, '\"')
     .replace(/\$/g, '\\$')

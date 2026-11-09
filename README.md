@@ -46,14 +46,16 @@ node scripts/install-mcp.mjs --target dsh --dsh-profile desktop
 relay-mcp/
 ├── plugin.json                     # 清单：$schema + name/version/description/…（闭集字段）
 ├── mcp.json                        # stdio MCP server：node + ${PLUGIN_ROOT}/src/index.mjs
-└── skills/relay-protocol/SKILL.md  # 可移植 Skill：relay 协议操作手册
+└── skills/
+    ├── relay-protocol/SKILL.md     # 可移植 Skill：relay 协议操作手册
+    └── relay-discipline/SKILL.md   # 可移植 Skill：写代码时的行为纪律（绑定 R1–R12）
 ```
 
 `mcp.json` 使用插件变量：`args: ["${PLUGIN_ROOT}/src/index.mjs"]`、`cwd: "${PLUGIN_ROOT}"`；`PLUGIN_ROOT` / `PLUGIN_DATA` 由客户端展开并注入子进程。静态校验（零依赖）与退出码：
 
 ```sh
 node scripts/validate-plugin.mjs        # 校验 plugin.json / mcp.json / skills/**/SKILL.md
-node scripts/smoke-plugin.mjs           # 39 断言：合规 + 真实 initialize/tools/list + 规范负例
+node scripts/smoke-plugin.mjs           # 43–44 断言：合规 + 真实 initialize/tools/list + 规范负例
 ```
 
 不支持插件包的客户端继续用下面的安装器（`mcpServers` 片段）。
@@ -65,7 +67,7 @@ node scripts/smoke-plugin.mjs           # 39 断言：合规 + 真实 initialize
 
 ```sh
 npm pack --dry-run        # 本地校验打包面（51 个文件，约 158 kB）
-node src/cli.mjs relay_session_start --root .   # 或直接运行 stdio server：node src/index.mjs
+relay relay_session_start --root .   # 或直接运行 stdio server：node src/index.mjs
 ```
 
 npm 发布拆到 TASKS T030：需人类 npm 账号，并改用 scoped 包名（如 `@<npm-username>/relay-mcp`）或新的非 scoped 包名；`npm publish` 由 `scripts/check-publish-guard.mjs` 的 `RELAY_ALLOW_PUBLISH=1` 显式放行。
@@ -133,7 +135,38 @@ worktree 清理默认 dry-run：只删除已登记、已过期、非活跃、干
 - `enabled` 只认 JSON 布尔 `true`；字符串 `"true"` 或数字 `1` 不生效。
 - `cacheDir` 必须是 controlRoot 内的相对路径；拒绝绝对路径、`..`、盘符、控制字符和 `.git` 前缀。
 - `ttlHours` 非法时回退 24；`autoCleanup` 只有显式 `false` 才关闭。
-- 未知或拼错字段会被静默忽略。旧 manifest 缺省关闭 worktree；`relay_claim` 的 `worktree: true/false` 可单次覆盖。
+- 未知或拼错字段会被静默忽略，但 `relay_doctor` 会点名未知键并给出最近似的已知键；旧 manifest 缺省关闭 worktree；`relay_claim` 的 `worktree: true/false` 可单次覆盖。
+
+### 质量门预设（可选）
+
+`manifest.acceptance.commands` 是**人类逐条签字**的外部命令白名单：把 CRAP、重复率、变异测试这类确定性质量门接进出场绿闸，而 relay 核心保持零依赖。
+
+```json
+{
+  "acceptance": {
+    "commands": [
+      "npx --no-install crapper check --threshold 10",
+      "npx --no-install dryer check --max 0.8"
+    ]
+  }
+}
+```
+
+任务里对应写（缩进两空格）：
+
+```
+- [ ] T012 收敛复杂度
+  验收: test:npx --no-install crapper check --threshold 10
+```
+
+约束（写错会静默不生效）：
+
+- 只有 `验收: test:<值>` 会被执行；自由文本验收不会执行。
+- 值不能以 `.js/.mjs/.cjs/.ts/.tsx` 结尾——那会被当成测试文件走 `node --test`，到不了白名单。
+- 值不能以 `-` 开头；匹配是**整串逐字符相等**，不做前缀或正则。
+- 白名单为空时只接受 js/ts 测试文件；命中后经 **shell 执行，超时 180 秒**——这就是"人类签字"的信任边界。
+- 外部工具请锁版本、在 CI 或容器里运行；relay 不会自动安装它们。
+- 本仓库自身未启用（`.relay/**` 是受保护路径，启用需人类批准后单独提交）。
 
 ### 升级旧项目
 
@@ -180,16 +213,23 @@ worktree 清理默认 dry-run：只删除已登记、已过期、非活跃、干
 
 > **状态说明**：检索寻址（T018）的动工闸门是「LOG ≥ 20 条或出现取回失败」，实测为 16 条、闸门未过，按用户指令先行交付。收益复核见 TASKS.md 的 T021；若实测无收益，回退方式仅为移除这两个工具的注册，协议面与事实底账不受影响。
 
-CLI 与 MCP 共用同一引擎：
+CLI 与 MCP 共用同一引擎（安装后 `relay` 是同一入口的 bin 名）：
 
 ```sh
+relay relay_verify --root /path/to/project
+relay relay_worktree_cleanup --root /path/to/project --json confirm=true
+relay --help        # 用法
+relay --version     # 版本
+
+# 未安装时等价写法
 node src/cli.mjs relay_verify --root /path/to/project
-node src/cli.mjs relay_worktree_cleanup --root /path/to/project --json confirm=true
 ```
 
 ### 自举
 
-本仓库使用自身协议开发：`START.md` 是入口，`TASKS.md` 是 backlog，`LOG.md` 记录会话。`npm test` 覆盖 19 套端到端冒烟（协议、补丁、worktree、升级兼容、安装器、密钥闸、事实底账、简报、doctor、检索、打包、评审回归、性能计数、LOG 边界、会话性能、并发、归档、安全、Agent Plugins 插件包），CI 覆盖 Node 22/24/26。
+本仓库使用自身协议开发：`START.md` 是入口，`TASKS.md` 是 backlog，`LOG.md` 记录会话。`npm test` 覆盖 21 套端到端冒烟（协议、补丁、worktree、升级兼容、安装器、密钥闸、事实底账、简报、doctor、检索、打包、评审回归、性能计数、LOG 边界、会话性能、并发、归档、安全、Agent Plugins 插件包、上下文预算、测试框架元负控），CI 覆盖 Node 22/24/26。
+
+一次真实的多模型交接实测记录（含假绿事故的完整证据链）见 [docs/04-test/08-handoff-case-study-v1.0.md](docs/04-test/08-handoff-case-study-v1.0.md)。
 
 `relay_verify` 的单轮成本是可观测的：只读一次 LOG/TASKS/manifest，git 子进程收敛到必要数量；设 `RELAY_TRACE_FILE=<path>` 可让进程退出时写出 `{reads, git, sync}` 计数（测试用，生产无行为变化）。
 

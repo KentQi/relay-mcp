@@ -147,17 +147,19 @@ try {
 
   console.log('\n== C4: contract / README / CONTRACT / templates 文案契约 ==');
   {
+    // v1.7.0 起工具描述只留操作语义,规则条文移到 relay_rules/relay://protocol(上下文预算);
+    // 因此文案契约改为:描述保留最小可用信息 + 规则表仍完整承载条文
+    const rules = txt(await dispatch('relay_rules', {}));
     const claim = toolText('relay_claim');
-    ok(claim.includes('Only JSON boolean true') || claim.includes('JSON boolean true'), 'C4: claim schema 明示只认 JSON 布尔 true', claim);
-    ok(claim.includes('silently'), 'C4: claim schema 明示字符串/未知值静默处理', claim);
-    ok(claim.includes('cacheDir'), 'C4: claim schema 明示 cacheDir 相对路径约束');
+    ok(claim.includes('Only JSON true'), 'C4: claim schema 明示只认 JSON 布尔 true', claim);
+    ok(claim.includes('legacy manifests default false'), 'C4: claim schema 明示旧 manifest 缺省关闭', claim);
+    ok(rules.includes('cacheDir'), 'C4: cacheDir 相对路径约束由 RULES_TEXT 承载');
     ok(toolText('relay_worktree_cleanup').includes('ignored'), 'C4: cleanup 描述明示 ignored 内容保护');
     ok(/two commits|TWO commits/i.test(toolText('relay_session_end')), 'C4: session_end 描述明示双提交', toolText('relay_session_end'));
-    ok(toolText('relay_session_end').includes('unique per concurrent session') || toolText('relay_session_end').includes('unique model id'), 'C4: session_end 描述要求并发会话使用唯一 model 标识');
+    ok(toolText('relay_session_end').includes('Unique model/agent id'), 'C4: session_end 描述要求并发会话使用唯一 model 标识');
     ok(toolText('relay_onboard').includes('PRESERVED') && toolText('relay_onboard').includes('worktree'), 'C4: onboard 描述明示保留既有配置');
     ok(toolText('relay_sync').includes('.gitignore') && toolText('relay_sync').includes('migration'), 'C4: sync 描述明示补基线 + AGENTS 迁移', toolText('relay_sync'));
 
-    const rules = txt(await dispatch('relay_rules', {}));
     for (const [needle, label] of [
       ['worktree 配置真值表', 'RULES_TEXT 含配置真值表'],
       ['双提交', 'RULES_TEXT 含双提交语义'],

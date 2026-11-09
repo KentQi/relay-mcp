@@ -8,37 +8,31 @@ import { templatesDir, readFileSafe } from './util.mjs';
 
 /* ------------------------------- TOOLS ------------------------------- */
 
-const ROOT_DESC =
-  'Project root directory (absolute or relative). Defaults to process.cwd() of the server.';
+const ROOT_DESC = 'Project root; defaults to the server cwd.';
 
 export const TOOLS = [
   {
     name: 'relay_init',
     description:
-      'Bootstrap a brand-new project into the relay relay protocol (0→1). Instantiates every relay ' +
-      'file from templates (START.md boot sector, SPEC.md, DECISIONS.md, TASKS.md, LOG.md, verify, ' +
-      'entry files AGENTS.md/CLAUDE.md/GEMINI.md, .relay/manifest.json, docs/ five-phase skeleton) ' +
-      'PLUS a code skeleton from the chosen preset (default "node": package.json + src/ + tests/ with ' +
-      'a passing smoke test, so the project is green from commit zero). Available presets: node, ' +
-      'minimal (relay layer only). Runs `git init` when needed and makes the first commit. ' +
-      'Non-destructive: refuses with isError if START.md already exists unless force=true — in that ' +
-      'case call relay_onboard instead. After a successful init, the next step in the protocol is ' +
-      'relay_session_start.',
+      'Bootstrap a new project into the relay protocol (0→1): all relay files from templates (START/SPEC/' +
+      'DECISIONS/TASKS/LOG/verify/entry files/.relay manifest/docs skeleton) plus a code skeleton from ' +
+      'preset (node | minimal | none), git init and the first commit. Refuses when START.md exists unless ' +
+      'force=true (then prefer relay_onboard). Next step: relay_session_start.',
     inputSchema: {
       type: 'object',
       properties: {
         root: { type: 'string', description: ROOT_DESC },
         name: {
           type: 'string',
-          description: 'Human-readable project name written into the scaffold (optional).',
+          description: 'Project name written into the scaffold (optional).',
         },
         preset: {
           type: 'string',
-          description: 'Code skeleton preset: "node" (default; package.json + src/ + tests/ + green smoke test), "minimal" (relay layer only), or "none". Unknown values fall back to minimal with a note.',
+          description: 'Code skeleton: "node" (default), "minimal" (relay only) or "none". Unknown → minimal.',
         },
         force: {
           type: 'boolean',
-          description: 'Allow overwriting an existing START.md (backup first). Default false.',
+          description: 'Overwrite an existing START.md (backup first). Default false.',
         },
       },
     },
@@ -46,15 +40,11 @@ export const TOOLS = [
   {
     name: 'relay_onboard',
     description:
-      'Adopt the relay relay protocol on an EXISTING project (1→10 / 10→100). Non-destructive merge: ' +
-      'scans the repo, backs up any file it must touch (renamed <file>.relay-bak-<timestamp>, never ' +
-      'deletes user files), unions allowedTopLevel with entries already present, records actual docs/ ' +
-      'layout, installs core relay files + verify.sh + entry files + .gitignore baseline, then reports ' +
-      'what changed. Existing manifest configuration is PRESERVED: onboard only reconciles ' +
-      'version/projectName/entryFiles/allowedTopLevel/docsPhases/onboardedAt/relayHome and keeps ' +
-      'worktree / autoCommit / acceptance / protectedPaths / entryFilesTakeover and any other custom ' +
-      'keys untouched, so re-running it on an upgraded project never silently disables features. ' +
-      'Prefer this over relay_init whenever the directory is not empty.',
+      'Adopt the relay protocol on an existing project, non-destructively: backs up every file it touches ' +
+      '(<file>.relay-bak-<timestamp>), unions allowedTopLevel, records the actual docs layout, installs core ' +
+      'files + verify.sh + entry files + .gitignore baseline, then reports changes. Existing manifest config ' +
+      '(worktree/autoCommit/acceptance/protectedPaths/...) is PRESERVED, so re-running never disables ' +
+      'features. Prefer over relay_init when the directory is not empty.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -65,12 +55,10 @@ export const TOOLS = [
   {
     name: 'relay_sync',
     description:
-      'Upgrade/repair entry point: regenerate AGENTS.md (always required) and the optional adapter entry ' +
-      'files in manifest.entryFiles from the single source of truth, report drift, and idempotently append ' +
-      'the .gitignore runtime baseline (`.relay/worktrees/`, `.relay/worktrees.json`, secrets, …) that older ' +
-      'projects are missing. When an unmarked AGENTS.md blocks R1, the output contains the executable ' +
-      'migration steps (relay_onboard takeover / entryFilesTakeover=true / manual marker). Run it after ' +
-      'upgrading a project and after editing canonical spec content.',
+      'Upgrade/repair entry point: regenerate AGENTS.md and the optional adapter entry files from the single ' +
+      'source, report drift, and idempotently append the .gitignore runtime baseline. When an unmarked ' +
+      'AGENTS.md blocks R1, prints executable migration steps. Run after upgrading a project or editing ' +
+      'canonical templates.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -81,11 +69,10 @@ export const TOOLS = [
   {
     name: 'relay_session_start',
     description:
-      'MUST be the first call of every work session (step 1 of the six-step relay protocol — see ' +
-      'resource relay://protocol). Returns an entry briefing: reads the five core files ' +
-      '(START/SPEC/DECISIONS/TASKS/LOG), reconciles with git state (uncommitted changes, last commit), ' +
-      'runs a fast verify, and proposes the first action — usually the topmost actionable task in ' +
-      'TASKS.md or a red-light test left by the previous session to turn green.',
+      'MUST be the first call of every session (protocol step 1). Returns a briefing: reads START/SPEC/' +
+      'DECISIONS/TASKS/LOG, reconciles git state (uncommitted changes, last commit), runs a fast verify, and ' +
+      'proposes the first action — the topmost actionable task or the red-light test left by the previous ' +
+      'session.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -96,23 +83,16 @@ export const TOOLS = [
   {
     name: 'relay_session_end',
     description:
-      'MUST be the last call of every work session (step 6 of the six-step protocol). Green gate: runs ' +
-      'FULL verify first (controlRoot protocol checks plus executionRoot code checks when in a managed ' +
-      'task worktree); only if all checks pass, and after the acceptance gate is green, does it write ' +
-      'TASKS/LOG and commit. Two commits are made in a managed worktree: (1) executionRoot code commit on ' +
-      'branch relay/T###, (2) controlRoot commit containing ONLY TASKS.md + LOG.md (message contains ' +
-      '"T### 完成"). Both SHAs are reported; the task branch stays accepted but unmerged. If the code ' +
-      'commit or the control-plane commit fails → isError, TASKS/LOG not marked done, claim lock kept, ' +
-      're-run after fixing to finish. If verify is not green → isError + fix list + explicitly NOT ' +
-      'committed. Handoff quality is the contract: fill `next` (title + acceptance a stranger can ' +
-      'verify) and negative_results (things that do NOT work, so the next model does not retry them). ' +
-      'Protected paths (verify script, .relay/**, tests) are never auto-committed — they need human ' +
-      'approval.',
+      'MUST be the last call of every session (step 6). Green gate: full verify plus executable acceptance ' +
+      'must pass before anything is written or committed; else isError + fix list, nothing marked done. In a ' +
+      'managed worktree it makes two commits (executionRoot code on relay/T###, controlRoot TASKS.md+LOG.md ' +
+      'with "T### 完成") and reports both SHAs — accepted but NOT merged. Fill next{title, acceptance} and ' +
+      'negative_results. Protected paths are never auto-committed. Full rules: relay_rules / relay://protocol.',
     inputSchema: {
       type: 'object',
       properties: {
         root: { type: 'string', description: ROOT_DESC },
-        model: { type: 'string', description: 'Model/agent identifier. Must be unique per concurrent session: two sessions sharing one model id cannot prove ownership and will deadlock on claim locks, e.g. "claude-a" / "claude-b".' },
+        model: { type: 'string', description: 'Unique model/agent id (e.g. "claude-a"); duplicates cannot prove claim ownership.' },
         summary: {
           type: 'string',
           description: 'One-paragraph summary of what this session actually did.',
@@ -141,7 +121,7 @@ export const TOOLS = [
         negative_results: {
           type: 'array',
           items: { type: 'string' },
-          description: 'Approaches proven NOT to work, so they are not retried (optional).',
+          description: 'Approaches proven NOT to work (optional).',
         },
       },
       required: ['model', 'summary'],
@@ -150,11 +130,9 @@ export const TOOLS = [
   {
     name: 'relay_verify',
     description:
-      'Run all repo checkers R1–R12 and return a | ID | 结果 | 详情 | table; every failure line starts ' +
-      'with "修复:" followed by an executable fix instruction. Any error-level check → isError true. ' +
-      'full=false (default) is the fast pass that skips R5/R6/R8 (commit atomicity, doc staleness, ' +
-      'style); relay_session_end always runs the full set internally. Call this any time you want to ' +
-      'know repo health or before handing off.',
+      'Run all repo checkers R1–R12 and return a | ID | 结果 | 详情 | table; every failure line starts with ' +
+      '"修复:" plus an executable fix. Any error-level check → isError. full=false (default) skips R5/R6/R8; ' +
+      'relay_session_end always runs the full set. Call before handing off or to inspect repo health.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -169,14 +147,11 @@ export const TOOLS = [
   {
     name: 'relay_restructure',
     description:
-      'Normalize an existing project\'s top-level layout toward the relay standard (code → src/, tests → ' +
-      'tests/, tooling → scripts/). Conservative by design: only unambiguous code/test/tool dirs and ' +
-      'loose root source/test files are moved; ambiguous entries (app/, server/, packages/, unknown) are ' +
-      'listed for a human decision and never touched. Dry-run by default (returns the migration plan); ' +
-      'confirm=true requires a clean git repo and executes with git mv (history preserved, rollback ' +
-      'possible), amends the manifest whitelist, appends a DECISIONS entry, inserts a follow-up TASKS ' +
-      'entry to fix import paths (that part is model work, gated by tests), logs to LOG.md and commits. ' +
-      'Call after relay_onboard when you want the old project aligned to the standard skeleton.',
+      'Normalize an existing project\'s layout toward the relay standard (code → src/, tests → tests/, tooling ' +
+      '→ scripts/). Conservative: only unambiguous dirs and loose root files move; ambiguous entries (app/, ' +
+      'server/, packages/) are listed for a human and never touched. Dry-run by default; confirm=true needs a ' +
+      'clean git repo, moves with git mv (history preserved), amends the manifest whitelist, appends ' +
+      'DECISIONS/TASKS entries and commits.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -191,22 +166,18 @@ export const TOOLS = [
   {
     name: 'relay_claim',
     description:
-      'Parallel mode: claim a task in TASKS.md before starting work when multiple agents share one ' +
-      'queue. Marks the task in-progress with your model name and timestamp in the trailing ' +
-      'annotation, e.g. "- [~] T003 … (claude, 2026-09-29 14:05)", so two models never grab the same ' +
-      'task. task is the ID like "T003". When worktree is enabled, also creates/reuses the managed task ' +
-      'worktree `.relay/worktrees/T###` + branch `relay/T###` and returns controlRoot, executionRoot, ' +
-      'branch, baseSha; edit code/tests in executionRoot and run relay_session_end there (it resolves ' +
-      'controlRoot itself). Without a usable git HEAD (no git / unborn branch) worktree creation degrades ' +
-      'to a single-root claim with a WARN instead of failing. Use a unique model id per concurrent ' +
-      'session — two sessions with the same model id cannot prove claim ownership.',
+      'Parallel mode: claim a task before starting work. Marks it [~] with your model name and timestamp so ' +
+      'two models never grab the same task. When worktree is enabled, also creates/reuses .relay/worktrees/' +
+      'T### + branch relay/T### and returns controlRoot, executionRoot, branch, baseSha — edit code and run ' +
+      'relay_session_end in executionRoot. Without a usable git HEAD it degrades to a single-root claim with ' +
+      'a WARN.',
     inputSchema: {
       type: 'object',
       properties: {
         root: { type: 'string', description: ROOT_DESC },
         task: { type: 'string', description: 'Task ID to claim, e.g. "T003".' },
         model: { type: 'string', description: 'Model/agent identifier claiming the task.' },
-        worktree: { type: 'boolean', description: 'Optional per-claim override. Default: manifest worktree.enabled. Only JSON boolean true in the manifest enables it: the string "true", 1 and other truthy values are silently treated as false, unknown/misspelled keys are silently ignored, an invalid ttlHours falls back to 24 and cacheDir must be a controlRoot-relative path. New init=true; onboard/legacy manifests=false.' },
+        worktree: { type: 'boolean', description: 'Override manifest.worktree.enabled. Only JSON true enables; legacy manifests default false.' },
       },
       required: ['task', 'model'],
     },
@@ -214,33 +185,26 @@ export const TOOLS = [
   {
     name: 'relay_worktree_cleanup',
     description:
-      'Inspect or clean expired relay-managed task worktrees. Dry-run by default; confirm=true removes only ' +
-      'registered, inactive, clean, unlocked, expired paths inside the managed cache. "Clean" includes ' +
-      'untracked AND ignored content checks: a worktree containing ignored local files (.env, node_modules, ' +
-      'build output) is KEPT by default — never delete local secrets/deps automatically. Task branches are ' +
-      'always preserved and listed; merging them stays a human decision. Never merges, rebases, pushes, or ' +
-      'force-removes a worktree. There is no per-task status/abort/release subcommand: to recover, wait for ' +
-      'the claim TTL, finish via relay_session_end, or clean expired worktrees here.',
+      'Inspect or clean expired managed task worktrees. Dry-run by default; confirm=true removes only ' +
+      'registered, inactive, clean (no untracked/ignored content), unlocked, expired paths in the managed ' +
+      'cache — never local secrets/deps. Branches are preserved and listed; no merge/rebase/push/force-remove. ' +
+      'Recovery: claim TTL, relay_session_end, or this tool.',
     inputSchema: {
       type: 'object',
       properties: {
         root: { type: 'string', description: ROOT_DESC },
-        confirm: { type: 'boolean', description: 'false/omitted = dry-run; true = execute safe removals.' },
-        ttl_hours: { type: 'number', description: 'Optional expiration override in hours (default: manifest worktree.ttlHours, 24).' },
+        confirm: { type: 'boolean', description: 'false/omitted = dry-run; true = execute.' },
+        ttl_hours: { type: 'number', description: 'Expiration override in hours (default: manifest value, 24).' },
       },
     },
   },
   {
     name: 'relay_archive_log',
     description:
-      'Archive old LOG.md entries into docs/archive/ and leave a verifiable pointer (R12 trigger). ' +
-      'Dry-run by default: reports how many entries would move, where, and the safety checks. confirm=true ' +
-      'executes the move - only from the tail, never the head; keeps at least 3 entries (default 8) so the ' +
-      'R7 divergence window never degrades; the boundary is always strictly older than the newest completion ' +
-      'entry (R10 relies on it). Archive files live only under docs/archive/, are append-only, pass the secret ' +
-      'scan, and the LOG.md rewrite goes through the protocol writer (content CAS + fencing). The archived file ' +
-      'is committed by the next relay_session_end control-plane commit (whitelist includes docs/archive/). ' +
-      'Never compresses, rewrites, or deletes history - moving is the whole action.',
+      'Archive old LOG.md entries into docs/archive/ and leave a verifiable pointer (R12). Dry-run by default; ' +
+      'confirm=true moves only from the tail, keeps at least 3 entries (default 8), never archives at or above ' +
+      'the newest completion entry, is append-only, passes the secret scan, and rewrites LOG.md through the ' +
+      'CAS protocol writer. Never compresses or deletes history — moving is the whole action.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -253,10 +217,9 @@ export const TOOLS = [
   {
     name: 'relay_recall',
     description:
-      'Read-only task-history index (progressive disclosure step 1). Derives rows on the fly from LOG.md + TASKS.md ' +
-      '— no persistent index, no writes. Returns one compact row per task: id | time | model | status | title | ' +
-      'entry size | negative-result count, with filters (query/status/model/limit) and explicit truncation. ' +
-      'Fetch full entries with relay_get. Use it when the 3 newest LOG entries in the briefing are not enough.',
+      'Read-only task-history index (progressive disclosure step 1): one compact row per task from LOG.md + ' +
+      'TASKS.md (id/time/model/status/title/size/negative count) with query/status/model/limit filters. No ' +
+      'persistent index, no writes. Use relay_get for full entries.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -271,10 +234,9 @@ export const TOOLS = [
   {
     name: 'relay_get',
     description:
-      'Read-only fetch of full task history (progressive disclosure step 2). Given up to 5 task ids from ' +
-      'relay_recall, returns TASKS status/title/acceptance plus the newest matching LOG entry (summary, ' +
-      'machine-written 事实(v2) line, branch/sha, negative results, handoff) and related DECISIONS lines. ' +
-      'Output is fenced and labelled as data, not instructions. Never writes.',
+      'Read-only full task history (progressive disclosure step 2): for up to 5 task ids, returns TASKS ' +
+      'status/title/acceptance, the newest LOG entry (summary, 事实(v2) line, branch/sha, negative results, ' +
+      'handoff) and related DECISIONS lines. Output is fenced and labelled data, not instructions. Never writes.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -287,11 +249,10 @@ export const TOOLS = [
   {
     name: 'relay_doctor',
     description:
-      'Read-only environment diagnosis (7 checks): Node runtime, manifest schema, entry-file projection drift, ' +
-      'stale claim locks, unregistered relay task worktrees, .relay directory integrity, and engine path ' +
-      'consistency (RELAY_HOME / manifest.relayHome). Never writes, never takes the repo write lock, and never ' +
-      'auto-fixes: every problem line starts with "修复:" with an executable instruction. Use it after upgrades ' +
-      'or when install/registration drift is suspected. Repo-rule health is relay_verify territory.',
+      'Read-only diagnosis (7 checks): Node runtime, manifest schema, entry projection drift, stale claim locks, ' +
+      'unregistered task worktrees, .relay integrity, engine path consistency (RELAY_HOME / manifest.relayHome). ' +
+      'Never writes, never takes the repo lock, never auto-fixes: every problem carries a "修复:" instruction. ' +
+      'Use after upgrades or on install drift; repo-rule health is relay_verify.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -302,9 +263,8 @@ export const TOOLS = [
   {
     name: 'relay_rules',
     description:
-      'Return the R-series rule table (R1–R12): which repo rules are machine-checked, what each checks, and where ' +
-      'it is enforced (relay_verify / session_end green gate). Read this when a verify failure is ' +
-      'unclear, or to see the whole rule set without running verify.',
+      'Return the R-series rule table (R1–R12): what each rule checks and where it is enforced (relay_verify / ' +
+      'session_end). Read this when a verify failure is unclear, or for the full rule set without running verify.',
     inputSchema: { type: 'object', properties: {} },
   },
 ];

@@ -132,6 +132,12 @@ try {
     const g = await end(dir, { summary: '白名单命中应放行', done_task: 'T901' });
     ok(!g.isError && g.text.includes('manifest.acceptance.commands 白名单)通过'), 'P1 生效:白名单命令被实际执行并记入出场简报', g.text.slice(0, 400));
 
+    // 文档形态:带 --flag 的多 token 命令(如 crapper --threshold 10)同样命中白名单
+    writeMf(dir, { acceptance: { commands: ['node acc-pass.mjs --threshold 10', 'npm run guard', 'npm run guardfail', 'npm run guardboom'] } });
+    addTask(dir, 'T904', '带选项的质量门命令', 'test:node acc-pass.mjs --threshold 10');
+    const g2 = await end(dir, { summary: '带选项的白名单命令应执行', done_task: 'T904' });
+    ok(!g2.isError && g2.text.includes('manifest.acceptance.commands 白名单)通过'), 'P1 文档形态:带 --flag 的白名单命令可执行', g2.text.slice(0, 300));
+
     // 白名单命中但命令不绿 → 仍拒绝出场(绿灯协议不被绕过)
     addTask(dir, 'T902', '白名单验收红', 'test:npm run guardfail');
     const r2 = await end(dir, { summary: '白名单命令不绿应拒绝', done_task: 'T902' });
@@ -319,6 +325,14 @@ try {
     const top2 = git(dir, 'log', '-1', '--pretty=%s').stdout.trim();
     ok(top2 === 'T905 完成 · 带任务号出场', 'P6 生效:{{task}} 渲染 = 补丁前 head(任务前缀 + 「 · 」)', `got "${top2}"`);
 
+    // v1.7.0:{{evidence}} = verify 三态计数 + 验收执行数;显式使用时上限放宽到 240
+    addTask(dir, 'T906', '证据模板任务', 'node acc.mjs');
+    writeMf(dir, { commitMessageTemplate: '{{task}}{{summary}} [{{evidence}}]', acceptance: { commands: ['node acc.mjs'] } });
+    const ev = await end(dir, { summary: '带证据出场', done_task: 'T906' });
+    const top3 = git(dir, 'log', '-1', '--pretty=%s').stdout.trim();
+    ok(!ev.isError && /verify \d+P\/\d+W\/\d+E/.test(top3) && /验收 \d+ 项/.test(top3), 'P6 生效:{{evidence}} 渲染 verify 计数 + 验收项数', `got "${top3}"`);
+    ok(top3.length <= 240, 'P6 生效:{{evidence}} 模板上限 240 字符', `len=${top3.length}`);
+
     // autoCommit=false → 只更新文件,不落提交,不置错
     writeMf(dir, { autoCommit: false });
     const before = git(dir, 'rev-list', '--count', 'HEAD').stdout.trim();
@@ -394,6 +408,9 @@ try {
     rmSync(dir, { recursive: true, force: true });
   }
 
+} catch (e) {
+  fail += 1;
+  console.log(`\n✗ FATAL: 套件中途未捕获异常,判失败\n${e?.stack || e}`);
 } finally {
   console.log(`\n========== 补丁冒烟结果: ${pass} 通过 / ${fail} 失败 ==========`);
   proc.kill();

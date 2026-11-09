@@ -18,10 +18,41 @@ export const DEFAULT_CONTEXT_BUDGET = 6000;
 //   cacheDir   只允许 controlRoot 内相对路径(绝对路径 / .. / 盘符 / 控制字符 / .git 前缀非法);
 //   ttlHours   非有限数或负数 → 回退 24(不报错);
 //   autoCleanup 只有显式 JSON 布尔 false 才关闭,缺省 true(拼错字段会被忽略并保持默认)。
-// 说人话:配置拼错不会报错,只会静默失效;要改这里先同步 README/CONTRACT 的配置章节。
+// 说人话:配置拼错不会报错,只会静默失效(v1.7.0 起 relay_doctor 会点名未知键并给近似建议);
+// 要改这里先同步 README/CONTRACT 的配置章节。
 export const DEFAULT_WORKTREE_CONFIG = Object.freeze({
   enabled: false, cacheDir: '.relay/worktrees', ttlHours: 24, autoCleanup: true,
 });
+
+// —— manifest 已知键白名单(v1.7.0:doctor 点名拼错,不再纯静默)——
+// 只用于诊断提示,不参与解析:解析仍按上面的铁律走默认值,行为零变化。
+export const KNOWN_MANIFEST_KEYS = Object.freeze([
+  'version', 'projectName', 'preset', 'entryFiles', 'allowedTopLevel', 'docsPhases', 'onboardedAt',
+  'relayHome', 'restructuredAt', 'strictDocs', 'worktree', 'facts', 'acceptance',
+  'commitMessageTemplate', 'autoCommit', 'entryFilesTakeover', 'codeRoots', 'docsRoots',
+  'docsIgnore', 'protectedPaths', 'logBoundary', 'contextBudget',
+]);
+export const KNOWN_NESTED_KEYS = Object.freeze({
+  worktree: ['enabled', 'cacheDir', 'ttlHours', 'autoCleanup'],
+  facts: ['enabled', 'since', 'strict'],
+  logBoundary: ['strict'],
+  acceptance: ['commands'],
+});
+
+// 收集 manifest 里的未知键(顶层 + 四个已知对象内)。纯函数,不做 I/O。
+export const collectUnknownManifestKeys = (m) => {
+  const unknown = [];
+  if (!m || typeof m !== 'object' || Array.isArray(m)) return unknown;
+  for (const k of Object.keys(m)) if (!KNOWN_MANIFEST_KEYS.includes(k)) unknown.push(k);
+  for (const [parent, keys] of Object.entries(KNOWN_NESTED_KEYS)) {
+    const obj = m[parent];
+    if (obj && typeof obj === 'object' && !Array.isArray(obj)) {
+      for (const k of Object.keys(obj)) if (!keys.includes(k)) unknown.push(`${parent}.${k}`);
+    }
+  }
+  return unknown.sort();
+};
+
 
 // —— .gitignore 基线(H3 + worktree 生命周期)——
 // 密钥/私钥/认领锁/注册表/缓存目录不得入库。三个入口共用同一份基线:
@@ -105,6 +136,7 @@ export const readManifestConfig = async (root, { manifest: preloaded } = {}) => 
   const acceptanceCmds = strArr(m && m.acceptance && m.acceptance.commands);
   return {
     manifest: m,
+    unknownManifestKeys: collectUnknownManifestKeys(m),
     codeRoots: codeRoots.length ? codeRoots : [...DEFAULT_CODE_ROOTS],
     docsRoots: docsRoots.length ? docsRoots : [...DEFAULT_DOCS_ROOTS],
     docsIgnore: docsIgnore.map((p) => ({ pattern: p, re: globToRegExp(p) })),

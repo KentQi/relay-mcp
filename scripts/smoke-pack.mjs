@@ -19,6 +19,7 @@ const pkg = JSON.parse(readFileSync(path.join(RELAY, 'package.json'), 'utf8'));
 console.log('== package.json 发布面 ==');
 ok(pkg.private !== true, 'private 已移除(可发布)');
 ok(pkg.bin && pkg.bin['relay-mcp'] === 'src/index.mjs', 'bin 指向 src/index.mjs');
+ok(pkg.bin && pkg.bin.relay === 'src/cli.mjs', 'bin 提供人类/CI 入口 relay → src/cli.mjs');
 ok(Array.isArray(pkg.files) && pkg.files.length > 0, 'files 白名单存在');
 ok(!pkg.dependencies || Object.keys(pkg.dependencies).length === 0, '零运行时依赖');
 ok(pkg.engines && pkg.engines.node === '>=18', 'engines.node >= 18');
@@ -28,6 +29,10 @@ ok(pkg.bugs && /\/issues$/.test(String(pkg.bugs.url || pkg.bugs)), 'bugs 指向�
 
 const indexText = readFileSync(path.join(RELAY, 'src', 'index.mjs'), 'utf8');
 ok(indexText.startsWith('#!/usr/bin/env node'), 'bin 入口带 shebang(可直接执行)');
+const cliText = readFileSync(path.join(RELAY, 'src', 'cli.mjs'), 'utf8');
+ok(cliText.startsWith('#!/usr/bin/env node'), 'CLI 入口带 shebang(可直接执行)');
+const cliVer = spawnSync(process.execPath, [path.join(RELAY, 'src', 'cli.mjs'), '--version'], { encoding: 'utf8', timeout: 30000 });
+ok(cliVer.status === 0 && cliVer.stdout.trim() === pkg.version, 'relay --version 与 package.json 同步', `${cliVer.status}:${cliVer.stdout}`);
 
 console.log('\n== npm pack --dry-run 产物边界 ==');
 // Windows 下 npm 是 .cmd shim,Node 不允许不经 shell 直接 spawn(.cmd/.bat 安全限制),必须走 shell;

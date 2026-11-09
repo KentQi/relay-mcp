@@ -6,6 +6,7 @@
 import { readFileSafe, isGitRepoAsync, gitRun, parseLockContent, templatesDir } from '../util.mjs';
 import { readWorktreeRegistryState, resolveRelayRoots } from './worktree.mjs';
 import { generateEntryFiles } from './sync.mjs';
+import { collectUnknownManifestKeys, KNOWN_MANIFEST_KEYS, KNOWN_NESTED_KEYS } from '../config.mjs';
 import { join, resolve } from 'node:path';
 import { readdir, lstat } from 'node:fs/promises';
 
@@ -27,6 +28,31 @@ const checkNode = () => {
 };
 
 // D2 manifest 可解析 + schema 兼容
+const levenshtein = (a, b) => {
+  const dp = Array.from({ length: a.length + 1 }, (_, i) => [i]);
+  for (let j = 1; j <= b.length; j += 1) dp[0][j] = j;
+  for (let i = 1; i <= a.length; i += 1) {
+    for (let j = 1; j <= b.length; j += 1) {
+      dp[i][j] = Math.min(dp[i - 1][j] + 1, dp[i][j - 1] + 1, dp[i - 1][j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1));
+    }
+  }
+  return dp[a.length][b.length];
+};
+const suggestManifestKey = (key) => {
+  const dot = key.indexOf('.');
+  const parent = dot > 0 ? key.slice(0, dot) : '';
+  const leaf = dot > 0 ? key.slice(dot + 1) : key;
+  const pool = parent && KNOWN_NESTED_KEYS[parent] ? KNOWN_NESTED_KEYS[parent] : KNOWN_MANIFEST_KEYS;
+  let best = '';
+  let bestD = Infinity;
+  for (const c of pool) {
+    const d = levenshtein(leaf, c);
+    if (d < bestD) { bestD = d; best = c; }
+  }
+  if (!best || bestD > Math.max(2, Math.floor(leaf.length / 3))) return '';
+  return parent ? `${parent}.${best}` : best;
+};
+
 const checkManifest = async (root) => {
   const p = join(root, '.relay', 'manifest.json');
   const raw = await readText(p);
@@ -43,6 +69,12 @@ const checkManifest = async (root) => {
   if (!Array.isArray(m.allowedTopLevel)) issues.push('缺 allowedTopLevel(R2 会跳过)');
   if (!Array.isArray(m.entryFiles)) issues.push('缺 entryFiles(R1 用默认三入口)');
   if (issues.length) return warn('D2', 'manifest', issues.join(';'), '按 CONTRACT.md 的 manifest schema 补齐字段;或重跑 relay_onboard(保留既有自定义配置)');
+  // v1.7.0:拼错的键此前纯静默失效;doctor 点名 + 给最近似键建议(仍只读、不阻断)
+  const unknown = collectUnknownManifestKeys(m);
+  if (unknown.length) {
+    const hints = unknown.map((k) => { const s = suggestManifestKey(k); return s ? `${k}(是想写 ${s}?)` : k; });
+    return warn('D2', 'manifest', `未知键:${hints.join(', ')}`, '拼错的键会被静默忽略;按 CONTRACT.md 的 manifest schema 改名或删除该键');
+  }
   return ok('D2', 'manifest', 'schema 兼容,关键字段齐全');
 };
 

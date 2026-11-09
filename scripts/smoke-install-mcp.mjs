@@ -87,6 +87,9 @@ try {
     const unknown = run(['--target', 'nope', '--skip-preflight']);
     ok(unknown.status !== 0 && /未知 --target/.test(unknown.stderr), 'I5: 未知 target 被拒', unknown.stderr);
   }
+} catch (e) {
+  fail += 1;
+  console.log(`\n✗ FATAL: 套件中途未捕获异常,判失败\n${e?.stack || e}`);
 } finally {
   for (const dir of tmpDirs) { try { rmSync(dir, { recursive: true, force: true }); } catch { /* ignore */ } }
   console.log(`\n========== 安装器冒烟结果: ${pass} 通过 / ${fail} 失败 ==========`);
