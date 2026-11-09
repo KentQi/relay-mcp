@@ -14,9 +14,9 @@
 (空——认领后由 relay_claim 移入;认领锁在 .relay/claims/,TTL 4 小时,崩溃会话的认领到期自动可接管)
 
 ## 待办
-- [ ] T031 R13 协议结构机检:任务行/LOG 标题契约校验(WARN 起步,strict 升 ERROR)
-  验收: test:scripts/smoke-structure.mjs
-  备注: 先按减法问登记理由(不扩展 R9 因语义污染,不放 doctor D10 因不在绿闸路径);只查列首协议形状行,剥离 HTML 注释并豁免缩进,避免模板示例误报;WARN 起步,manifest.structure.strict=true 升 ERROR;controlRoot-only,不做续行键白名单;修宪面=CONTRACT 规则表+relay_rules+AGENTS 模板+README R1–R13,并更新 smoke-r12-boundary 的 R1–R12 断言;新增 scripts/smoke-structure.mjs 夹具。
+- [ ] T032 relay_sync 漂移备份不得被自动提交(入 .gitignore 基线 / 移到 .relay/ 备份区)
+  验收: test:scripts/smoke-sync-backup.mjs
+  备注: 证据:本会话 relay_sync 在任务树生成 AGENTS.md.relay-bak-<ts> 未跟踪文件;session_end 的 git add -A 会把它(含旧入口内容)卷进任务分支,且 R11 协议面扫描不覆盖该文件。方案二选一:(a) GITIGNORE_BASELINE 加 *.relay-bak-*;(b) 备份改写到 .relay/backups/ 并保留恢复指引。验收覆盖『制造漂移→relay_sync→git status 无备份→git add -A 后备份不在暂存区』,同时确认备份仍可供人工恢复。
 - [ ] T030 发布 npm(阻塞:包名 `relay-mcp` 属他人 + 本机无 npm 账号)
   验收: 人类注册/登录 npm 后,二选一并执行——(a) 改用 scoped 包 `@<npm-username>/relay-mcp` 发布(`npm publish --access public`);或 (b) 换新的非 scoped 包名(先 `npm view <name>` 确认可用)并同步 README/安装器文案;发布后 `npm view <name>@1.6.0` 可查到
   备注: GitHub v1.6.0 已发;npm 上 relay-mcp@1.2.0 是 derekluo 的另一个项目,不可覆盖;发布仍需人类登录或提供 granular token(agent 不代持凭据)
@@ -26,6 +26,9 @@
   备注: 零 fork 窗口期内一次性完成;重写后旧 commit sha 全部变化
 
 ## 已完成
+- [x] T031 R13 协议结构机检:任务行/LOG 标题契约校验(WARN 起步,strict 升 ERROR)  (2026-11-09)
+  验收: test:scripts/smoke-structure.mjs
+  备注: 先按减法问登记理由(不扩展 R9 因语义污染,不放 doctor D10 因不在绿闸路径);只查列首协议形状行,剥离 HTML 注释并豁免缩进,避免模板示例误报;WARN 起步,manifest.structure.strict=true 升 ERROR;controlRoot-only,不做续行键白名单;修宪面=CONTRACT 规则表+relay_rules+AGENTS 模板+README R1–R13,并更新 smoke-r12-boundary 的 R1–R12 断言;新增 scripts/smoke-structure.mjs 夹具。
 - [x] T029 发布 v1.6.0(GitHub Release + npm 发布)并定版 CHANGELOG  (2026-11-03)
   验收: package.json 与 plugin.json 版本同步 1.6.0;CHANGELOG 定版 1.6.0(2026-11-03);tag v1.6.0 指向发布提交并推送;GitHub Release v1.6.0 出现
   备注: 用户 2026-11-03 授权发布;查 npm registry 后发现 `relay-mcp` 包属他人(derekluo 的 OpenAPI relay),且本机无 npm 账号——npm 发布拆到 T030(GitHub 部分本轮完成)

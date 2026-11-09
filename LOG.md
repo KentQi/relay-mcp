@@ -1,5 +1,15 @@
 # 会话日志(最新在上)
 
+## 2026-11-09 15:00 | model=dsh-lead-deepseek-v4.1 | task=T031 完成
+- 摘要: T031 落地 R13 协议结构机检:新增 checkR13(TASKS 任务行契约/任务号唯一/[~] 带 model+时间/[x] 带完成日期;LOG 条目标题契约;HTML 注释块与缩进行豁免),WARN 起步、manifest.structure.strict 升 ERROR;配置面登记 structure.strict(已知键/嵌套键);修宪 CONTRACT 规则表 + relay_rules + AGENTS 模板 + README R1–R13 + 根 AGENTS.md 重投影,同步 src 注释/skills/插件段范围;新增 scripts/smoke-structure.mjs(18 断言,已入 npm test 链),smoke-r12-boundary 的 README/src 区间断言升级到 R1–R13;npm test 23 套全绿。
+- 事实(v2): mode=managed | 文件 14 | ± +236/-19 | base=7f028d466712620a6ac4747da2a6f9edd9527fa3 | sha=e113002d70eaa536db1bfe5f6152b69817a8a3a8 | branch=relay/T031 || 验收: 通过 | verify: PASS 16·WARN 0·ERROR 0 | 耗时: 40s
+- worktree: branch=relay/T031; sha=e113002d70eaa536db1bfe5f6152b69817a8a3a8; 已验收,未合并(是否合并由人工决定)
+- 负结果: contract.mjs 的规则表是模板字符串,插入 R13 行不能带裸反引号(会提前结束字符串);用纯文本或转义。
+- 负结果: R13 的 PASS 详情必须与 LOG 规模无关:smoke-perf 在 20/100/500 条规模下逐字比较 R1–R11 判定行,详情里写条目数会让它误红。
+- 负结果: relay_sync 漂移备份 AGENTS.md.relay-bak-<ts> 是未跟踪文件,session_end 的 git add -A 会把旧入口内容卷进任务分支(且 R11 不扫描该面);本次已手工删除,已登记 T032。
+- 负结果: R13 只查列首协议形状行并剥离 HTML 注释:模板注释/缩进示例必须豁免,否则新项目 init 即误报。
+- 留给下一个: 证据:本会话 relay_sync 在任务树生成 AGENTS.md.relay-bak-<ts> 未跟踪文件;session_end 的 git add -A 会把它(含旧入口内容)卷进任务分支,且 R11 协议面扫描不覆盖该文件。方案二选一:(a) GITIGNORE_BASELINE 加 *.relay-bak-*;(b) 备份改写到 .relay/backups/ 并保留恢复指引。验收覆盖『制造漂移→relay_sync→git status 无备份→git add -A 后备份不在暂存区』,同时确认备份仍可供人工恢复。
+
 ## 2026-11-09 14:46 | model=dsh-lead-deepseek-v4.1 | task=无
 - 摘要: 维护:同步远端 v1.8.0(main=4adb27e)并补 .gitignore 的 .relay/last-failure.json 基线(v1.8 自举缺口);落 ub-mode 借鉴裁定——新增 T031(R13 协议结构机检,WARN 起步/strict 升 ERROR,待认领)、三条 DECISIONS(质量门只登记观察项及触发条件;否决发散窗口负结果必填;采纳减法问进模板)、templates/DECISIONS.md 加减法字段;修正 README 质量门预设不可执行示例与 CONTRACT 信任边界段同 D9 的矛盾;未改代码,未建质量门/新 skill/负结果强检;首次出场因沙箱下 npm 缓存 EPERM 被拦,改用 /tmp npm 缓存后 npm test 22 套全绿。
 - 事实(v2): mode=single | 文件 5 | ± +30/-4 | base=- | sha=- | branch=main || 验收: 通过 | verify: PASS 11·WARN 0·ERROR 0 | 耗时: 39s
