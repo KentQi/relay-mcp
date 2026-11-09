@@ -1,5 +1,15 @@
 # 会话日志(最新在上)
 
+## 2026-11-09 14:46 | model=dsh-lead-deepseek-v4.1 | task=无
+- 摘要: 维护:同步远端 v1.8.0(main=4adb27e)并补 .gitignore 的 .relay/last-failure.json 基线(v1.8 自举缺口);落 ub-mode 借鉴裁定——新增 T031(R13 协议结构机检,WARN 起步/strict 升 ERROR,待认领)、三条 DECISIONS(质量门只登记观察项及触发条件;否决发散窗口负结果必填;采纳减法问进模板)、templates/DECISIONS.md 加减法字段;修正 README 质量门预设不可执行示例与 CONTRACT 信任边界段同 D9 的矛盾;未改代码,未建质量门/新 skill/负结果强检;首次出场因沙箱下 npm 缓存 EPERM 被拦,改用 /tmp npm 缓存后 npm test 22 套全绿。
+- 事实(v2): mode=single | 文件 5 | ± +30/-4 | base=- | sha=- | branch=main || 验收: 通过 | verify: PASS 11·WARN 0·ERROR 0 | 耗时: 39s
+- 负结果: ub-mode 的 prompt 纪律不能直接当 relay 规则:多数已被 R1–R12/relay-discipline 覆盖,机检分不清表演性合规。
+- 负结果: README 质量门原示例 npx --no-install crapper/dryer 不可执行:crapper 在 npm 上 404,ub-mode 工具是 Python CLI;白名单只执行不安装,文档示例必须是项目真实命令。
+- 负结果: DSH 沙箱 workspace-write 下 ~/.npm 缓存不可写:npm pack EPERM 会拦住 npm test 与出场;先 export npm_config_cache=/tmp/npm-cache 再跑。
+- 负结果: v1.8.0 新增的 .relay/last-failure.json 基线未自举到本仓库 .gitignore:升级项目要 relay_sync 或手工补,否则失败签名可能被 git add -A 卷入提交。
+- 负结果: 不要给发散窗口加负结果必填或前提字段:失败签名已由引擎派生,存在性强检会产表演性合规。
+- 留给下一个: 先按减法问登记理由(不扩展 R9 因语义污染,不放 doctor D10 因不在绿闸路径);只查列首协议形状行,剥离 HTML 注释并豁免缩进,避免模板示例误报;WARN 起步,manifest.structure.strict=true 升 ERROR;controlRoot-only,不做续行键白名单;修宪面=CONTRACT 规则表+relay_rules+AGENTS 模板+README R1–R13,并更新 smoke-r12-boundary 的 R1–R12 断言;新增 scripts/smoke-structure.mjs 夹具。
+
 ## 2026-11-09 13:52 | model=zcode-agent | task=维护
 - 摘要: 发布 v1.7.0(上下文预算 14.6→9.9KB / 质量门编排 / relay-discipline 行为层技能)与 v1.8.0(P3 五项:失败签名、完成状态收敛、崩溃点矩阵+半写死锁修复、任务跨会话告警、白名单命令落点);两版均经 PR #10/#11 CI 三版本绿后 squash merge 并打 tag;npm test 22 套 791 断言全绿
 - 事实(v2): mode=single | 文件 0 | ± +0/-0 | base=- | sha=- | branch=main || 验收: 通过 | verify: PASS 10·WARN 1·ERROR 0 | 耗时: 121s

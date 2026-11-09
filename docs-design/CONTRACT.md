@@ -381,7 +381,7 @@ export const startServer = async ({ onInit, onMethod }) => {
 - **定位**:relay 不内置任何语言/生态特定的质量工具(零依赖是分发底线);CRAP、重复率、变异测试等确定性门由项目以**外部命令**接入,relay 只负责"人类签字 + 逐字符执行 + 失败阻断"。
 - **接线格式**:仅有 `验收: test:<值>` 的任务验收行会进入白名单判定(`src/engines/session.mjs` 的 `acceptanceGate`);自由文本验收不执行。`<值>` 与 `manifest.acceptance.commands` 中的条目**整串逐字符相等**才放行,不做前缀、通配或正则。
 - **格式约束**:值不能以 `.js/.mjs/.cjs/.ts/.tsx` 结尾(否则按测试文件走 `node --test`);不能以 `-` 开头;白名单为空时只接受 js/ts 测试文件。
-- **信任边界**:命中后经 **shell 执行,超时 180 秒**。白名单条目等价于仓库属主对一条命令的签字,因此文档要求外部工具锁版本、在 CI/容器内运行、禁止 relay 自动安装;`relay_doctor` 目前不做命令落点体检(列为后续项,不改变本契约)。
+- **信任边界**:命中后经 **shell 执行,超时 180 秒**。白名单条目等价于仓库属主对一条命令的签字,因此文档要求外部工具锁版本、在 CI/容器内运行、禁止 relay 自动安装;`relay_doctor` 的 D9 会做命令落点体检:路径型首 token 指向仓库外 → WARN;裸命令名交给 PATH,不受影响。
 - **失败语义**:命令非零退出 → 验收门失败 → `relay_session_end` 不写 TASKS/LOG、不提交、保留认领锁,与测试文件验收失败完全同权。
 - **回归**:新增 `scripts/smoke-budget.mjs`(23 断言:体积预算、工具形状、规则条文仍可由 `relay_rules`/`relay://protocol` 取得)与 `scripts/smoke-meta.mjs`(套件不得假绿),接入 `npm test`;`smoke-compat` C4 文案断言改为"描述保留操作语义 + 规则表承载条文"。
 - **relay_doctor 扩为九检**:新增 D8 完成状态收敛(TASKS `[x]` ↔ LOG 完成条目 ↔ registry `controlCommitted`,不一致 → WARN)与 D9 白名单命令落点(路径型首 token 指向仓库外 → WARN);只读语义不变。

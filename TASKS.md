@@ -14,6 +14,9 @@
 (空——认领后由 relay_claim 移入;认领锁在 .relay/claims/,TTL 4 小时,崩溃会话的认领到期自动可接管)
 
 ## 待办
+- [ ] T031 R13 协议结构机检:任务行/LOG 标题契约校验(WARN 起步,strict 升 ERROR)
+  验收: test:scripts/smoke-structure.mjs
+  备注: 先按减法问登记理由(不扩展 R9 因语义污染,不放 doctor D10 因不在绿闸路径);只查列首协议形状行,剥离 HTML 注释并豁免缩进,避免模板示例误报;WARN 起步,manifest.structure.strict=true 升 ERROR;controlRoot-only,不做续行键白名单;修宪面=CONTRACT 规则表+relay_rules+AGENTS 模板+README R1–R13,并更新 smoke-r12-boundary 的 R1–R12 断言;新增 scripts/smoke-structure.mjs 夹具。
 - [ ] T030 发布 npm(阻塞:包名 `relay-mcp` 属他人 + 本机无 npm 账号)
   验收: 人类注册/登录 npm 后,二选一并执行——(a) 改用 scoped 包 `@<npm-username>/relay-mcp` 发布(`npm publish --access public`);或 (b) 换新的非 scoped 包名(先 `npm view <name>` 确认可用)并同步 README/安装器文案;发布后 `npm view <name>@1.6.0` 可查到
   备注: GitHub v1.6.0 已发;npm 上 relay-mcp@1.2.0 是 derekluo 的另一个项目,不可覆盖;发布仍需人类登录或提供 granular token(agent 不代持凭据)

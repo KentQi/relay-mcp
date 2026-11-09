@@ -145,18 +145,20 @@ worktree 清理默认 dry-run：只删除已登记、已过期、非活跃、干
 {
   "acceptance": {
     "commands": [
-      "npx --no-install crapper check --threshold 10",
-      "npx --no-install dryer check --max 0.8"
+      "npm run quality:complexity",
+      "npm run quality:duplication"
     ]
   }
 }
 ```
 
+示例命令是占位命名：替换为项目里真实存在、已锁版本的命令（也可以是工具自身 CLI）。relay 只按白名单执行，不负责安装；不存在或写错的命令会在出场门失败。
+
 任务里对应写（缩进两空格）：
 
 ```
 - [ ] T012 收敛复杂度
-  验收: test:npx --no-install crapper check --threshold 10
+  验收: test:npm run quality:complexity
 ```
 
 约束（写错会静默不生效）：
