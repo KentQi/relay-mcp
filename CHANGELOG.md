@@ -3,6 +3,41 @@
 本项目遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 格式;
 版本号遵循 [SemVer](https://semver.org/lang/zh-CN/)。
 
+## [1.7.0] - 2026-11-09
+
+### Changed(上下文预算)
+
+- `tools/list` 从 14,919 字节降到 **10,165 字节(≈9.9 KB)**:规则条文从工具描述搬回按需读取的 `relay_rules` / `relay://protocol`,描述只保留「何时用 + 关键输入 + 返回什么」;参数描述同步压缩(`ROOT_DESC` 复用 13 处、`worktree`/`preset`/`model` 收敛)
+- 新增 `scripts/smoke-budget.mjs`(**23 断言**):体积 ≤10,240 字节、14 个工具在册、描述非空、规则条文不回流、且仍可由 `relay_rules`/`relay://protocol` 取到;接入 `npm test`
+- `scripts/smoke-compat.mjs` C4 的 8 条文案断言改为「描述保留操作语义 + 规则表承载条文」,避免把实现措辞当契约
+
+### Added(质量门编排)
+
+- README 新增「质量门预设」+ CONTRACT 新增 `2026-11-09 外部质量门白名单契约`:只有 `验收: test:<命令>` 会进白名单,值不能以 js/ts 后缀结尾、不能以 `-` 开头,整串逐字符匹配,命中后经 shell 执行(超时 180s),非零退出与测试失败同权
+- `smoke-patches` 新增文档形态断言:带 `--flag` 的多 token 白名单命令可执行(44 断言)
+
+### Added(行为层技能)
+
+- 新增 `skills/relay-discipline/SKILL.md`:把「先跑通 → 再做对 → 留下证据」逐条绑定到 R1–R12 / relay_verify / acceptance / 事实行,每条都有执法者;与 `relay-protocol`(操作手册)互补
+- `smoke-plugin` 改为按名称校验两个 skill(43–44 断言,无符号链接特权的 Windows 显式跳过 1 条);`validate-plugin` 发现 2 个合规 skill
+
+### Added(可操作性)
+
+- `package.json bin` 新增 **`relay` → `src/cli.mjs`**(人类/CI 入口);`src/cli.mjs` 新增 `--help` / `--version`(退出 0),用法文案同步
+- `smoke-pack` 断言两个 bin、`src/cli.mjs` shebang、`relay --version` 与 `package.json` 同步(37 断言)
+- `{{evidence}}` 提交模板变量:渲染 `verify` 三态计数 + 验收执行数;显式使用时上限 240 字符,默认模板仍逐字符不变;两处渲染统一为 `renderCommitMessage`(managed/单根一致)
+- `relay_doctor` D2:manifest 未知键从「静默忽略」升级为 **WARN 点名 + 最近似键建议**(`worktree.enable → worktree.enabled`),解析行为不变、不新增读盘
+
+### Added(测试框架治理)
+
+- 修复 4 个仍为「无 catch + finally 内 exit」的假绿形态套件(`smoke` / `smoke-patches` / `smoke-install-mcp` / `smoke-plugin`),异常一律显式判负
+- 新增 `scripts/smoke-meta.mjs`(**7 断言**):复现假绿形态并断言其确实 exit 0,正例对照 exit 1,再用静态规则扫描全部 `smoke-*.mjs`;接入 `npm test`
+- 新增 `docs/04-test/08-handoff-case-study-v1.0.md`:从 v1.2.0 → v1.7.0 的真实交接证据链(含假绿事故的完整复现与修复记录)
+
+### 规模
+
+- `npm test` **21 套 / 753 断言**(Windows 无符号链接特权时 4 条显式 SKIP;Linux CI 三版本矩阵全量执行)
+
 ## [1.6.1] - 2026-11-04
 
 ### Fixed(冒烟测试 Windows 可移植性 + 假绿治理;引擎运行时零改动)

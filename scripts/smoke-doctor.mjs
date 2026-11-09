@@ -67,6 +67,17 @@ try {
   ok(/JSON 解析失败/.test(out(d2)) && /修复:/.test(out(d2)), '报告解析失败 + 修复指令');
   writeFileSync(mfPath, mfBackup);
 
+  console.log('\n== fixture 2b:manifest 未知键 → D2 WARN + 改名建议 ==');
+  {
+    const mfUnknown = JSON.parse(mfBackup);
+    mfUnknown.worktree = { ...(mfUnknown.worktree || {}), enable: true };
+    writeFileSync(mfPath, JSON.stringify(mfUnknown, null, 2) + '\n');
+    const du = cli('relay_doctor', {});
+    ok(/D2[^\n]*WARN/.test(out(du)) && /worktree\.enable/.test(out(du)) && /enabled/.test(out(du)),
+      'D2 WARN 点名未知键并建议 worktree.enabled', out(du).slice(0, 400));
+    writeFileSync(mfPath, mfBackup);
+  }
+
   console.log('\n== fixture 3:引擎路径错配 ==');
   const mf = JSON.parse(readFileSync(mfPath, 'utf8'));
   mf.relayHome = '/nonexistent/relay-mcp';

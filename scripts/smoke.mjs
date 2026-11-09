@@ -339,6 +339,10 @@ try {
   const cli = spawnSync2('node', [path.join(RELAY, 'src/cli.mjs'), 'relay_rules']);
   ok(cli.status === 0 && cli.stdout.includes('R9'), 'cli relay_rules 可用');
 
+} catch (e) {
+  // 套件中途异常必须显式判负:吞进 finally 再 exit(0) 会把"没跑完"洗成假绿
+  fail += 1;
+  console.log(`\n✗ FATAL: 套件中途未捕获异常,判失败\n${e?.stack || e}`);
 } finally {
   console.log(`\n========== 冒烟结果: ${pass} 通过 / ${fail} 失败 ==========`);
   proc.kill();

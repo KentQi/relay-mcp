@@ -35,7 +35,7 @@
 - **executionRoot 依赖隔离**:任务 worktree 是独立 checkout,`node_modules`/`.env` 不共享;R8 与测试前需在 executionRoot 内单独安装依赖,claim/session_start 输出包含该提示。
 - **旧项目升级路径**:先 `relay_sync`(重投影入口 + 幂等补 `.gitignore` 运行时基线 + 无标记 AGENTS.md 的可执行迁移指引);`relay_onboard` 以既有 manifest 为基合并,只协调 version/projectName/entryFiles/allowedTopLevel/docsPhases/onboardedAt/relayHome,保留 worktree/autoCommit/acceptance/protectedPaths/entryFilesTakeover 等自定义配置并在报告中列出;claim 启用 worktree 时同样幂等补 .gitignore 基线。`relay_restructure` 提交前也补一次基线。
 - **AGENTS.md 迁移**:R1 无条件要求 AGENTS.md 存在且首行带 `<!-- relay:generated`。缺失 → `relay_sync` 重建;已存在无标记 → `relay_onboard`(备份 + 原正文包进 user-rules)、manifest `entryFilesTakeover:true` 后 `relay_sync`、或手工加标记;verify/sync 输出给出上述可执行选项,不再让修复指令空转。
-- **worktree 配置真值表**:`enabled` 只认 JSON 布尔 `true`(字符串 `"true"`/数字 1 静默按 false);`cacheDir` 只允许 controlRoot 内相对路径(绝对路径、`..`、盘符、控制字符、`.git` 前缀非法,在任何目录创建之前校验);`ttlHours` 非有限数/负数回退 24;`autoCleanup` 仅显式布尔 false 关闭;未知/拼错字段静默忽略;单次 `worktree:true/false` 覆盖配置。无可用 HEAD/git 时 claim 降级为单根并 WARN,不硬失败。
+- **worktree 配置真值表**:`enabled` 只认 JSON 布尔 `true`(字符串 `"true"`/数字 1 静默按 false);`cacheDir` 只允许 controlRoot 内相对路径(绝对路径、`..`、盘符、控制字符、`.git` 前缀非法,在任何目录创建之前校验);`ttlHours` 非有限数/负数回退 24;`autoCleanup` 仅显式布尔 false 关闭;未知/拼错字段静默忽略(解析行为不变,但 v1.7.0 起 `relay_doctor` 会点名并给最近似键建议);单次 `worktree:true/false` 覆盖配置。无可用 HEAD/git 时 claim 降级为单根并 WARN,不硬失败。
 - **registry 恢复**:`.relay/worktrees.json` 损坏 → 完成出场/claim fail-closed,提示备份或删除该运行时注册表(不猜测受管状态);注册表缺失且目录是 linked worktree → 完成出场拒绝,可回到 controlRoot 重新 `relay_claim {worktree:true}` 重建登记;cleanup 对未登记目录只报告不删,注册表损坏时输出恢复指引。
 - **内容 CAS(T002)**:`writeProtocolFile` 支持 `expectedHash`——写入前重读磁盘比对内容哈希,不符则 **fail-closed(不写)**;claim / session_end 在读取 TASKS/LOG 时记录哈希,写前对两个文件同时预检,任一被外部改过就整体拒绝。锁只约束守规矩的 relay 进程(人类手改、旧版本进程、TTL 接管窗口都能绕过),CAS 补上「文件还是不是我读的那份」这一维,两者互补。
 - **锁心跳与崩溃恢复(两把锁语义不同)**:仓库写锁 `.relay/relay.lock` 持锁期间约 20s 心跳续租 + 写前 fencing 校验,长 cleanup/出场不会被 120s stale 规则误判,写入前发现被接管则拒绝;任务认领锁 `.relay/claims/T###.lock` **刻意关闭心跳**,保留 240min TTL 崩溃恢复语义(agent 崩溃后到期可被其他模型接管,不因 server 进程存活而永久占用)。锁协议为 JSON v2(兼容旧文本),model 等字段的换行/控制字符由输入净化拒收,防注入不依赖心跳。
@@ -121,7 +121,7 @@ export const startServer = async ({ onInit, onMethod }) => {
 | `relay_claim` | `{root, task:string, model:string}` | 并行模式:认领任务,标注 model+时间(W4) |
 | `relay_rules` | `{}` | 返回规则 ID 表(哪些可机检、执法点在哪) |
 
-`src/cli.mjs`:`node cli.mjs <toolname> [--root path] [--json k=v ...]` → 复用 dispatch,人类可读输出;`verify.sh` 与 CI 走它。
+`src/cli.mjs`:`relay <toolname> [--root path] [--json k=v ...]`(bin `relay`;等价写法 `node src/cli.mjs`)→ 复用 dispatch,人类可读输出;`--help`/`--version` 退出 0;`verify.sh` 与 CI 走它。
 
 ## 仓库文件格式(跨专家一致性关键,W1 模板与 W4 解析器必须完全对齐)
 
@@ -368,10 +368,19 @@ export const startServer = async ({ onInit, onMethod }) => {
 ## 2026-11-03 Agent Plugins v1.0.0 兼容(仓库根即插件包)
 
 - **规范边界**:Agent Plugins 1.0.0 只定义插件包(根 `plugin.json` 闭集清单 + `skills/` + `mcp.json`);`SKILL.md` 格式与 MCP 线协议分别以 Agent Skills / MCP 规范为准,本仓库不自定义。
-- **插件根 = 仓库根**:根目录放 `plugin.json`(name=relay-mcp,version 与 `package.json` 同步)、`mcp.json`(仅 `$schema` + `mcpServers`;stdio:command 单 token `node`、args 用 `${PLUGIN_ROOT}/src/index.mjs`、cwd `${PLUGIN_ROOT}`)、`skills/relay-protocol/`(可移植操作手册)。`git clone` 即插件,与 npm / installer 分发面并存。
+- **插件根 = 仓库根**:根目录放 `plugin.json`(name=relay-mcp,version 与 `package.json` 同步)、`mcp.json`(仅 `$schema` + `mcpServers`;stdio:command 单 token `node`、args 用 `${PLUGIN_ROOT}/src/index.mjs`、cwd `${PLUGIN_ROOT}`)、`skills/relay-protocol/`(可移植操作手册)与 `skills/relay-discipline/`(行为纪律,绑定 R1–R12)。`git clone` 即插件,与 npm / installer 分发面并存。
 - **不打包可执行文件**:stdio command 用裸 `node`(客户端按平台搜索解析);不引入 `./bin` 包装,避免 Windows 可执行位/解释器差异(规范 §7.2.1 允许裸名;若将来打包可执行文件则必须改插件相对 command)。
 - **技能合规**:`skills/` 的马上级子目录含 `SKILL.md` 才算 skill;frontmatter 仅 name/description/license/compatibility/metadata/allowed-tools,name 必须等于目录名、≤64 且小写连字符,description 1–1024;不递归搜索更深层。
 - **失败隔离**(规范 §6.2/§7.2.2):manifest 除未知顶层字段/非对象 extensions 外任一 schema 违规 → 拒绝整个插件;mcp.json 无效只禁用 MCP;单个 server/skill 无效只跳过该组件,其他组件继续加载。
-- **校验器**:`scripts/validate-plugin.mjs`(零依赖)按规范做静态校验(manifest 闭集/MCP 变体与占位符/skills frontmatter/realpath 不逃出插件根),`node scripts/validate-plugin.mjs` 退出码 0/1;`scripts/smoke-plugin.mjs`(39 断言,含 13 个负例与真实 initialize/tools/list 握手)接入 `npm test`。
+- **校验器**:`scripts/validate-plugin.mjs`(零依赖)按规范做静态校验(manifest 闭集/MCP 变体与占位符/skills frontmatter/realpath 不逃出插件根),`node scripts/validate-plugin.mjs` 退出码 0/1;`scripts/smoke-plugin.mjs`(43–44 断言,含规范负例与真实 initialize/tools/list 握手;无符号链接特权的 Windows 显式跳过 1 条)接入 `npm test`。
 - **打包面**:`package.json files` 加入 `plugin.json` / `mcp.json` / `skills/` / `scripts/validate-plugin.mjs`;`smoke-pack` 断言插件文件进包、开发文档不进包。
 - **修宪**:`.relay/manifest.json allowedTopLevel` 增加 `plugin.json` / `mcp.json` / `skills`(受保护路径,单独提交,人类可审计)。
+## 2026-11-09 外部质量门白名单契约(acceptance.commands)
+
+- **定位**:relay 不内置任何语言/生态特定的质量工具(零依赖是分发底线);CRAP、重复率、变异测试等确定性门由项目以**外部命令**接入,relay 只负责"人类签字 + 逐字符执行 + 失败阻断"。
+- **接线格式**:仅有 `验收: test:<值>` 的任务验收行会进入白名单判定(`src/engines/session.mjs` 的 `acceptanceGate`);自由文本验收不执行。`<值>` 与 `manifest.acceptance.commands` 中的条目**整串逐字符相等**才放行,不做前缀、通配或正则。
+- **格式约束**:值不能以 `.js/.mjs/.cjs/.ts/.tsx` 结尾(否则按测试文件走 `node --test`);不能以 `-` 开头;白名单为空时只接受 js/ts 测试文件。
+- **信任边界**:命中后经 **shell 执行,超时 180 秒**。白名单条目等价于仓库属主对一条命令的签字,因此文档要求外部工具锁版本、在 CI/容器内运行、禁止 relay 自动安装;`relay_doctor` 目前不做命令落点体检(列为后续项,不改变本契约)。
+- **失败语义**:命令非零退出 → 验收门失败 → `relay_session_end` 不写 TASKS/LOG、不提交、保留认领锁,与测试文件验收失败完全同权。
+- **回归**:新增 `scripts/smoke-budget.mjs`(23 断言:体积预算、工具形状、规则条文仍可由 `relay_rules`/`relay://protocol` 取得)与 `scripts/smoke-meta.mjs`(套件不得假绿),接入 `npm test`;`smoke-compat` C4 文案断言改为"描述保留操作语义 + 规则表承载条文"。
+

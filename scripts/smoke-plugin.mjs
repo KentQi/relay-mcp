@@ -97,12 +97,16 @@ try {
   ok(hs.tools?.includes('relay_verify') && hs.tools?.includes('relay_session_end') && hs.tools?.includes('relay_archive_log'), '关键工具在清单内');
 
   console.log('\n== C. skills/ 发现与 Agent Skills 合规 ==');
-  ok(v.skills.length === 1 && v.skills[0].name === 'relay-protocol' && v.skills[0].valid, '发现 1 个合规 skill:relay-protocol', JSON.stringify(v.skills.map((s) => s.name)));
-  const sk = v.skills[0]?.data || {};
-  ok(sk.name === 'relay-protocol', 'skill name 等于父目录名');
-  ok(typeof sk.description === 'string' && sk.description.length > 0 && sk.description.length <= 1024, 'skill description 1–1024 字符', String(sk.description?.length));
-  ok(sk.license === 'MIT' && typeof sk.compatibility === 'string' && sk.compatibility.length <= 500, 'skill license/compatibility 合规');
-  ok(Object.keys(sk).every((k) => SKILL_FIELDS.has(k)), 'skill frontmatter 只用规范字段');
+  const skillNames = v.skills.map((s) => s.name);
+  ok(v.skills.length === 2 && v.skills.every((s) => s.valid), '发现 2 个合规 skill', JSON.stringify(skillNames));
+  ok(skillNames.includes('relay-protocol') && skillNames.includes('relay-discipline'), 'relay-protocol 与 relay-discipline 均在册', JSON.stringify(skillNames));
+  for (const name of ['relay-protocol', 'relay-discipline']) {
+    const sk = v.skills.find((s) => s.name === name)?.data || {};
+    ok(sk.name === name, `skill name 等于父目录名(${name})`);
+    ok(typeof sk.description === 'string' && sk.description.length > 0 && sk.description.length <= 1024, `skill description 1–1024 字符(${name})`, String(sk.description?.length));
+    ok(sk.license === 'MIT' && typeof sk.compatibility === 'string' && sk.compatibility.length <= 500, `skill license/compatibility 合规(${name})`);
+    ok(Object.keys(sk).every((k) => SKILL_FIELDS.has(k)), `skill frontmatter 只用规范字段(${name})`);
+  }
 
   console.log('\n== D. 规范负例:插件级 fatal(客户端拒绝整个插件) ==');
   const badName = validatePlugin(writeFixture(baseManifest({ name: 'Relay-MCP' })));
@@ -142,7 +146,8 @@ try {
     writeFileSync(join(outside, 'SKILL.md'), validSkill('esc'));
     const dir = writeFixture(baseManifest());
     mkdirSync(join(dir, 'skills'), { recursive: true });
-    symlinkSync(outside, join(dir, 'skills', 'esc'));
+    // Windows 无 SeCreateSymbolicLinkPrivilege 时目录符号链接建不出来(EPERM);改用 junction
+    symlinkSync(outside, join(dir, 'skills', 'esc'), process.platform === 'win32' ? 'junction' : 'dir');
     const esc = validatePlugin(dir);
     ok(esc.pluginValid && !esc.skillsValid && esc.skills.length === 0 && esc.issues.some((i) => /符号链接且解析到插件根之外/.test(i.message)), 'skills 符号链接逃逸 → 跳过该 skill(不越界读取)');
   }
@@ -150,9 +155,15 @@ try {
     const outside = mkTmp('relay-plugin-outside-json-');
     writeFileSync(join(outside, 'plugin.json'), JSON.stringify(baseManifest()));
     const dir = mkTmp('relay-plugin-symlink-json-');
-    symlinkSync(join(outside, 'plugin.json'), join(dir, 'plugin.json'));
-    const esc = validatePlugin(dir);
-    ok(!esc.pluginValid && esc.issues.some((i) => /符号链接且解析到插件根之外/.test(i.message)), 'plugin.json 符号链接逃逸 → 拒绝整个插件(§4.1.1)');
+    let fileSymLinked = true;
+    try { symlinkSync(join(outside, 'plugin.json'), join(dir, 'plugin.json')); } catch { fileSymLinked = false; }
+    if (fileSymLinked) {
+      const esc = validatePlugin(dir);
+      ok(!esc.pluginValid && esc.issues.some((i) => /符号链接且解析到插件根之外/.test(i.message)), 'plugin.json 符号链接逃逸 → 拒绝整个插件(§4.1.1)');
+    } else {
+      // 无符号链接特权的 Windows 建不出文件符号链接;该守卫由 Linux CI 覆盖,这里显式跳过而不是静默漏跑
+      console.log('  ↷ SKIP plugin.json 符号链接逃逸 — 本机无符号链接特权(EPERM);由 Linux CI 覆盖');
+    }
   }
 
   console.log('\n== G. 校验器 CLI 退出码 ==');
@@ -163,6 +174,9 @@ try {
     });
     ok(r.code === 0 && /合规\(0 fatal\)/.test(r.out), 'validate-plugin.mjs 对本仓库退出码 0');
   }
+} catch (e) {
+  fail += 1;
+  console.log(`\n✗ FATAL: 套件中途未捕获异常,判失败\n${e?.stack || e}`);
 } finally {
   for (const d of tmpDirs) { try { rmSync(d, { recursive: true, force: true }); } catch { /* ignore */ } }
   console.log(`\n结果: ${pass} 通过 / ${fail} 失败`);

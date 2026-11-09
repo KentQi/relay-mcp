@@ -1,24 +1,32 @@
 #!/usr/bin/env node
 // relay-mcp — src/cli.mjs (W2)
-// `node cli.mjs <tool> [--root path] [--json '{...}' | --json k=v k=v ...]`
+// `relay <tool> [--root path] [--json '{...}' | --json k=v k=v ...]`
 // 复用 contract.mjs 的 dispatch,人类可读输出;isError → exit code 1。
 // verify.sh 与 CI(workflow-relay.yml)通过本文件调用 relay_verify。
+import { readFileSync } from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { dispatch } from './contract.mjs';
+
+const PKG_PATH = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', 'package.json');
 
 const USAGE = `relay-mcp CLI — relay protocol tools from the shell
 
 用法:
-  node src/cli.mjs <tool> [--root <path>] [--json '<JSON 对象>' | --json k=v k=v ...]
+  relay <tool> [--root <path>] [--json '<JSON 对象>' | --json k=v k=v ...]
+  node src/cli.mjs <tool> ...        (等价写法,无需安装)
 
 示例:
-  node src/cli.mjs relay_verify --root /path/to/repo
-  node src/cli.mjs relay_verify --json '{"root":"/path/to/repo","full":true}'
-  node src/cli.mjs relay_claim --root . --json task=T003 model=claude
+  relay relay_verify --root /path/to/repo
+  relay relay_verify --json '{"root":"/path/to/repo","full":true}'
+  relay relay_claim --root . --json task=T003 model=claude
 
 说明:
   --root  等价于 --json 里的 root,缺省为当前目录(显式 --root 优先)
   --json  值若以 { 开头按整段 JSON 解析;否则按 k=v 对解析(v 会尝试 JSON 解析,
           失败则按字符串),布尔/数字自动识别
+  -h, --help     显示本帮助
+  -v, --version  显示版本
   退出码: 0 = 成功;1 = 工具返回 isError;2 = 命令行用法错误`;
 
 const failUsage = (msg) => {
@@ -35,6 +43,16 @@ const parseValue = (raw) => {
 };
 
 const argv = process.argv.slice(2);
+if (argv[0] === '-h' || argv[0] === '--help') {
+  process.stdout.write(`${USAGE}\n`);
+  process.exit(0);
+}
+if (argv[0] === '-v' || argv[0] === '--version') {
+  let version = 'unknown';
+  try { version = JSON.parse(readFileSync(PKG_PATH, 'utf8')).version || 'unknown'; } catch { /* 打包损坏时仍可输出版本占位 */ }
+  process.stdout.write(`${version}\n`);
+  process.exit(0);
+}
 if (argv.length === 0 || argv[0].startsWith('-')) {
   failUsage(`缺少工具名。第一个参数必须是工具名,例如 relay_verify。`);
 }
