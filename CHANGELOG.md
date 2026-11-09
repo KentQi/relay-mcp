@@ -3,6 +3,28 @@
 本项目遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 格式;
 版本号遵循 [SemVer](https://semver.org/lang/zh-CN/)。
 
+## [1.9.0] - 2026-11-09
+
+### Added(协议结构机检)
+
+- **R13 协议结构机检**(T031):TASKS 任务行必须匹配契约正则且任务号唯一,`[~]` 必须带 `(model, YYYY-MM-DD HH:mm)`、`[x]` 必须带 `(YYYY-MM-DD)`;LOG 条目标题必须匹配契约;先剥离 HTML 注释块并只认列首行,缩进行与模板示例豁免;默认 WARN,`manifest.structure.strict=true` 升 ERROR;`structure` 纳入 manifest 已知键/嵌套键白名单;新增 `scripts/smoke-structure.mjs`(18 断言)
+- CONTRACT 规则表 / `relay_rules` / AGENTS 模板 / 根 AGENTS.md / README 同步至 **R1–R13**(插件描述同步)
+
+### Fixed(备份与诊断)
+
+- **漂移备份不再被自动提交**(T032):`*.relay-bak-*` 加入 `.gitignore` 运行时基线(init/onboard/sync/restructure 共用),旧项目由 `relay_sync` 幂等补齐;新增 `scripts/smoke-sync-backup.mjs`(18 断言,覆盖根入口与 `.relay` 嵌套备份)
+- **relay_doctor D8 归档盲区**(T033):完成状态证据面扩展为 `LOG.md` + `docs/archive/*.md`;归档指针悬空/越界/为空/逃出仓库 → WARN(fail-closed,任务恰好被 LOG 覆盖也不静默 PASS);新增 `scripts/smoke-doctor-archive.mjs`(7 断言)
+
+### Changed(文档与历史)
+
+- 历史回填:人工批准后把 T006/T007 完成条目补记到 `docs/archive/LOG-2026-09-11.md`(带 commit 证据指针,不改既有记录),并把两条 `[x]` 任务归位到 TASKS「已完成」区
+- 文档漂移修正:README 冒烟套件计数 22→25;SPEC AC1 改为「npm test(当前 25 套)全绿」;T030 验收文案更新到 1.9.0 语境
+- 本仓库 `relay_doctor` 转为健康(D8 0 WARN)
+
+### 规模
+
+- `npm test` **25 套**;CI 覆盖 Node 22 / 24 / 26
+
 ## [1.8.0] - 2026-11-09
 
 ### Added(P3 观察项)
