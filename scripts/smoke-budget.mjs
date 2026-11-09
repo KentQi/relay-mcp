@@ -3,6 +3,7 @@
 // 规则条文应留在 relay_rules / relay://protocol(按需读取),不膨胀工具描述。
 // 预算 = 10 KiB(UTF-8). 超了要么压缩描述,要么把内容搬进资源,不允许悄悄涨。
 import { TOOLS, RESOURCES, dispatch } from '../src/contract.mjs';
+import { renderCommitMessage, evidenceSummary } from '../src/engines/session.mjs';
 
 const BUDGET_BYTES = 10240;
 const EXPECTED_TOOLS = [
@@ -40,6 +41,16 @@ try {
   const rulesText = ((await dispatch('relay_rules', {})).content || []).map((c) => c.text || '').join('\n');
   ok(rulesText.includes('worktree 配置真值表'), 'RULES_TEXT 仍含配置真值表');
   ok(rulesText.includes('ignored'), 'RULES_TEXT 仍含 ignored 保护');
+
+  console.log('\n== 提交模板渲染(managed/单根共享实现)==');
+  ok(renderCommitMessage('relay: session end — {{task}}{{summary}}', { task: 'T003 完成 · ', summary: 'x' })
+    === 'relay: session end — T003 完成 · x', '默认模板渲染逐字符不变');
+  ok(renderCommitMessage('{{taskId}} {{evidence}}', { taskId: 'T003', evidence: 'verify 1P/0W/0E · 验收 1 项' })
+    === 'T003 verify 1P/0W/0E · 验收 1 项', '{{evidence}} 渲染');
+  ok(renderCommitMessage('{{summary}}', { summary: 'x'.repeat(300) }).length === 80, '无 {{evidence}} 时上限 80');
+  ok(renderCommitMessage('{{evidence}}', { evidence: 'x'.repeat(300) }, { maxLen: 240 }).length === 240, '含 {{evidence}} 时上限 240');
+  ok(evidenceSummary([{ result: 'PASS' }, { result: 'WARN' }], [{ result: 'ERROR' }], { executed: 2 })
+    === 'verify 1P/1W/1E · 验收 2 项', 'evidenceSummary 汇总格式');
 
   console.log(`\n结果: ${pass} 通过 / ${fail} 失败`);
 } catch (e) {

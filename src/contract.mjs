@@ -249,10 +249,10 @@ export const TOOLS = [
   {
     name: 'relay_doctor',
     description:
-      'Read-only diagnosis (7 checks): Node runtime, manifest schema, entry projection drift, stale claim locks, ' +
-      'unregistered task worktrees, .relay integrity, engine path consistency (RELAY_HOME / manifest.relayHome). ' +
-      'Never writes, never takes the repo lock, never auto-fixes: every problem carries a "修复:" instruction. ' +
-      'Use after upgrades or on install drift; repo-rule health is relay_verify.',
+      'Read-only diagnosis (9 checks): Node runtime, manifest schema, entry projection drift, stale claim locks, ' +
+      'unregistered task worktrees, .relay integrity, engine path, completion-state convergence, acceptance-command ' +
+      'landing. Never writes, never takes the repo lock, never auto-fixes: every problem carries a "修复:" ' +
+      'instruction. Use after upgrades or on install drift; repo-rule health is relay_verify.',
     inputSchema: {
       type: 'object',
       properties: {

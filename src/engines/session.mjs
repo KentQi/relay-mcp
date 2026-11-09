@@ -12,7 +12,7 @@ import {
   gitRun, findSensitiveChanges, releaseFileLock, stamp, nowIso, templatesDir,
   writeProtocolFile, scanSecrets, SECRET_OK_MARKER, sha256Hex,
 } from '../util.mjs';
-import { stat as fsStat, writeFile as fsWriteFile } from 'node:fs/promises';
+import { stat as fsStat, writeFile as fsWriteFile, mkdir as fsMkdir, rm as fsRm } from 'node:fs/promises';
 import { join, resolve, sep, isAbsolute as pathIsAbsolute } from 'node:path';
 import { execFile, exec } from 'node:child_process';
 import { promisify } from 'node:util';
@@ -589,6 +589,24 @@ export const relaySessionStart = async (args = {}) => {
   // verify 快检(fast:跳过 R5/R6/R8);复用本函数已读的 manifest/LOG/TASKS(单轮读取各 1 次)
   const checks = await runChecks(root, { full: false, meta: { manifest, cfg: briefCfg }, texts: { logText, tasksText } });
   const errors = checks.filter((c) => c.result === 'ERROR');
+  // P3-1:上次失败签名 vs 本次 fast verify 的 ERROR 集合
+  const curSig = failureSignature(checks);
+  const prevFail = await readFailureMark(root);
+  const failureNote = prevFail
+    ? (curSig && prevFail.signature === curSig
+      ? `- ⚠ 与上次失败签名相同(${curSig}):同一前提连续失败——先重述前提或升级人类,不要再用同一修法`
+      : `- 上次出场失败于 ${prevFail.at || '(未知时间)'}(签名 ${prevFail.signature || '?'});本次失败签名 ${curSig || '(无)'}`)
+    : '';
+  // P3-4:任务跨会话计数(LOG 中同一 T### 的条目数);≥3 提示拆分任务粒度
+  const sessionCounts = {};
+  for (const e of parseLogEntries(String(logText || ''))) {
+    const m = String(e.task || '').match(/^(T\d+)/);
+    if (m) sessionCounts[m[1]] = (sessionCounts[m[1]] || 0) + 1;
+  }
+  const watchTask = inProgress[0]?.id || firstTodo?.id;
+  const taskSizeNote = watchTask && (sessionCounts[watchTask] || 0) >= 3
+    ? `- ⚠ 任务 ${watchTask} 已跨 ${sessionCounts[watchTask]} 个会话:粒度可能过大,拆成可在一个会话内验收的小步(验收行用 test: 红灯)`
+    : '';
   // SKIP 项折叠为单行(认知审计:R5/R6/R8 三条重复提示占简报中部注意力,信息增益≈0)
   const skips = checks.filter((c) => c.result === 'SKIP');
   const briefChecks = [
@@ -642,6 +660,8 @@ export const relaySessionStart = async (args = {}) => {
     // 生效配置回显(T015):manifest 未知字段静默忽略是已文档化的漂移陷阱,一行回显让配置错误当场可见。
     `- 生效配置: worktree=${briefWt ? `enabled=${briefWt.enabled},cacheDir=${briefWt.cacheDir},ttl=${briefWt.ttlHours}h,autoCleanup=${briefWt.autoCleanup}` : '不可读'} facts=${briefCfg.facts.enabled ? `on(since=${briefCfg.facts.since || '未设'},strict=${briefCfg.facts.strict})` : 'off'} contextBudget=${briefCfg.contextBudget}`,
     ...lifecycleNotes,
+    ...(failureNote ? [failureNote] : []),
+    ...(taskSizeNote ? [taskSizeNote] : []),
     '',
     '## 目标',
     ...specBriefLines().map((l) => `- ${l}`),
@@ -926,10 +946,17 @@ const completionOwnershipError = async (root, doneTask, model) => {
   }
   if (p.status === 'x') {
     const log = await readText(join(root, 'LOG.md'));
-    const canReplay = log != null && parseLogEntries(log)
-      .some((e) => e.model === model && e.task === `${doneTask} 完成`);
-    if (!canReplay) {
-      return `${doneTask} 已完成;只有原完成模型可以幂等重跑,当前 model=${model} 无对应完成日志。\n\n修复:由原作者重跑,或省略 done_task 进行普通维护出场。`;
+    const entries = log != null ? parseLogEntries(log) : [];
+    const hasCompletionLog = entries.some((e) => e.model === model && e.task === `${doneTask} 完成`);
+    if (!hasCompletionLog) {
+      // 半写恢复:出场在 TASKS 写完后、LOG 写前崩溃 → 完成戳在、完成日志缺席。
+      // 只允许仍持有该任务认领锁的原模型补写(防他人冒领);锁不在则维持拒绝,交给人工。
+      const lockRaw = await readFileSafe(lockPathOf(root, doneTask), null);
+      const lockRec = lockRaw ? parseLockContent(lockRaw) : null;
+      const holdsClaim = !!(lockRec && !lockRec.corrupt && lockRec.token && lockRec.holder === model);
+      if (!holdsClaim) {
+        return `${doneTask} 已完成;只有原完成模型可以幂等重跑,当前 model=${model} 无对应完成日志。\n\n修复:由原作者重跑,或省略 done_task 进行普通维护出场。`;
+      }
     }
   }
   return null;
@@ -942,7 +969,7 @@ const completionOwnershipError = async (root, doneTask, model) => {
 // 提交信息模板渲染(v1.7.0):{{task}}/{{taskId}}/{{summary}}/{{evidence}} 一处实现,managed 与单根共用。
 // 默认模板(不含 {{evidence}})上限仍是 80 字符——与 v1.0.0 逐字符一致;显式使用 {{evidence}} 时
 // 放宽到 240,否则证据会被截断成无意义前缀。codePointSafe 用于人工命令串(避免切碎代理对)。
-const renderCommitMessage = (tpl, vars, { maxLen = 80, codePointSafe = false } = {}) => {
+export const renderCommitMessage = (tpl, vars, { maxLen = 80, codePointSafe = false } = {}) => {
   const rendered = String(tpl)
     .replaceAll('{{task}}', vars.task || '')
     .replaceAll('{{taskId}}', vars.taskId || '')
@@ -952,12 +979,34 @@ const renderCommitMessage = (tpl, vars, { maxLen = 80, codePointSafe = false } =
 };
 
 // 事实行/提交信息共用的证据摘要:verify 三态计数 + 验收执行数(不包含规则条文,保持一行可读)
-const evidenceSummary = (controlResults, taskResults, acc) => {
+export const evidenceSummary = (controlResults, taskResults, acc) => {
   const rows = [...(controlResults || []), ...(taskResults || [])];
   const count = (state) => rows.filter((r) => r.result === state).length;
   const parts = [`verify ${count('PASS')}P/${count('WARN')}W/${count('ERROR')}E`];
   if (acc && Number.isFinite(acc.executed)) parts.push(`验收 ${acc.executed} 项`);
   return parts.join(' · ');
+};
+
+// 失败签名(P3-1):只记 ERROR 规则 ID 集合,不写协议文件;`.relay/last-failure.json` 是运行时诊断,
+// 在 .gitignore 基线里(不入库、不参与 R1–R12)。同一签名连续出现 = 同一前提连续失败。
+const FAILURE_MARK = '.relay/last-failure.json';
+const failureSignature = (results) => [...new Set((results || [])
+  .filter((r) => r.result === 'ERROR')
+  .map((r) => String(r.id || '').trim())
+  .filter(Boolean))].sort().join(',');
+const readFailureMark = async (root) => {
+  const raw = await readFileSafe(join(root, FAILURE_MARK), null);
+  if (!raw) return null;
+  try { return JSON.parse(raw); } catch { return null; }
+};
+const writeFailureMark = async (root, signature, extra = {}) => {
+  try {
+    await fsMkdir(join(root, '.relay'), { recursive: true });
+    await fsWriteFile(join(root, FAILURE_MARK), `${JSON.stringify({ signature, at: stamp(), ...extra }, null, 2)}\n`, 'utf8');
+  } catch { /* 运行时诊断写失败不改变出场语义 */ }
+};
+const clearFailureMark = async (root) => {
+  try { await fsRm(join(root, FAILURE_MARK), { force: true }); } catch { /* ignore */ }
 };
 
 export const relaySessionEnd = async (args = {}) => {
@@ -1151,6 +1200,13 @@ export const relaySessionEnd = async (args = {}) => {
       out.push('', '另附 WARN(不阻断,建议一并处理):');
       for (const w of warns) out.push(`- ${w.id} ${w.detail}`);
     }
+    // P3-1:同一 ERROR 集合连续两次 → 提示同一前提连续失败(只写运行时诊断,不碰协议文件)
+    const failSig = failureSignature([...controlResults, ...taskResults]);
+    const prevFailMark = await readFailureMark(root);
+    if (prevFailMark && failSig && prevFailMark.signature === failSig) {
+      out.push('', `⚠ 与上次失败签名相同(${failSig}):同一前提连续失败——先重述前提或升级人类,不要再用同一修法。`);
+    }
+    await writeFailureMark(root, failSig, { task: doneTask || null, scope: 'verify' });
     out.push('', '---', '', formatChecks(controlResults, { root, full: true }));
     if (taskResults.length) {
       out.push('', formatChecks(taskResults, { root: executionRoot, full: false, mode: 'executionRoot 任务树(R7/R9/R10/R11/R12 只在 controlRoot 跑)' }));
@@ -1167,6 +1223,12 @@ export const relaySessionEnd = async (args = {}) => {
     for (const f of acc.fails) out.push(`- ${f.split('\n').join('\n  ')}`);
     out.push('', '修复:让上述测试真正通过(而不是删测试/改验收行),再重跑 relay_session_end。');
     if (acc.lines.length) out.push('', '已通过的验收:', ...acc.lines);
+    // P3-1:验收失败也记签名(ACCEPTANCE),连续两次同样失败同样提示
+    const prevAccMark = await readFailureMark(root);
+    if (prevAccMark && prevAccMark.signature === 'ACCEPTANCE') {
+      out.push('', '⚠ 与上次失败签名相同(ACCEPTANCE):第一次是修复无效,不要再用同一前提——先重述失败根因或升级人类。');
+    }
+    await writeFailureMark(root, 'ACCEPTANCE', { task: doneTask || null, scope: 'acceptance' });
     return { content: [{ type: 'text', text: out.join('\n') }], isError: true };
   }
   const redLights = await redLightCheck(root, next, cfg, executionRoot);
@@ -1465,6 +1527,8 @@ export const relaySessionEnd = async (args = {}) => {
   if (logTextOut != null) {
     await writeProtocolFile(root, 'LOG.md', logTextOut, { token: exitLock.token, lockLabel: '仓库写锁', expectedHash: logHashBefore });
   }
+  // 崩溃点矩阵(测试钩子):两个协议文件已写、提交尚未发生 —— 验证重跑能补交且不重复记账
+  if (process.env.RELAY_CRASH_BEFORE_COMMIT === '1') process.exit(137);
   // 5/6. 提交分支:护栏 → 不提交;否则 add -A + commit;失败 → 降级
   // 提交消息携带「T### 完成」token:TASKS 完成行不记 sha(自指无解),考古靠 git log --grep
   const firstLine = summary.split('\n')[0].trim();
@@ -1727,6 +1791,7 @@ export const relaySessionEnd = async (args = {}) => {
     out.push('', '## 锁释放告警', `- ⚠ ${exitRelease.warning}(本会话写入已完成;若锁已被接管,请检查是否有并发出场)`);
   }
   out.push('', `- 出场时间: ${stamp()}(ISO ${nowIso()})`);
+  await clearFailureMark(root); // 出场成功:清掉失败签名,下一次失败重新计数
   return { content: [{ type: 'text', text: out.join('\n') }], isError: false };
   } finally {
     const fallbackRelease = await exitLock.release();
