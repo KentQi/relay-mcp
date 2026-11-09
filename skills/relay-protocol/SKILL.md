@@ -2,7 +2,7 @@
 name: relay-protocol
 description: >
   用 relay-mcp 的仓库接力协议接续多模型 / 多会话开发。开工先 relay_session_start 拿简报,
-  按 TASKS 认领任务,代码小步实现后 relay_verify 自检,收尾用 relay_session_end 过 R1–R12
+  按 TASKS 认领任务,代码小步实现后 relay_verify 自检,收尾用 relay_session_end 过 R1–R13
   绿闸并留下事实底账。需要新建 / 接入 / 标准化项目时用 relay_init / relay_onboard /
   relay_restructure。适用于长任务交接、会话中断恢复、多 agent 并行与人类审计场景。
 license: MIT
@@ -11,7 +11,7 @@ compatibility: 需要 Node.js >= 18;MCP server relay-mcp 必须可用
 
 # relay-protocol — 仓库即交接棒
 
-relay-mcp 把交接状态写进仓库文件(START / SPEC / DECISIONS / TASKS / LOG),由 R1–R12 机检规则与可执行验收共同守门。本技能是使用这套协议的操作手册。
+relay-mcp 把交接状态写进仓库文件(START / SPEC / DECISIONS / TASKS / LOG),由 R1–R13 机检规则与可执行验收共同守门。本技能是使用这套协议的操作手册。
 
 ## 何时用
 

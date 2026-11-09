@@ -5,7 +5,7 @@
 [![Node](https://img.shields.io/badge/node-%E2%89%A518-brightgreen)](package.json)
 [![deps](https://img.shields.io/badge/dependencies-0-blue)](package.json)
 
-**多模型、多会话开发的接力协议 MCP server。** 状态存放在仓库文件中，由 R 系列机检规则（R1–R12）与可执行验收共同守门。
+**多模型、多会话开发的接力协议 MCP server。** 状态存放在仓库文件中，由 R 系列机检规则（R1–R13）与可执行验收共同守门。
 
 **[中文](#中文) | [English](#english)**
 
@@ -48,7 +48,7 @@ relay-mcp/
 ├── mcp.json                        # stdio MCP server：node + ${PLUGIN_ROOT}/src/index.mjs
 └── skills/
     ├── relay-protocol/SKILL.md     # 可移植 Skill：relay 协议操作手册
-    └── relay-discipline/SKILL.md   # 可移植 Skill：写代码时的行为纪律（绑定 R1–R12）
+    └── relay-discipline/SKILL.md   # 可移植 Skill：写代码时的行为纪律（绑定 R1–R13）
 ```
 
 `mcp.json` 使用插件变量：`args: ["${PLUGIN_ROOT}/src/index.mjs"]`、`cwd: "${PLUGIN_ROOT}"`；`PLUGIN_ROOT` / `PLUGIN_DATA` 由客户端展开并注入子进程。静态校验（零依赖）与退出码：
@@ -180,6 +180,7 @@ worktree 清理默认 dry-run：只删除已登记、已过期、非活跃、干
 
 - 密钥守卫：`.env*`、`*secret*`、`*credential*`、`*.key`、`*.pem`、`id_rsa` 不自动提交。
 - LOG 边界（R12）：LOG 活跃区（归档指针之前的行）超过 150 行、或完成条目超过 20 条 → `relay_verify` 报 WARN（`manifest.logBoundary.strict=true` 升 ERROR）；只报警不自动归档，归档动作由人工决定（`docs/archive/` + 指针）；指针必须指向仓库内真实存在的归档文件，失效指针 → WARN 而非静默 PASS。
+- 协议结构（R13）：TASKS 任务行必须匹配契约正则且任务号唯一，`[~]` 带 `(model, YYYY-MM-DD HH:mm)`、`[x]` 带 `(YYYY-MM-DD)`；LOG 条目标题必须匹配 `## 时间 | model=<名> | task=<T### …>`；HTML 注释块与缩进行豁免。违规 → WARN（`manifest.structure.strict=true` 升 ERROR）。
 - 内容级密钥闸（R11）：协议面 8 个文件（`TASKS.md` / `LOG.md` / `AGENTS.md` / `CLAUDE.md` / `GEMINI.md` / `START.md` / `SPEC.md` / `DECISIONS.md`）与 `docs/archive/**/*.md` 命中 AWS / GitHub / Slack / OpenAI / Google 密钥样式或 PEM 私钥块 → `relay_verify` 报 ERROR，出场写盘前直接阻断（不写、不提交）；误报可在同一行标注 `relay:secret-ok` 豁免。扫描输出只给前 4 字符预览，绝不回显完整密钥。
 - 受保护路径：`verify`、`.relay/**`、`tests/**` 与测试文件改动不自动提交；最终防线是 CI 与人工审核。
 - 锁：仓库写锁带心跳与写前 fencing；任务认领锁刻意关闭心跳，保留 240 分钟 TTL 崩溃恢复。并发会话必须使用不同 `model` 标识（同名 model 无法区分持有者）。
@@ -241,7 +242,7 @@ node src/cli.mjs relay_verify --root /path/to/project
 
 ## English
 
-relay-mcp is an MCP server for reliable handoff across coding models and sessions. Handoff state lives in repository files (`START / SPEC / DECISIONS / TASKS / LOG`), and an exit gate verifies the work with machine-checked rules (R1–R12) plus the project's executable acceptance tests before anything is committed.
+relay-mcp is an MCP server for reliable handoff across coding models and sessions. Handoff state lives in repository files (`START / SPEC / DECISIONS / TASKS / LOG`), and an exit gate verifies the work with machine-checked rules (R1–R13) plus the project's executable acceptance tests before anything is committed.
 
 - Zero runtime dependencies, Node ≥ 18, no build step; 14 MCP tools over stdio (`node src/index.mjs`)
 - `AGENTS.md` is the required project entry; `CLAUDE.md` / `GEMINI.md` are optional projections

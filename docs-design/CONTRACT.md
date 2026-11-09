@@ -188,6 +188,7 @@ export const startServer = async ({ onInit, onMethod }) => {
 | R10 | 事实对账 | LOG **最新完成条目**必须含引擎写入的「事实(v2)」行;机检段(mode/文件数/base/sha/branch)与 git 重算逐字段一致(managed 另含 ±),不一致 → error;**branch 必须真实包含声明的 sha**(存在但不含 → error;已删除时若完成提交仍在当前分支历史 → pass 带注记,否则 warn);叙述段(验收/verify/耗时)不参与对账;无法定位提交 → warn(**永不 PASS**);v1 旧格式只做结构校验 → warn(数字权威仅 v2);缺事实行 → warn |
 | R11 | 协议面敏感内容 | 协议面 8 个文件(TASKS/LOG/AGENTS/CLAUDE/GEMINI/START/SPEC/DECISIONS)+ `docs/archive/**/*.md` 内容级扫描(AWS/GitHub/Slack/OpenAI/Google 密钥样式 + PEM 私钥块);同行 `relay:secret-ok` 豁免;命中 → error,`relay_session_end` 在任何写盘前阻断 |
 | R12 | LOG 边界 | 活跃区(归档指针之前的行)>150 行 或 活跃区内完成条目 >20 → warn(`manifest.logBoundary.strict=true` 升 error);归档指针必须指向真实存在、非空且 realpath 仍在仓库内的 `docs/archive/*.md` 才被承认(否则 R12 报 WARN 并说明未被承认,不静默 PASS);只报警不自动归档 |
+| R13 | 协议结构 | TASKS 任务行必须匹配契约正则且任务号唯一;`[~]` 必须带 `(model, YYYY-MM-DD HH:mm)`,`[x]` 必须带 `(YYYY-MM-DD)`;LOG 条目标题必须匹配「## 时间 ｜ model=名 ｜ task=…」;HTML 注释块与缩进行豁免;违规 → warn(`manifest.structure.strict=true` 升 error)——拼错的任务行/日志标题会被解析器静默跳过,本规则把「写错」与「没有」区分开 |
 
 - 检查输出:`| ID | 结果 | 详情 |` 表格 + 末尾汇总;任一 error → isError:true(fast 模式跳过 R5/R6/R8,session_end 默认 fast=false 全量)
 - **受保护路径**:`verify`(脚本)、`.relay/**`、`*/tests/**`、`*.test.*`、`*.spec.*` —— relay_session_end 若检测到本会话改动了这些文件,则**不自动 commit**,输出"涉及受保护路径(护栏),需人类批准后手动提交"并列出文件
@@ -369,7 +370,7 @@ export const startServer = async ({ onInit, onMethod }) => {
 ## 2026-11-03 Agent Plugins v1.0.0 兼容(仓库根即插件包)
 
 - **规范边界**:Agent Plugins 1.0.0 只定义插件包(根 `plugin.json` 闭集清单 + `skills/` + `mcp.json`);`SKILL.md` 格式与 MCP 线协议分别以 Agent Skills / MCP 规范为准,本仓库不自定义。
-- **插件根 = 仓库根**:根目录放 `plugin.json`(name=relay-mcp,version 与 `package.json` 同步)、`mcp.json`(仅 `$schema` + `mcpServers`;stdio:command 单 token `node`、args 用 `${PLUGIN_ROOT}/src/index.mjs`、cwd `${PLUGIN_ROOT}`)、`skills/relay-protocol/`(可移植操作手册)与 `skills/relay-discipline/`(行为纪律,绑定 R1–R12)。`git clone` 即插件,与 npm / installer 分发面并存。
+- **插件根 = 仓库根**:根目录放 `plugin.json`(name=relay-mcp,version 与 `package.json` 同步)、`mcp.json`(仅 `$schema` + `mcpServers`;stdio:command 单 token `node`、args 用 `${PLUGIN_ROOT}/src/index.mjs`、cwd `${PLUGIN_ROOT}`)、`skills/relay-protocol/`(可移植操作手册)与 `skills/relay-discipline/`(行为纪律,绑定 R1–R13)。`git clone` 即插件,与 npm / installer 分发面并存。
 - **不打包可执行文件**:stdio command 用裸 `node`(客户端按平台搜索解析);不引入 `./bin` 包装,避免 Windows 可执行位/解释器差异(规范 §7.2.1 允许裸名;若将来打包可执行文件则必须改插件相对 command)。
 - **技能合规**:`skills/` 的马上级子目录含 `SKILL.md` 才算 skill;frontmatter 仅 name/description/license/compatibility/metadata/allowed-tools,name 必须等于目录名、≤64 且小写连字符,description 1–1024;不递归搜索更深层。
 - **失败隔离**(规范 §6.2/§7.2.2):manifest 除未知顶层字段/非对象 extensions 外任一 schema 违规 → 拒绝整个插件;mcp.json 无效只禁用 MCP;单个 server/skill 无效只跳过该组件,其他组件继续加载。

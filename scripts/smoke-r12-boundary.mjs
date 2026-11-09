@@ -97,11 +97,14 @@ try {
     ok(/150/.test(text) && /20/.test(text) && /warn/i.test(text) && /logBoundary\.strict/.test(text),
       `${name} 的 R12 行内容一致(阈值 150/20 + 判定 WARN + 开关键名)`, text.slice(0, 180));
   }
-  ok(/R1–R12/.test(readme) && !/R1–R11/.test(readme), 'README 中英文两半规则区间均为 R1–R12(无 R1–R11 残留)');
+  ok(/R1–R13/.test(readme) && !/R1–R12/.test(readme) && !/R1–R11/.test(readme), 'README 中英文两半规则区间均为 R1–R13(无 R1–R12/R1–R11 残留)');
   const walk = (dir) => readdirSync(dir, { withFileTypes: true })
     .flatMap((e) => (e.isDirectory() ? walk(path.join(dir, e.name)) : [path.join(dir, e.name)]));
-  const stale = walk(path.join(RELAY, 'src')).filter((f) => readFileSync(f, 'utf8').includes('R1–R11'));
-  ok(stale.length === 0, 'src/** 无 R1–R11 残留', stale.map((f) => f.replace(RELAY + '/', '')).join(','));
+  const stale = walk(path.join(RELAY, 'src')).filter((f) => {
+    const s = readFileSync(f, 'utf8');
+    return s.includes('R1–R12') || s.includes('R1–R11');
+  });
+  ok(stale.length === 0, 'src/** 无 R1–R12 / R1–R11 残留', stale.map((f) => f.replace(RELAY + '/', '')).join(','));
 } finally {
   rmSync(tmp, { recursive: true, force: true });
 }

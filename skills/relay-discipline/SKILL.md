@@ -3,7 +3,7 @@ name: relay-discipline
 description: >
   在 relay 仓库里写代码时的行为纪律:先跑通、再做对、最后留下可审计的证据。把"最小改动、
   红灯先行、根因修复、可验证小单元、上下文预算、清理与提交"逐条绑定到 relay 已有的机检点
-  (R1–R12 / relay_verify / acceptance / 事实行),让每一条原则都有执法者,而不是口号。
+  (R1–R13 / relay_verify / acceptance / 事实行),让每一条原则都有执法者,而不是口号。
   当任务在 relay 项目中实现或修改代码、或需要判断"这一改动算不算完成"时使用。
 license: MIT
 compatibility: 需要 Node.js >= 18;relay-mcp MCP server 可用;配合 relay-protocol 技能使用效果最佳

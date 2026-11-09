@@ -30,12 +30,13 @@ export const KNOWN_MANIFEST_KEYS = Object.freeze([
   'version', 'projectName', 'preset', 'entryFiles', 'allowedTopLevel', 'docsPhases', 'onboardedAt',
   'relayHome', 'restructuredAt', 'strictDocs', 'worktree', 'facts', 'acceptance',
   'commitMessageTemplate', 'autoCommit', 'entryFilesTakeover', 'codeRoots', 'docsRoots',
-  'docsIgnore', 'protectedPaths', 'logBoundary', 'contextBudget',
+  'docsIgnore', 'protectedPaths', 'logBoundary', 'structure', 'contextBudget',
 ]);
 export const KNOWN_NESTED_KEYS = Object.freeze({
   worktree: ['enabled', 'cacheDir', 'ttlHours', 'autoCleanup'],
   facts: ['enabled', 'since', 'strict'],
   logBoundary: ['strict'],
+  structure: ['strict'],
   acceptance: ['commands'],
 });
 
@@ -164,6 +165,10 @@ export const readManifestConfig = async (root, { manifest: preloaded } = {}) => 
     // 阈值固定(150 行 / 20 完成条目),不做可配置——避免"把阈值调大"成为消音手段。
     logBoundary: {
       strict: !!(m && m.logBoundary && m.logBoundary.strict === true),
+    },
+    // 协议结构(T031/R13):TASKS 任务行/LOG 条目标题契约违规 → WARN;strict 同 facts 风格可升 ERROR。
+    structure: {
+      strict: !!(m && m.structure && m.structure.strict === true),
     },
     // 简报字符预算(T015):非有限数/非正数 → 回退默认;不改变既有行为(只影响告警阈值)。
     contextBudget: m && Number.isFinite(m.contextBudget) && m.contextBudget > 0 ? m.contextBudget : DEFAULT_CONTEXT_BUDGET,
