@@ -1,5 +1,15 @@
 # 会话日志(最新在上)
 
+## 2026-11-09 15:05 | model=dsh-lead-deepseek-v4.1 | task=T032 完成
+- 摘要: T032 修复 relay_sync/onboard 漂移备份泄漏:将 *.relay-bak-* 加入 GITIGNORE_BASELINE(init/onboard/sync/restructure 共用),旧项目由 relay_sync 幂等补齐;同步本仓库 .gitignore;README 安全边界与 CONTRACT backupFile 契约补充说明;新增 scripts/smoke-sync-backup.mjs(18 断言:根入口备份与 .relay 嵌套备份均不进 git status/暂存区、备份可恢复、旧基线升级、重复 sync 幂等),已入 npm test 链;npm test 24 套全绿。
+- 事实(v2): mode=managed | 文件 6 | ± +119/-2 | base=6b290ee5b46e260c83a95f12f9eb9f057ac0e31d | sha=10b4095be09c8f4884867d6ae0c03c08f24f26ab | branch=relay/T032 || 验收: 通过 | verify: PASS 15·WARN 0·ERROR 0 | 耗时: 49s
+- worktree: branch=relay/T032; sha=10b4095be09c8f4884867d6ae0c03c08f24f26ab; 已验收,未合并(是否合并由人工决定)
+- 负结果: 备份文件不在 R11 协议面扫描范围:只能靠 .gitignore 阻断,不要用 session_end 白名单过滤(会漏 init/onboard/其他自动提交路径)。
+- 负结果: 测试必须同时覆盖根入口备份与 .relay/manifest 备份(嵌套路径);只测根文件会漏掉 onboard 的 manifest 备份泄漏。
+- 负结果: fixture 里 relay_sync 会把漂移入口重写回规范投影,断言恢复内容要读备份文件本身,不能读 AGENTS.md(它已无漂移)。
+- 负结果: 旧项目基线由 relay_sync/init/onboard 幂等补齐;本仓库 .gitignore 已手工同步,用户项目无需手工但建议跑一次 relay_sync 验证。
+- 留给下一个: 证据:T031 会话 relay_doctor D8 对 T007/T006/T001/T002/T026/T021/T024 等 24 条已归档任务报 WARN,而 docs/archive/LOG-*.md 确有对应完成条目(T001/T026/T024 可抽查);当前 D8 只扫 LOG.md。修复须识别归档指针并扫描 archive 完成条目,同时保持 fail-closed:指针悬空/档案不可验证时不得静默 PASS(同 R12 指针风格);验收覆盖『归档含完成条目→D8 OK;LOG+archive 均无→WARN;悬空指针→WARN 并给修复指令』。
+
 ## 2026-11-09 15:00 | model=dsh-lead-deepseek-v4.1 | task=T031 完成
 - 摘要: T031 落地 R13 协议结构机检:新增 checkR13(TASKS 任务行契约/任务号唯一/[~] 带 model+时间/[x] 带完成日期;LOG 条目标题契约;HTML 注释块与缩进行豁免),WARN 起步、manifest.structure.strict 升 ERROR;配置面登记 structure.strict(已知键/嵌套键);修宪 CONTRACT 规则表 + relay_rules + AGENTS 模板 + README R1–R13 + 根 AGENTS.md 重投影,同步 src 注释/skills/插件段范围;新增 scripts/smoke-structure.mjs(18 断言,已入 npm test 链),smoke-r12-boundary 的 README/src 区间断言升级到 R1–R13;npm test 23 套全绿。
 - 事实(v2): mode=managed | 文件 14 | ± +236/-19 | base=7f028d466712620a6ac4747da2a6f9edd9527fa3 | sha=e113002d70eaa536db1bfe5f6152b69817a8a3a8 | branch=relay/T031 || 验收: 通过 | verify: PASS 16·WARN 0·ERROR 0 | 耗时: 40s
