@@ -12,3 +12,4 @@ coverage/
 .relay/worktrees.json
 .relay/worktrees.lock
 .relay/last-failure.json
+*.relay-bak-*
