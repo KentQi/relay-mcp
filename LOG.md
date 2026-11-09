@@ -1,5 +1,12 @@
 # 会话日志(最新在上)
 
+## 2026-11-09 15:18 | model=dsh-lead-deepseek-v4.1 | task=无
+- 摘要: 历史回填(人工批准):在 docs/archive/LOG-2026-09-11.md 补记 T006/T007 完成条目,依据 commit 5363717(摘要写明完成 T007/T008、filter-branch 历史清洗负结果)、96ee8d2(当次出场把 T006/T007 标 [x] 2026-09-29)与 TASKS 完成戳;只补归档、不改既有记录、不伪造事实行。doctor 由 D8 WARN 转为健康(D8 OK:TASKS [x] 32 条与 LOG+归档完成条目一致,24 个任务号来自归档)。
+- 事实(v2): mode=single | 文件 1 | ± +0/-0 | base=- | sha=- | branch=main || 验收: 通过 | verify: PASS 11·WARN 0·ERROR 0 | 耗时: 54s
+- 负结果: 历史回填只允许写 docs/archive(不写 LOG.md):LOG.md 完成条目会成为最新完成条目,触发 R10 事实行对账,回填没有真实 sha/文件数,只会逼出假事实行。
+- 负结果: 回填必须带 commit/完成戳证据指针与「人工批准」标记,不能当常规消音手段;不覆盖不改写既有归档条目。
+- 负结果: D8 的归档证据面依赖条目 title 的 task 字段:摘要里写「完成 T007/T008」不会被计入,历史记录必须逐任务一条。
+
 ## 2026-11-09 15:12 | model=dsh-lead-deepseek-v4.1 | task=T033 完成
 - 摘要: T033 修复 relay_doctor D8 归档盲区:完成条目证据面扩展为 LOG.md + docs/archive/*.md(与 R11 扫描面一致),归档后不再对旧 [x] 永久 WARN;归档指针悬空/越界/为空/逃出仓库 → WARN(fail-closed,任务恰好被 LOG 覆盖也不静默 PASS);未引用归档文件同样计入证据。新增 scripts/smoke-doctor-archive.mjs(7 断言)并入 npm test 链;CONTRACT D8 描述同步。本仓库 D8 从 24 条误报降为 T006/T007 两条真实缺失证据(无 LOG/归档完成条目),非误报。npm test 25 套全绿。
 - 事实(v2): mode=managed | 文件 4 | ± +171/-16 | base=ed7eaad41687f9317fed4f39c0f246837c84803e | sha=c31141ad7fcc002df68e9f5b8998a774fc16265a | branch=relay/T033 || 验收: 通过 | verify: PASS 15·WARN 0·ERROR 0 | 耗时: 52s
