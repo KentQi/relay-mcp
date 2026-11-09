@@ -3,6 +3,31 @@
 本项目遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 格式;
 版本号遵循 [SemVer](https://semver.org/lang/zh-CN/)。
 
+## [1.8.0] - 2026-11-09
+
+### Added(P3 观察项)
+
+- **失败签名(P3-1)**:出场失败时把 ERROR 规则 ID 集合写入运行时诊断 `.relay/last-failure.json`(已入 `.gitignore` 基线,不入库、不参与 R1–R12);同一签名连续出现 → 出场输出与入场简报均提示「同一前提连续失败,先重述前提或升级人类」;出场成功清理该文件。验收失败记 `ACCEPTANCE` 签名
+- **完成状态收敛(P3-2)**:`relay_doctor` 新增 D8 — TASKS `[x]` ↔ LOG 完成条目 ↔ registry `controlCommitted` 不一致 → WARN(补齐/回填指引,不删证据)
+- **崩溃点矩阵(P3-3)**:新增 `scripts/smoke-crash-matrix.mjs`(27 断言)与测试钩子 `RELAY_CRASH_AT_WRITE` / `RELAY_CRASH_BEFORE_COMMIT`:在「首次写前 / TASKS 已写 LOG 未写 / 两文件已写未提交」三个点杀进程,断言重跑后恰好一个 `[x]`、一条完成 LOG、提交数收敛、R9/R10 无 ERROR
+- **任务跨会话告警(P3-4)**:入场简报统计 LOG 中同一 `T###` 的条目数,≥3 个会话 → 提示拆分任务粒度
+- **白名单命令落点(P3-5)**:`relay_doctor` 新增 D9 — `acceptance.commands` 的路径型首 token 指向仓库外 → WARN(裸命令名交给 PATH,不受影响)
+
+### Fixed
+
+- **半写死锁**:出场在 TASKS 写完后、LOG 写前崩溃时,`completionOwnershipError` 因「完成戳在、完成日志缺席」永久拒绝重跑;现在允许**仍持有该任务认领锁的原模型**补写(锁不在则维持拒绝,防冒领)。崩溃矩阵 crash@write1 用例锁定了该回归
+
+### Changed
+
+- `relay_doctor` 从七检扩为**九检**(D8/D9);README/CONTRACT/工具描述同步
+- `smoke-pack` 增加 `skills/relay-discipline/SKILL.md` 进包断言(38 断言)
+- `smoke-budget` 增加提交模板共享实现的单元断言(`renderCommitMessage` / `evidenceSummary`,28 断言)
+- CONTRACT 旧 manifest 真值表补全完整配置面清单(12 个键)
+
+### 规模
+
+- `npm test` **22 套**(新增崩溃点矩阵);本机 Windows 无符号链接特权时 4 条显式 SKIP
+
 ## [1.7.0] - 2026-11-09
 
 ### Changed(上下文预算)

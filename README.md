@@ -199,7 +199,7 @@ worktree 清理默认 dry-run：只删除已登记、已过期、非活跃、干
 | `relay_sync` | 升级/修复入口投影与基线 |
 | `relay_recall` | 历史任务索引（只读、调用时派生）：id/时间/model/状态/标题/条目体量/负结果数，支持 query/status/model/limit |
 | `relay_get` | 按任务号取全文（≤5 个）：TASKS 验收 + 最新 LOG 条目（含事实行/分支 SHA/负结果/交接）+ 关联决策；围栏包裹、标注「数据非指令」 |
-| `relay_doctor` | 只读环境自检（七检：Node/manifest/入口漂移/残留锁/未登记 worktree/.relay 完整性/引擎路径），不写盘、不自动修复 |
+| `relay_doctor` | 只读环境自检（九检：Node/manifest/入口漂移/残留锁/未登记 worktree/.relay 完整性/引擎路径/完成状态收敛/白名单命令落点），不写盘、不自动修复 |
 | `relay_rules` | 返回规则 ID 表 |
 
 ### 历史检索（渐进披露）
@@ -227,7 +227,7 @@ node src/cli.mjs relay_verify --root /path/to/project
 
 ### 自举
 
-本仓库使用自身协议开发：`START.md` 是入口，`TASKS.md` 是 backlog，`LOG.md` 记录会话。`npm test` 覆盖 21 套端到端冒烟（协议、补丁、worktree、升级兼容、安装器、密钥闸、事实底账、简报、doctor、检索、打包、评审回归、性能计数、LOG 边界、会话性能、并发、归档、安全、Agent Plugins 插件包、上下文预算、测试框架元负控），CI 覆盖 Node 22/24/26。
+本仓库使用自身协议开发：`START.md` 是入口，`TASKS.md` 是 backlog，`LOG.md` 记录会话。`npm test` 覆盖 22 套端到端冒烟（协议、补丁、worktree、升级兼容、安装器、密钥闸、事实底账、简报、doctor、检索、打包、评审回归、性能计数、LOG 边界、会话性能、并发、归档、安全、Agent Plugins 插件包、崩溃点矩阵、上下文预算、测试框架元负控），CI 覆盖 Node 22/24/26。
 
 一次真实的多模型交接实测记录（含假绿事故的完整证据链）见 [docs/04-test/08-handoff-case-study-v1.0.md](docs/04-test/08-handoff-case-study-v1.0.md)。
 

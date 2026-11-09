@@ -50,6 +50,35 @@ try {
   ok(/超出预算 \d+/.test(t2), '输出含「超出预算」显式告警');
   ok(t2.includes('## 建议第一动作'), '告警不裁剪段落(建议第一动作仍在)');
   ok(t2.includes('## 检查结果'), '告警不裁剪段落(检查结果仍在)');
+
+  console.log('\n== 简报:任务跨会话告警(P3-4) ==');
+  const mf2 = JSON.parse(readFileSync(mfPath, 'utf8'));
+  mf2.contextBudget = 6000;
+  writeFileSync(mfPath, JSON.stringify(mf2, null, 2) + '\n');
+  appendFileSync(logPath, [
+    '', '## 2026-11-02 10:00 | model=smoke | task=T003', '- 摘要: 第 1 次尝试',
+    '', '## 2026-11-02 11:00 | model=smoke | task=T003', '- 摘要: 第 2 次尝试',
+    '', '## 2026-11-02 12:00 | model=smoke | task=T003', '- 摘要: 第 3 次尝试', '',
+  ].join('\n'));
+  const tasksP = path.join(tmp, 'TASKS.md');
+  writeFileSync(tasksP, readFileSync(tasksP, 'utf8')
+    .replace('## 待办', '## 待办\n- [ ] T003 跨会话任务\n  验收: node ok.mjs'));
+  const s3 = cli('relay_session_start', {});
+  ok(/任务 T003 已跨 3 个会话/.test(out(s3)), '同一任务跨 3 个会话 → 简报提示拆分粒度', out(s3).slice(0, 500));
+
+  console.log('\n== 简报:失败签名(P3-1) ==');
+  rmSync(path.join(tmp, 'AGENTS.md'));
+  // 先放一个不可能匹配的旧签名,探出本次失败签名(可能同时有 R1/R7 等多条),再换成同签名
+  writeFileSync(path.join(tmp, '.relay', 'last-failure.json'),
+    `${JSON.stringify({ signature: 'NONE', at: '2026-11-08 09:00' }, null, 2)}\n`);
+  const probe = cli('relay_session_start', {});
+  const sigMatch = out(probe).match(/本次失败签名 ([^\n]+)/);
+  ok(!!sigMatch, '简报给出本次失败签名', out(probe).slice(0, 300));
+  const sig = sigMatch ? sigMatch[1].trim() : 'R1';
+  writeFileSync(path.join(tmp, '.relay', 'last-failure.json'),
+    `${JSON.stringify({ signature: sig, at: '2026-11-09 10:00', task: 'T003' }, null, 2)}\n`);
+  const s4 = cli('relay_session_start', {});
+  ok(/与上次失败签名相同/.test(out(s4)), '同一签名连续失败 → 简报提示先重述前提', out(s4).slice(0, 600));
 } finally {
   rmSync(tmp, { recursive: true, force: true });
 }

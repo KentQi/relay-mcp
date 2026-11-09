@@ -343,6 +343,13 @@ export class ProtocolConflictError extends Error {
   }
 }
 export const writeProtocolFile = async (root, name, content, { token = '', lockLabel = '仓库写锁', expectedHash = '' } = {}) => {
+  // 崩溃点矩阵(测试钩子):RELAY_CRASH_AT_WRITE=N 在第 N+1 次协议写之前立刻退出,
+  // 用来验证「半途崩溃后重跑必收敛」。生产环境不设置该变量时行为完全不变。
+  if (process.env.RELAY_CRASH_AT_WRITE != null) {
+    const n = Number(process.env.RELAY_CRASH_AT_WRITE);
+    globalThis.__relayProtocolWrites = (globalThis.__relayProtocolWrites || 0) + 1;
+    if (Number.isFinite(n) && globalThis.__relayProtocolWrites > n) process.exit(137);
+  }
   const hits = scanSecrets(content); // 不接受标记豁免:模型可写的标记不能当绕过凭证
   if (hits.length) throw new ProtocolSecretError(hits, name);
   const target = path.join(root, name);

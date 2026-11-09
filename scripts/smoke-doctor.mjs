@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// T019 冒烟:relay_doctor 只读七检(7 类故障 fixture + 零写盘断言)。
+// T019 冒烟:relay_doctor 只读九检(9 类故障 fixture + 零写盘断言)。
 import { spawnSync } from 'node:child_process';
 import { mkdtempSync, rmSync, readFileSync, writeFileSync, appendFileSync, mkdirSync, readdirSync, statSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -48,7 +48,7 @@ try {
   const d0 = cli('relay_doctor', {});
   const t0 = out(d0);
   ok(d0.status === 0, '健康仓库 doctor 退出码 0', t0.slice(0, 300));
-  ok(t0.includes('D1') && t0.includes('D7'), '输出覆盖 D1–D7 七项检查');
+  ok(t0.includes('D1') && t0.includes('D9'), '输出覆盖 D1–D9 九项检查');
   ok(!t0.includes('修复:'), '健康仓库无「修复:」行');
   ok(snapshot(tmp) === before, 'doctor 零写盘(整棵仓库树快照不变,含根目录入口文件)');
 
@@ -75,6 +75,26 @@ try {
     const du = cli('relay_doctor', {});
     ok(/D2[^\n]*WARN/.test(out(du)) && /worktree\.enable/.test(out(du)) && /enabled/.test(out(du)),
       'D2 WARN 点名未知键并建议 worktree.enabled', out(du).slice(0, 400));
+    writeFileSync(mfPath, mfBackup);
+  }
+
+  console.log('\n== fixture 2c:D8 完成状态收敛(TASKS [x] 无 LOG 完成条目)==');
+  {
+    const tasksP = path.join(tmp, 'TASKS.md');
+    const tasksSaved = readFileSync(tasksP, 'utf8');
+    writeFileSync(tasksP, `${tasksSaved}\n- [x] T998 幽灵完成  (2026-11-09)\n`);
+    const d8 = cli('relay_doctor', {});
+    ok(/D8[^\n]*WARN/.test(out(d8)) && /T998/.test(out(d8)), 'D8 WARN 点名 [x] 但无 LOG 完成条目的任务', out(d8).slice(0, 500));
+    writeFileSync(tasksP, tasksSaved);
+  }
+
+  console.log('\n== fixture 2d:D9 白名单命令落点(仓库外路径)==');
+  {
+    const mfD9 = JSON.parse(mfBackup);
+    mfD9.acceptance = { commands: ['../outside/tool --check', 'npm run guard'] };
+    writeFileSync(mfPath, JSON.stringify(mfD9, null, 2) + '\n');
+    const d9 = cli('relay_doctor', {});
+    ok(/D9[^\n]*WARN/.test(out(d9)) && /仓库外/.test(out(d9)), 'D9 WARN 指出仓库外命令落点', out(d9).slice(0, 500));
     writeFileSync(mfPath, mfBackup);
   }
 

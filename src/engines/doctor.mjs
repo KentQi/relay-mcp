@@ -7,7 +7,8 @@ import { readFileSafe, isGitRepoAsync, gitRun, parseLockContent, templatesDir } 
 import { readWorktreeRegistryState, resolveRelayRoots } from './worktree.mjs';
 import { generateEntryFiles } from './sync.mjs';
 import { collectUnknownManifestKeys, KNOWN_MANIFEST_KEYS, KNOWN_NESTED_KEYS } from '../config.mjs';
-import { join, resolve } from 'node:path';
+import { TASK_LINE_RE, DONE_TASK_RE, parseLogEntries } from './verify.mjs';
+import { join, resolve, isAbsolute, sep } from 'node:path';
 import { readdir, lstat } from 'node:fs/promises';
 
 const CLAIM_TTL_MIN = 240; // 锁文件未记录 ttlMinutes 时的兜底(输出会注明)
@@ -51,6 +52,60 @@ const suggestManifestKey = (key) => {
   }
   if (!best || bestD > Math.max(2, Math.floor(leaf.length / 3))) return '';
   return parent ? `${parent}.${best}` : best;
+};
+
+// D8 完成状态收敛:TASKS [x] ↔ LOG 完成条目 ↔ registry controlCommitted
+const checkCompletionConsistency = async (root) => {
+  const tasks = await readText(join(root, 'TASKS.md'));
+  const log = await readText(join(root, 'LOG.md'));
+  if (tasks == null) return warn('D8', '完成状态', 'TASKS.md 缺失', '先 relay_init/onboard 建立任务队列');
+  const doneIds = [];
+  for (const line of String(tasks).split('\n')) {
+    const m = line.match(TASK_LINE_RE);
+    if (m && m[1] === 'x') doneIds.push(m[2]);
+  }
+  const entries = log ? parseLogEntries(log) : [];
+  const completed = new Set(entries
+    .map((e) => String(e.task || '').trim())
+    .filter((t) => DONE_TASK_RE.test(t))
+    .map((t) => (t.match(/^T\d+/) || [''])[0])
+    .filter(Boolean));
+  const missing = doneIds.filter((id) => !completed.has(id));
+  const regRaw = await readText(join(root, '.relay', 'worktrees.json'));
+  const regTasks = [];
+  if (regRaw) {
+    try {
+      const reg = JSON.parse(regRaw);
+      for (const w of reg.worktrees || []) if (w && w.controlCommitted === true) regTasks.push(String(w.task || ''));
+    } catch { /* 注册表损坏由 doctor 其他项/引擎 fail-closed 处理 */ }
+  }
+  const regMissing = regTasks.filter((t) => !doneIds.includes(t));
+  const issues = [];
+  if (missing.length) issues.push(`TASKS 标 [x] 但 LOG 无完成条目:${missing.join(', ')}`);
+  if (regMissing.length) issues.push(`registry 记录控制面已提交但 TASKS 未完成:${regMissing.join(', ')}`);
+  if (issues.length) {
+    return warn('D8', '完成状态', issues.join(';'), '补齐 LOG 完成条目或修正 TASKS 状态;证据不得删除,只可回填');
+  }
+  return ok('D8', '完成状态', `TASKS [x] ${doneIds.length} 条与 LOG 完成条目一致`);
+};
+
+// D9 白名单命令落点:acceptance.commands 里的路径型首 token 不得指向仓库外
+const checkAcceptancePaths = async (root, manifest) => {
+  const cmds = manifest && manifest.acceptance && Array.isArray(manifest.acceptance.commands)
+    ? manifest.acceptance.commands.filter((s) => typeof s === 'string') : [];
+  if (!cmds.length) return ok('D9', '验收白名单', '未配置 acceptance.commands(只接受 js/ts 测试文件)');
+  const rootAbs = resolve(root);
+  const bad = [];
+  for (const cmd of cmds) {
+    const first = cmd.trim().split(/\s+/)[0] || '';
+    if (!/[/\\]/.test(first) && !first.startsWith('.') && !first.startsWith('~')) continue; // 裸命令名交给 PATH
+    const abs = isAbsolute(first) ? resolve(first) : resolve(rootAbs, first);
+    if (abs !== rootAbs && !abs.startsWith(rootAbs + sep)) bad.push(`${cmd} → ${abs}`);
+  }
+  if (bad.length) {
+    return warn('D9', '验收白名单', `命令指向仓库外:${bad.join('; ')}`, '白名单命令应使用裸命令名(npm/npx/node)或仓库内路径;确需外部工具请锁版本并评估信任边界');
+  }
+  return ok('D9', '验收白名单', `${cmds.length} 条命令落点在仓库内或受信 PATH`);
 };
 
 const checkManifest = async (root) => {
@@ -206,6 +261,8 @@ export const relayDoctor = async (args = {}) => {
     await checkWorktrees(root),
     await checkRelayDir(root),
     await checkEnginePath(root, manifest),
+    await checkCompletionConsistency(root),
+    await checkAcceptancePaths(root, manifest),
   ];
   const counts = { OK: 0, WARN: 0, ERROR: 0 };
   for (const c of checks) counts[c.result] += 1;
