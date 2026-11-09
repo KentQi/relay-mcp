@@ -1,5 +1,10 @@
 # 会话日志(最新在上)
 
+## 2026-11-09 15:25 | model=dsh-lead-deepseek-v4.1 | task=无
+- 摘要: 维护:将 T006/T007 两条已回填 [x] 任务从 TASKS 待办区挪入已完成区(分区归位,任务行与 2 空格续行备注整体搬移,内容与完成戳不变);快速 verify 全绿、doctor 保持健康(D8 OK:TASKS [x] 32 条与 LOG+归档完成条目一致)。
+- 事实(v2): mode=single | 文件 0 | ± +0/-0 | base=- | sha=- | branch=main || 验收: 通过 | verify: PASS 12·WARN 0·ERROR 0 | 耗时: 55s
+- 负结果: TASKS 分区不在 R13 机检范围内(只查行合法),手工挪动必须整块搬运(任务行 + 2 空格续行),不要按行号脚本搬,易丢备注。
+
 ## 2026-11-09 15:18 | model=dsh-lead-deepseek-v4.1 | task=无
 - 摘要: 历史回填(人工批准):在 docs/archive/LOG-2026-09-11.md 补记 T006/T007 完成条目,依据 commit 5363717(摘要写明完成 T007/T008、filter-branch 历史清洗负结果)、96ee8d2(当次出场把 T006/T007 标 [x] 2026-09-29)与 TASKS 完成戳;只补归档、不改既有记录、不伪造事实行。doctor 由 D8 WARN 转为健康(D8 OK:TASKS [x] 32 条与 LOG+归档完成条目一致,24 个任务号来自归档)。
 - 事实(v2): mode=single | 文件 1 | ± +0/-0 | base=- | sha=- | branch=main || 验收: 通过 | verify: PASS 11·WARN 0·ERROR 0 | 耗时: 54s

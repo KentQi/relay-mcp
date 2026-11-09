@@ -17,10 +17,6 @@
 - [ ] T030 发布 npm(阻塞:包名 `relay-mcp` 属他人 + 本机无 npm 账号)
   验收: 人类注册/登录 npm 后,二选一并执行——(a) 改用 scoped 包 `@<npm-username>/relay-mcp` 发布(`npm publish --access public`);或 (b) 换新的非 scoped 包名(先 `npm view <name>` 确认可用)并同步 README/安装器文案;发布后 `npm view <name>@1.6.0` 可查到
   备注: GitHub v1.6.0 已发;npm 上 relay-mcp@1.2.0 是 derekluo 的另一个项目,不可覆盖;发布仍需人类登录或提供 granular token(agent 不代持凭据)
-- [x] T007 发布 v1.0.0 tag  (2026-09-29)
-  备注: 审计 P0 项;零 fork 窗口内与历史清洗同批完成
-- [x] T006 git 历史身份重写  (2026-09-29)
-  备注: 零 fork 窗口期内一次性完成;重写后旧 commit sha 全部变化
 
 ## 已完成
 - [x] T033 relay_doctor D8 完成状态证据面纳入 docs/archive(归档后不再对旧 [x] 永久 WARN)  (2026-11-09)
@@ -105,6 +101,10 @@
 - [x] T008 发布 v1.0.0 tag 与 Release(重打到含 R7 修复的 HEAD)  (2026-09-29)
   验收: git tag v1.0.0 指向当前 HEAD 并推送;GitHub Releases 出现 v1.0.0;CI 三矩阵全绿
   备注: 此前 tag 打在 R7 误报的提交上,需删除重建
+- [x] T007 发布 v1.0.0 tag  (2026-09-29)
+  备注: 审计 P0 项;零 fork 窗口内与历史清洗同批完成
+- [x] T006 git 历史身份重写  (2026-09-29)
+  备注: 零 fork 窗口期内一次性完成;重写后旧 commit sha 全部变化
 - [x] T004 CI 真机核验(GitHub Actions 首跑结果确认)  (2026-09-29)
   验收: GitHub 仓库 Actions 页三个矩阵 job 全绿;如红,按日志修复
   备注: 已本地预演两步全绿;badge 待 CI 绿后补进 README
