@@ -1,5 +1,14 @@
 # 会话日志(最新在上)
 
+## 2026-11-09 15:32 | model=dsh-lead-deepseek-v4.1 | task=T034 完成
+- 摘要: T034 发布 v1.9.0:package.json / plugin.json 版本同步 1.9.0(plugin 描述 R1–R12→R1–R13),CHANGELOG 定版 [1.9.0] - 2026-11-09(R13 协议结构机检、漂移备份闸、D8 归档证据面、文档与历史修正),README 冒烟套件计数 22→25,SPEC AC1 改为当前 25 套;npm test 25 套全绿、任务树 verify 全绿。出场后合并 relay/T034、在 main 上打 tag v1.9.0 并创建 GitHub Release,同时补建 v1.7.0/v1.8.0 缺失的 Release。
+- 事实(v2): mode=managed | 文件 5 | ± +27/-5 | base=5c8f24f8ad8b918699ebbe94061f6c19351a22d2 | sha=de0ec377d6d03f5143f9518a51d6df299aaa2454 | branch=relay/T034 || 验收: 通过 | verify: PASS 16·WARN 0·ERROR 0 | 耗时: 49s
+- worktree: branch=relay/T034; sha=de0ec377d6d03f5143f9518a51d6df299aaa2454; 已验收,未合并(是否合并由人工决定)
+- 负结果: 发布 tag 必须打在合并后的 main 上:managed 任务分支的代码提交不是发布点,否则 Release 指向分支提交而非主干。
+- 负结果: 补建 v1.7.0/v1.8.0 Release 时用既有 tag,gh release create 不会移动 tag;不要用 --target 触发新 tag。
+- 负结果: 版本同步面=package.json + plugin.json(plugin 描述里的 R1–R12 也要一起改);smoke-plugin 只校验版本号,不校验描述,容易漏。
+- 负结果: 发版是人工授权动作:CHANGELOG 定版后不再改写历史段,后续变更只能新开版本段。
+
 ## 2026-11-09 15:25 | model=dsh-lead-deepseek-v4.1 | task=无
 - 摘要: 维护:将 T006/T007 两条已回填 [x] 任务从 TASKS 待办区挪入已完成区(分区归位,任务行与 2 空格续行备注整体搬移,内容与完成戳不变);快速 verify 全绿、doctor 保持健康(D8 OK:TASKS [x] 32 条与 LOG+归档完成条目一致)。
 - 事实(v2): mode=single | 文件 0 | ± +0/-0 | base=- | sha=- | branch=main || 验收: 通过 | verify: PASS 12·WARN 0·ERROR 0 | 耗时: 55s

@@ -15,10 +15,13 @@
 
 ## 待办
 - [ ] T030 发布 npm(阻塞:包名 `relay-mcp` 属他人 + 本机无 npm 账号)
-  验收: 人类注册/登录 npm 后,二选一并执行——(a) 改用 scoped 包 `@<npm-username>/relay-mcp` 发布(`npm publish --access public`);或 (b) 换新的非 scoped 包名(先 `npm view <name>` 确认可用)并同步 README/安装器文案;发布后 `npm view <name>@1.6.0` 可查到
-  备注: GitHub v1.6.0 已发;npm 上 relay-mcp@1.2.0 是 derekluo 的另一个项目,不可覆盖;发布仍需人类登录或提供 granular token(agent 不代持凭据)
+  验收: 人类注册/登录 npm 后,二选一并执行——(a) 改用 scoped 包 `@<npm-username>/relay-mcp` 发布(`npm publish --access public`);或 (b) 换新的非 scoped 包名(先 `npm view <name>` 确认可用)并同步 README/安装器文案;发布后 `npm view <name>@1.9.0` 可查到
+  备注: GitHub v1.9.0 已发(Release 已补);npm 上 relay-mcp@1.2.0 是 derekluo 的另一个项目,不可覆盖;发布仍需人类登录或提供 granular token(agent 不代持凭据)
 
 ## 已完成
+- [x] T034 发布 v1.9.0(版本/CHANGELOG/tag/GitHub Release)+ 文档漂移修正  (2026-11-09)
+  验收: npm test 25 套全绿 且 ./verify 无 ERROR 且 package.json/plugin.json 版本同步 1.9.0 且 CHANGELOG 定版 [1.9.0] - 2026-11-09 且 tag v1.9.0 指向发布提交并推送 且 GitHub Release v1.9.0 出现;历史 tag v1.7.0/v1.8.0 的缺失 Release 一并补建
+  备注: 发布为人工授权动作;完成后 T030 的 npm 发布目标版本更新为 1.9.0
 - [x] T033 relay_doctor D8 完成状态证据面纳入 docs/archive(归档后不再对旧 [x] 永久 WARN)  (2026-11-09)
   验收: test:scripts/smoke-doctor-archive.mjs
   备注: 证据:T031 会话 relay_doctor D8 对 T007/T006/T001/T002/T026/T021/T024 等 24 条已归档任务报 WARN,而 docs/archive/LOG-*.md 确有对应完成条目(T001/T026/T024 可抽查);当前 D8 只扫 LOG.md。修复须识别归档指针并扫描 archive 完成条目,同时保持 fail-closed:指针悬空/档案不可验证时不得静默 PASS(同 R12 指针风格);验收覆盖『归档含完成条目→D8 OK;LOG+archive 均无→WARN;悬空指针→WARN 并给修复指令』。
