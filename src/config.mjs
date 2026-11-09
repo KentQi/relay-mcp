@@ -64,6 +64,7 @@ export const GITIGNORE_BASELINE = Object.freeze([
   '.relay/claims/', '.relay/relay.lock',
   '.relay/worktrees/', '.relay/worktrees.json', '.relay/worktrees.lock',
   '.relay/last-failure.json',
+  '*.relay-bak-*',
   'coverage/', '*.log',
 ]);
 

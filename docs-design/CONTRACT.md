@@ -86,7 +86,7 @@ relay-mcp/
 export const templatesDir = () => /* relay-mcp/templates 绝对路径,基于 import.meta.url 向上一级再进 templates */
 export const readFileSafe = async (p, fallback = null) => /* 读文件,不存在返回 fallback */
 export const writeFileIfAbsent = async (p, content) => /* 已存在则返回 false 不覆盖,成功返回 true */
-export const backupFile = async (p) => /* 存在则改名 <p>.relay-bak-<yyyyMMddHHmmss>,返回新路径或 null */
+export const backupFile = async (p) => /* 存在则改名 <p>.relay-bak-<yyyyMMddHHmmss>,返回新路径或 null;备份文件由 .gitignore 基线忽略(人工恢复后删除) */
 export const isGitRepo = (root) => boolean
 export const gitRun = async (root, ...args) => /* execFile('git',['-C',root,...args]) 包裹,返回 {ok,stdout,stderr};ok=exit 0 */
 export const ensureDir = async (p) => /* recursive mkdir */
