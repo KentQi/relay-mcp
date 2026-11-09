@@ -1,5 +1,14 @@
 # 会话日志(最新在上)
 
+## 2026-11-09 15:12 | model=dsh-lead-deepseek-v4.1 | task=T033 完成
+- 摘要: T033 修复 relay_doctor D8 归档盲区:完成条目证据面扩展为 LOG.md + docs/archive/*.md(与 R11 扫描面一致),归档后不再对旧 [x] 永久 WARN;归档指针悬空/越界/为空/逃出仓库 → WARN(fail-closed,任务恰好被 LOG 覆盖也不静默 PASS);未引用归档文件同样计入证据。新增 scripts/smoke-doctor-archive.mjs(7 断言)并入 npm test 链;CONTRACT D8 描述同步。本仓库 D8 从 24 条误报降为 T006/T007 两条真实缺失证据(无 LOG/归档完成条目),非误报。npm test 25 套全绿。
+- 事实(v2): mode=managed | 文件 4 | ± +171/-16 | base=ed7eaad41687f9317fed4f39c0f246837c84803e | sha=c31141ad7fcc002df68e9f5b8998a774fc16265a | branch=relay/T033 || 验收: 通过 | verify: PASS 15·WARN 0·ERROR 0 | 耗时: 52s
+- worktree: branch=relay/T033; sha=c31141ad7fcc002df68e9f5b8998a774fc16265a; 已验收,未合并(是否合并由人工决定)
+- 负结果: 归档证据面必须按 docs/archive/*.md 全量扫描:只跟随 LOG 当前指针会漏掉失联的旧归档(指针更替后旧档案仍在)。
+- 负结果: 指针 fail-closed 必须独立于任务覆盖判断:任务恰好被 LOG 覆盖时也不能跳过悬空指针,否则归档面漂移被掩盖。
+- 负结果: doctor 的 D8 行格式是 | D8 完成状态 | …,测试取行正则要匹配 ID+名称,不能按 | D8 | 取行。
+- 负结果: 本仓库 D8 剩余 T006/T007 是真实缺失证据,不要补假日志消音;回填需人工确认。
+
 ## 2026-11-09 15:05 | model=dsh-lead-deepseek-v4.1 | task=T032 完成
 - 摘要: T032 修复 relay_sync/onboard 漂移备份泄漏:将 *.relay-bak-* 加入 GITIGNORE_BASELINE(init/onboard/sync/restructure 共用),旧项目由 relay_sync 幂等补齐;同步本仓库 .gitignore;README 安全边界与 CONTRACT backupFile 契约补充说明;新增 scripts/smoke-sync-backup.mjs(18 断言:根入口备份与 .relay 嵌套备份均不进 git status/暂存区、备份可恢复、旧基线升级、重复 sync 幂等),已入 npm test 链;npm test 24 套全绿。
 - 事实(v2): mode=managed | 文件 6 | ± +119/-2 | base=6b290ee5b46e260c83a95f12f9eb9f057ac0e31d | sha=10b4095be09c8f4884867d6ae0c03c08f24f26ab | branch=relay/T032 || 验收: 通过 | verify: PASS 15·WARN 0·ERROR 0 | 耗时: 49s
