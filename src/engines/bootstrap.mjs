@@ -378,7 +378,7 @@ export const relayInit = async (args = {}) => {
       '',
       '### 下一步',
       '1. 读 `START.md`(引导扇区,一页以内:跑 verify → 读 TASKS 顶部 → 按协议干)',
-      '2. 运行 `./verify`(需 Node >= 18)确认环境可用',
+      '2. 运行 `./verify`(需 Node >= 22)确认环境可用',
       ...(presetFiles.includes('tests/smoke.test.js')
         ? ['3. 跑 `npm test`(等价 `node --test`):骨架交付即全绿,是后续一切改动的基线',
            '4. 调用 `relay_session_start` 开始首个会话']

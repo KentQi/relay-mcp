@@ -84,7 +84,7 @@ try {
     ok(/指针/.test(d8) && /未被承认/.test(d8), 'WARN 说明归档指针未被承认', d8);
   }
 
-  console.log('\n== 4. 越界指针(不在 docs/archive/*.md)→ fail-closed ==');
+  console.log('\n== 4. 越界指针(不在 docs/archive/LOG-*.md)→ fail-closed ==');
   {
     const dir = fresh('d8-outside');
     markDone(dir, 'T002');
@@ -102,6 +102,15 @@ try {
     addArchive(dir, 'LOG-2025-old.md', '## 2025-12-01 10:00 | model=claude | task=T003 完成');
     const d8 = row(doctor(dir), 'D8');
     ok(/D8 .*\|\s*OK/.test(d8) && /归档/.test(d8), '孤立归档文件仍被纳入 D8 证据面', d8);
+  }
+
+  console.log('\n== 6. 非 LOG 归档不属协议证据面(文档版本隔离)==');
+  {
+    const dir = fresh('d8-non-log-archive');
+    markDone(dir, 'T004');
+    addArchive(dir, 'ARCHIVED-2025-old.md', '## 2025-12-01 10:00 | model=claude | task=T004 完成');
+    const d8 = row(doctor(dir), 'D8');
+    ok(/D8 .*\|\s*WARN/.test(d8) && /T004/.test(d8), '仅非 LOG 归档 → D8 WARN(不把文档版本当证据)', d8);
   }
 } catch (e) {
   fail += 1;

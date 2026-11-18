@@ -6,7 +6,7 @@ description: >
   绿闸并留下事实底账。需要新建 / 接入 / 标准化项目时用 relay_init / relay_onboard /
   relay_restructure。适用于长任务交接、会话中断恢复、多 agent 并行与人类审计场景。
 license: MIT
-compatibility: 需要 Node.js >= 18;MCP server relay-mcp 必须可用
+compatibility: 需要 Node.js >= 22;MCP server relay-mcp 必须可用
 ---
 
 # relay-protocol — 仓库即交接棒

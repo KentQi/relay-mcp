@@ -1,8 +1,16 @@
 # 会话日志(最新在上)
 
+## 2026-11-18 14:08 | model=claude-fable-tier2-20261118 | task=T036 完成
+- 摘要: T036 Tier 2 三项决策落地：①npm 正式冻结——package.json 置 private=true，移除 bin/files/安装器/发布护栏，删除 install-mcp/check-publish-guard/smoke-install-mcp/smoke-pack，README 改为 git clone + Agent Plugins + mcpServers 片段，T030 保留为待办但明确冻结勿执行；②Node 下界 18→22——engines/doctor D1/bootstrap/skills/preset/CI 模板/README/SPEC 同步，CI 矩阵补 26；③归档机检收窄到 docs/archive/LOG-*.md——R11/D8 扫描面与 R12 指针同步，ARCHIVED- 文档版本归档不再被误扫，冒烟新增正反用例。期间修复 single 模式事实行把 LOG 归档计入文件数的口径 bug，并校正 T035 历史事实行。npm test 23 套全绿、./verify 0 ERROR、relay_doctor 健康。
+- 事实(v2): mode=single | 文件 25 | ± +137/-805 | base=- | sha=- | branch=main || 验收: 通过 | verify: PASS 12·WARN 0·ERROR 0 | 耗时: 46s
+- 负结果: 单根事实行写入侧曾用 PROTOCOL_FILES 过滤，把 docs/archive/LOG-*.md 计入文件数，而校验侧用 isProtocolFile 排除它；T035 首次编辑归档时触发 R10 口径分裂。已修 facts.mjs 并校正 T035 历史事实行为 6。
+- 负结果: 把冻结任务 T030 手工标 [x] 会触发 D8（无完成日志）；冻结任务应保留 [ ] + 明确『勿执行』标题，不伪造完成记录。
+- 负结果: 删除 smoke-pack/安装器后，历史任务 T025 的 test: 验收路径会悬空；已完成任务只能加备注说明，不能改写历史验收。
+- 留给下一个: 破坏性变更：Node >=22、npm 冻结、归档机检收窄。发布版本/tag/GitHub Release 需人类授权；发布前跑 npm test 与 ./verify。
+
 ## 2026-11-18 13:33 | model=claude-fable-tier1-20261118 | task=T035 完成
 - 摘要: T035 Tier 1 真相清理：facts.strict 保留解析与 KNOWN_NESTED_KEYS 兼容，但简报不再回显、config/CONTRACT 明确标废弃（计划 v2.0 移除）；recomputeCommitFileCount 与 lockTiming 标 @internal（零调用，保留避免包外 import 断裂）；docs/archive/LOG-2026-09-11.md 补内容区间与顺序头注（实际覆盖 2026-09-29 ~ 2026-11-02，多次归档拼接、非全局有序），不重命名不重排；DECISIONS 新增 Tier 1 条目。npm test 全绿、./verify 0 ERROR、relay_doctor 健康。
-- 事实(v2): mode=single | 文件 7 | ± +19/-2 | base=- | sha=- | branch=main || 验收: 通过 | verify: PASS 12·WARN 0·ERROR 0 | 耗时: 43s
+- 事实(v2): mode=single | 文件 6 | ± +19/-2 | base=- | sha=- | branch=main || 验收: 通过 | verify: PASS 12·WARN 0·ERROR 0 | 耗时: 43s
 - 负结果: 硬删 facts.strict 会让旧 manifest 触发 doctor D2 未知键 WARN；选择保留解析与白名单、停止简报回显并标废弃。
 - 负结果: 删除 recomputeCommitFileCount / lockTiming 对包外 import 不可观测；选择标 @internal 保留至 v2.0，避免破坏未知消费者。
 - 留给下一个: 三项待决：①npm 发布走 scoped 包还是冻结；②Node 下界保持 >=18 还是上移 >=22；③templates/docs/README.md 的 ARCHIVED- 约定与 docs/archive 的 LOG 归档双语义如何隔离。每项先记 DECISIONS，再决定是否落代码。

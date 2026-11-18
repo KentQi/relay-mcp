@@ -569,8 +569,8 @@ const checkR11 = async (root, snap) => {
   let archiveFiles = [];
   try {
     const names = await readdir(join(root, 'docs', 'archive'));
-    // 审计 P2:归档目录里任何 .md 都是协议历史(不只 LOG-*.md),手写 notes.md 同样要扫。
-    archiveFiles = names.filter((n) => /\.md$/.test(n)).sort();
+    // 2026-11-18 决策:只有 LOG-*.md 是协议历史;ARCHIVED-* 文档版本归档不属协议面。
+    archiveFiles = names.filter((n) => /^LOG-.*\.md$/i.test(n)).sort();
   } catch { /* 无归档目录 → 跳过 */ }
   for (const name of archiveFiles) {
     const t = await readText(join(root, 'docs', 'archive', name));
@@ -589,11 +589,11 @@ const checkR11 = async (root, snap) => {
 // —— R12 LOG 边界(T024 / T001 最小触发)——
 // LOG 只增不减与「有限上下文」公理冲突;本检查只报警,归档动作留给人工(不自动搬移/删除)。
 // 活跃区 = 归档指针之前的行;行数轴与完成条目轴**共用同一个活跃区**(审计 P1-7:两轴口径必须一致)。
-// 指针必须指向真实存在的 docs/archive/*.md 才被承认——否则一行字就能把活跃区归零,比调大阈值更容易消音。
+// 指针必须指向真实存在的 docs/archive/LOG-*.md 才被承认——否则一行字就能把活跃区归零,比调大阈值更容易消音。
 export const R12_MAX_LOG_LINES = 150;
 export const R12_MAX_DONE_ENTRIES = 20;
 const LOG_ARCHIVE_POINTER_RE = /^\s*<!--\s*relay:log-archive:\s*(\S+)\s*-->\s*$/;
-const ARCHIVE_REL_RE = /^docs\/archive\/[^/\\]+\.md$/;
+const ARCHIVE_REL_RE = /^docs\/archive\/LOG-[^/\\]+\.md$/i;
 const findArchiveBoundary = async (root, lines) => {
   for (let i = 0; i < lines.length; i++) {
     const m = lines[i].match(LOG_ARCHIVE_POINTER_RE);
@@ -625,8 +625,8 @@ const checkR12 = async (root, cfg, snap) => {
   const doneEntries = parseLogEntries(area.join('\n')).filter((e) => isDoneTaskField(e.task)).length;
   // 审计 INFO:悬空指针不能静默 PASS —— 失效指针本身就是需要修的漂移(fail-closed 可见化)。
   if (boundary < 0 && lines.some((l) => LOG_ARCHIVE_POINTER_RE.test(l))) {
-    return bad('R12', 'WARN', '归档指针未被承认(目标文件不存在/为空/越出 docs/archive/ 或经符号链接指向仓库外),活跃区按全文计算',
-      '修复:让指针指向真实存在且非空的 docs/archive/*.md(运行 relay_archive_log 会自动维护),或删除失效指针后重跑 relay_verify');
+    return bad('R12', 'WARN', '归档指针未被承认(目标文件不存在/为空/越出 docs/archive/LOG-*.md 或经符号链接指向仓库外),活跃区按全文计算',
+      '修复:让指针指向真实存在且非空的 docs/archive/LOG-*.md(运行 relay_archive_log 会自动维护),或删除失效指针后重跑 relay_verify');
   }
   const overLines = activeLines > R12_MAX_LOG_LINES;
   const overDone = doneEntries > R12_MAX_DONE_ENTRIES;

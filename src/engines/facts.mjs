@@ -67,7 +67,7 @@ export const deriveFacts = async ({
       // ± 取工作区 vs HEAD(numstat 不含未跟踪文件,故 ± 可能为 0,不假装知道)。
       const changed = (statusLines || [])
         .map((l) => String(l).slice(3).trim())
-        .filter((p) => p && !PROTOCOL_FILES.has(p));
+        .filter((p) => p && !isProtocolFile(p));
       const nums = await diffStat(executionRoot, ['HEAD']);
       stat = { files: changed.length, insertions: nums ? nums.insertions : 0, deletions: nums ? nums.deletions : 0 };
     }
@@ -75,7 +75,7 @@ export const deriveFacts = async ({
   if (!stat) {
     const files = (statusLines || [])
       .map((l) => String(l).slice(3).trim())
-      .filter((p) => p && !PROTOCOL_FILES.has(p));
+      .filter((p) => p && !isProtocolFile(p));
     stat = { files: files.length, insertions: 0, deletions: 0 };
   }
   const counts = { PASS: 0, WARN: 0, ERROR: 0 };

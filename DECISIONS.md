@@ -1,5 +1,14 @@
 # DECISIONS — 追加式决策日志(最新在上)
 
+## 2026-11-18 — Tier 2 三项决策:npm 冻结、Node >=22、归档机检收窄
+
+- npm: **正式冻结**。理由:npm 上 `relay-mcp` 属他人,且没有第二个真实消费者;半开火状态(打包面就绪但永不发布)只增加维护面与误发布风险。动作:`package.json` 置 `private: true`,移除 `bin` / `files` / 安装器 / 发布护栏 / 打包与安装器冒烟;README 改为 `git clone` + Agent Plugins + `mcpServers` 片段;T030 以「冻结」关闭。
+- Node: **下界 18 → 22**。理由:CI 实测矩阵为 22/24/26,Node 18/20 已 EOL 且从未被 CI 覆盖;声明支持未测试的运行时比破坏性变更更危险。动作:`engines.node`、doctor D1、bootstrap 提示、skills、preset、CI 模板、README 与 SPEC 同步;建议下一个 major 发版时明确标注。
+- 归档: **R11/D8 扫描面与 R12 指针收窄到 `docs/archive/LOG-*.md`**。理由:`docs/archive/` 同时承载 LOG 历史与文档旧版,全量扫描会把 `ARCHIVED-*` 文档版本误当协议证据。代价:非 LOG 文件不再过密钥闸,已在 CONTRACT Tier 2 段明示。
+- 注:归档收窄是对 2026-11-01 P2-2「归档目录任何 .md 都扫」的有意反转——语义隔离优先于全量覆盖;两处规则表、README、模板与冒烟已同步。
+- 否决: 保持 npm 半开火(维护面与误发布风险);保持 Node >=18(声明未测的 EOL 运行时);维持 `docs/archive` 全量扫描(语义混用)。
+- 状态: 现行
+
 ## 2026-11-18 — Tier 1 真相清理:facts.strict 废弃、零调用导出标 @internal、归档头注
 
 - 背景: Tier 0 考古确认 `facts.strict` 自 T023 起已无消费者——R10 机检段篡改默认 ERROR,不再依赖该键;实验 A 证明 `strict=false/true` 的 R10 输出逐字相同。

@@ -96,14 +96,11 @@ try {
   ok(verifyB.status === 0, 'verify 全绿', out(verifyB).slice(0, 300));
   ok(/R10\s*\|\s*PASS/.test(out(verifyB)), 'R10 对未跟踪新文件口径一致(不再 WARN)', out(verifyB).slice(0, 400));
 
-  // ================= E. 发布护栏 =================
-  console.log('\n== E. 发布护栏(P2-19) ==');
+  // ================= E. npm 分发冻结(2026-11-18) =================
+  console.log('\n== E. npm 分发冻结 ==');
   const pkg = JSON.parse(readFileSync(path.join(RELAY, 'package.json'), 'utf8'));
-  ok(pkg.scripts && pkg.scripts.prepublishOnly === 'node scripts/check-publish-guard.mjs', 'prepublishOnly 护栏已配置');
-  const guardDeny = spawnSync('node', [path.join(RELAY, 'scripts', 'check-publish-guard.mjs')], { encoding: 'utf8' });
-  ok(guardDeny.status === 1, '无显式批准时发布护栏拒绝(exit 1)');
-  const guardAllow = spawnSync('node', [path.join(RELAY, 'scripts', 'check-publish-guard.mjs')], { encoding: 'utf8', env: { ...process.env, RELAY_ALLOW_PUBLISH: '1' } });
-  ok(guardAllow.status === 0, 'RELAY_ALLOW_PUBLISH=1 时放行');
+  ok(pkg.private === true, 'package.json private=true(机器层阻止误发布)');
+  ok(!pkg.bin && !pkg.files && !pkg.scripts?.prepublishOnly && !pkg.scripts?.['install:mcp'], 'npm 分发面已移除');
 
   // ================= F. R5 提交原子性:哨兵文件名不可伪造提交头 =================
   // P0-1(PR #8 审计):git log --name-only 把文件名混进同一行流,旧实现用文本哨兵

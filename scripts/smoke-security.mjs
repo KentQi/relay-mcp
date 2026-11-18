@@ -89,7 +89,10 @@ try {
     writeFileSync(path.join(root2, 'docs', 'archive', 'notes.md'), '# notes\n\n- AKIAABCDEFGHIJKLMNOP\n');
     writeFileSync(path.join(root2, 'LOG.md'), readFileSync(path.join(root2, 'LOG.md'), 'utf8') + '\n<!-- relay:log-archive: docs/archive/notes.md -->\n');
     const r2 = run(root2, 'relay_verify', { full: true });
-    ok(/R11\s*\|\s*ERROR/.test(row(r2, 'R11')), 'R11:归档 notes.md 含密钥 → ERROR(不只 LOG-*.md)', row(r2, 'R11'));
+    ok(/R11\s*\|\s*PASS/.test(row(r2, 'R11')), 'R11:非 LOG 归档(文档版本)不属协议面,不扫描', row(r2, 'R11'));
+    writeFileSync(path.join(root2, 'docs', 'archive', 'LOG-secret.md'), '# LOG 归档\n\n- AKIAABCDEFGHIJKLMNOP\n');
+    const r3 = run(root2, 'relay_verify', { full: true });
+    ok(/R11\s*\|\s*ERROR/.test(row(r3, 'R11')), 'R11:LOG-* 归档含密钥 → ERROR', row(r3, 'R11'));
   }
 
   console.log('\n== P2 R12 指针越界/悬空不静默 PASS ==');

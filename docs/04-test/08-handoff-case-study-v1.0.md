@@ -79,7 +79,7 @@ status: 现行
 
 ```sh
 git clone https://github.com/KentQi/relay-mcp.git && cd relay-mcp
-npm test                        # 25 套冒烟;关注每套的「通过 / 失败 / 跳过」三元组
+npm test                        # 23 套冒烟;关注每套的「通过 / 失败 / 跳过」三元组
 node scripts/smoke-meta.mjs     # 元负控:假绿形态复现 + 静态规则
 node scripts/smoke-budget.mjs   # tools/list 体积预算
 node scripts/validate-plugin.mjs

@@ -17,26 +17,36 @@
 
 relay-mcp 让不同模型（Claude / Codex / Gemini / Cursor 等）在同一仓库上安全接力：上一个会话的进度、决策、待办与踩坑全部写入 `START / SPEC / DECISIONS / TASKS / LOG`，下一个会话从文件恢复上下文，而不是依赖聊天记录。
 
-- 零运行时依赖（仅 `node:` 内置模块），Node ≥ 18，无构建步骤
+- 零运行时依赖（仅 `node:` 内置模块），Node ≥ 22，无构建步骤
 - 14 个 MCP 工具，`node src/index.mjs` 即为 stdio server
 - 规范即检查：R 系列规则全部由 `relay_verify` 机检；出场绿闸同时要求可执行验收真实通过
 - 入口文件单源投影：`AGENTS.md` 必需，`CLAUDE.md` / `GEMINI.md` 按需生成
 
 ### 安装
 
-仓库自带跨平台安装器（Windows / macOS / Linux），自动探测当前 `node` 与本仓库绝对路径：
+本仓库**不通过 npm 分发**（2026-11-18 决策冻结；npm 上的 `relay-mcp` 属他人）。使用 `git clone` 或 Agent Plugins 插件包：
 
 ```sh
 git clone https://github.com/KentQi/relay-mcp.git
 cd relay-mcp
-
-node scripts/install-mcp.mjs                                  # 打印配置与各 harness 命令
-node scripts/install-mcp.mjs --target claude --scope user     # 或 gemini / codex
-node scripts/install-mcp.mjs --target json --config <path>    # 任意 mcpServers JSON
-node scripts/install-mcp.mjs --target dsh --dsh-profile desktop
+node src/index.mjs        # stdio MCP server（也可由客户端拉起）
 ```
 
-未内置的 harness 使用 `--print-json` 获取标准片段，粘贴到其 `mcpServers` 配置。安装后重启对应客户端，工具名为 `mcp__relay-mcp__relay_*`。
+不支持插件包的客户端，在它的 `mcpServers` 配置里加入（把 `/abs/path` 换成仓库绝对路径）：
+
+```json
+{
+  "mcpServers": {
+    "relay-mcp": {
+      "command": "node",
+      "args": ["/abs/path/relay-mcp/src/index.mjs"],
+      "cwd": "/abs/path/relay-mcp"
+    }
+  }
+}
+```
+
+重启客户端后，工具名为 `mcp__relay-mcp__relay_*`。
 
 ### Agent Plugins 插件包（v1.0.0）
 
@@ -58,19 +68,11 @@ node scripts/validate-plugin.mjs        # 校验 plugin.json / mcp.json / skills
 node scripts/smoke-plugin.mjs           # 43–44 断言：合规 + 真实 initialize/tools/list + 规范负例
 ```
 
-不支持插件包的客户端继续用下面的安装器（`mcpServers` 片段）。
-### npm 分发（尚未发布）
+不支持插件包的客户端使用上面的 `mcpServers` 片段。
 
-**注意**：npm 上的 `relay-mcp` 是另一个项目（derekluo 的 OpenAPI relay server），不是本仓库；本仓库尚未发布 npm，当前通过 GitHub Release / `git clone` / Agent Plugins 插件包分发。
+### 分发方式（npm 已冻结）
 
-包内只含 `src/`、`templates/`、`skills/`、`plugin.json`、`mcp.json`、安装器/校验器与 README/LICENSE（`files` 白名单）；协议状态（`.relay/`、TASKS/LOG）与开发文档不进包。
-
-```sh
-npm pack --dry-run        # 本地校验打包面（51 个文件，约 158 kB）
-relay relay_session_start --root .   # 或直接运行 stdio server：node src/index.mjs
-```
-
-npm 发布拆到 TASKS T030：需人类 npm 账号，并改用 scoped 包名（如 `@<npm-username>/relay-mcp`）或新的非 scoped 包名；`npm publish` 由 `scripts/check-publish-guard.mjs` 的 `RELAY_ALLOW_PUBLISH=1` 显式放行。
+2026-11-18 决策**冻结 npm 发布**：npm 上的 `relay-mcp` 是另一个项目（derekluo 的 OpenAPI relay server），本仓库不再尝试占用该名字。分发只保留 `git clone`、Agent Plugins 插件包与 GitHub Release；`package.json` 已置 `"private": true`，从机器层阻止误发布，安装器、打包面与发布护栏已移除。历史发布记录见 CHANGELOG。
 
 ### 快速开始
 
@@ -180,9 +182,9 @@ worktree 清理默认 dry-run：只删除已登记、已过期、非活跃、干
 
 - 密钥守卫：`.env*`、`*secret*`、`*credential*`、`*.key`、`*.pem`、`id_rsa` 不自动提交。
 - 改写备份：`relay_sync` / `relay_onboard` 在重写入口或 manifest 前生成 `*.relay-bak-*` 备份供人工恢复；该类文件已入 `.gitignore` 运行时基线，不会被 `git add -A` 卷进提交，恢复后请自行删除。
-- LOG 边界（R12）：LOG 活跃区（归档指针之前的行）超过 150 行、或完成条目超过 20 条 → `relay_verify` 报 WARN（`manifest.logBoundary.strict=true` 升 ERROR）；只报警不自动归档，归档动作由人工决定（`docs/archive/` + 指针）；指针必须指向仓库内真实存在的归档文件，失效指针 → WARN 而非静默 PASS。
+- LOG 边界（R12）：LOG 活跃区（归档指针之前的行）超过 150 行、或完成条目超过 20 条 → `relay_verify` 报 WARN（`manifest.logBoundary.strict=true` 升 ERROR）；只报警不自动归档，归档动作由人工决定（`docs/archive/LOG-*.md` + 指针）；指针必须指向仓库内真实存在的 `LOG-*.md`，失效指针 → WARN 而非静默 PASS。
 - 协议结构（R13）：TASKS 任务行必须匹配契约正则且任务号唯一，`[~]` 带 `(model, YYYY-MM-DD HH:mm)`、`[x]` 带 `(YYYY-MM-DD)`；LOG 条目标题必须匹配 `## 时间 | model=<名> | task=<T### …>`；HTML 注释块与缩进行豁免。违规 → WARN（`manifest.structure.strict=true` 升 ERROR）。
-- 内容级密钥闸（R11）：协议面 8 个文件（`TASKS.md` / `LOG.md` / `AGENTS.md` / `CLAUDE.md` / `GEMINI.md` / `START.md` / `SPEC.md` / `DECISIONS.md`）与 `docs/archive/**/*.md` 命中 AWS / GitHub / Slack / OpenAI / Google 密钥样式或 PEM 私钥块 → `relay_verify` 报 ERROR，出场写盘前直接阻断（不写、不提交）；误报可在同一行标注 `relay:secret-ok` 豁免。扫描输出只给前 4 字符预览，绝不回显完整密钥。
+- 内容级密钥闸（R11）：协议面 8 个文件（`TASKS.md` / `LOG.md` / `AGENTS.md` / `CLAUDE.md` / `GEMINI.md` / `START.md` / `SPEC.md` / `DECISIONS.md`）与 `docs/archive/LOG-*.md` 命中 AWS / GitHub / Slack / OpenAI / Google 密钥样式或 PEM 私钥块 → `relay_verify` 报 ERROR，出场写盘前直接阻断（不写、不提交）；误报可在同一行标注 `relay:secret-ok` 豁免。扫描输出只给前 4 字符预览，绝不回显完整密钥。
 - 受保护路径：`verify`、`.relay/**`、`tests/**` 与测试文件改动不自动提交；最终防线是 CI 与人工审核。
 - 锁：仓库写锁带心跳与写前 fencing；任务认领锁刻意关闭心跳，保留 240 分钟 TTL 崩溃恢复。并发会话必须使用不同 `model` 标识（同名 model 无法区分持有者）。
 - 当前不提供 abort/release、任务 status 工具或 sessionId；恢复方式为 TTL 接管、出场释放或 cleanup。
@@ -217,21 +219,18 @@ worktree 清理默认 dry-run：只删除已登记、已过期、非活跃、干
 
 > **状态说明**：检索寻址（T018）的动工闸门是「LOG ≥ 20 条或出现取回失败」，实测为 16 条、闸门未过，按用户指令先行交付。收益复核见 TASKS.md 的 T021；若实测无收益，回退方式仅为移除这两个工具的注册，协议面与事实底账不受影响。
 
-CLI 与 MCP 共用同一引擎（安装后 `relay` 是同一入口的 bin 名）：
+CLI 与 MCP 共用同一引擎（npm 冻结后不再提供 `relay` bin，直接用 `node src/cli.mjs`）：
 
 ```sh
-relay relay_verify --root /path/to/project
-relay relay_worktree_cleanup --root /path/to/project --json confirm=true
-relay --help        # 用法
-relay --version     # 版本
-
-# 未安装时等价写法
 node src/cli.mjs relay_verify --root /path/to/project
+node src/cli.mjs relay_worktree_cleanup --root /path/to/project --json confirm=true
+node src/cli.mjs --help        # 用法
+node src/cli.mjs --version     # 版本
 ```
 
 ### 自举
 
-本仓库使用自身协议开发：`START.md` 是入口，`TASKS.md` 是 backlog，`LOG.md` 记录会话。`npm test` 覆盖 25 套端到端冒烟（协议、补丁、worktree、升级兼容、安装器、密钥闸、事实底账、简报、doctor、检索、打包、评审回归、性能计数、LOG 边界、会话性能、并发、归档、安全、Agent Plugins 插件包、崩溃点矩阵、上下文预算、测试框架元负控、协议结构机检、漂移备份闸、D8 归档证据面），CI 覆盖 Node 22/24/26。
+本仓库使用自身协议开发：`START.md` 是入口，`TASKS.md` 是 backlog，`LOG.md` 记录会话。`npm test` 覆盖 23 套端到端冒烟（协议、补丁、worktree、升级兼容、密钥闸、事实底账、简报、doctor、检索、评审回归、性能计数、LOG 边界、会话性能、并发、归档、安全、Agent Plugins 插件包、崩溃点矩阵、上下文预算、测试框架元负控、协议结构机检、漂移备份闸、D8 归档证据面），CI 覆盖 Node 22/24/26。
 
 一次真实的多模型交接实测记录（含假绿事故的完整证据链）见 [docs/04-test/08-handoff-case-study-v1.0.md](docs/04-test/08-handoff-case-study-v1.0.md)。
 
@@ -245,7 +244,7 @@ node src/cli.mjs relay_verify --root /path/to/project
 
 relay-mcp is an MCP server for reliable handoff across coding models and sessions. Handoff state lives in repository files (`START / SPEC / DECISIONS / TASKS / LOG`), and an exit gate verifies the work with machine-checked rules (R1–R13) plus the project's executable acceptance tests before anything is committed.
 
-- Zero runtime dependencies, Node ≥ 18, no build step; 14 MCP tools over stdio (`node src/index.mjs`)
+- Zero runtime dependencies, Node ≥ 22, no build step; 14 MCP tools over stdio (`node src/index.mjs`)
 - `AGENTS.md` is the required project entry; `CLAUDE.md` / `GEMINI.md` are optional projections
 - The repo root is also a conformant [Agent Plugins v1.0.0](https://agent-plugins.org/specification) package: root `plugin.json`, `mcp.json` (stdio, `${PLUGIN_ROOT}` placeholders), and `skills/relay-protocol/SKILL.md`. Validate with `node scripts/validate-plugin.mjs`.
 - Task worktrees: `relay_claim` returns `controlRoot` and `executionRoot`. Exit makes two commits (task branch code plus controlRoot TASKS/LOG) and reports both SHAs. Accepted is not merged: merge manually with `git merge --no-ff relay/T###`.
@@ -254,14 +253,27 @@ relay-mcp is an MCP server for reliable handoff across coding models and session
 
 ### Install
 
+This repository is not distributed via npm (frozen on 2026-11-18; the npm `relay-mcp` package belongs to another project). Use `git clone` or the Agent Plugins package:
+
 ```sh
 git clone https://github.com/KentQi/relay-mcp.git
 cd relay-mcp
-node scripts/install-mcp.mjs                                  # generic JSON + per-harness commands
-node scripts/install-mcp.mjs --target claude --scope user     # or gemini / codex / json / dsh
+node src/index.mjs        # stdio MCP server
 ```
 
-The installer detects the current `node` and repository path at runtime and never hard-codes machine-specific paths. Use `--print-json` for any harness not built in.
+For clients without Agent Plugins support, add this to their `mcpServers` config (replace `/abs/path`):
+
+```json
+{
+  "mcpServers": {
+    "relay-mcp": {
+      "command": "node",
+      "args": ["/abs/path/relay-mcp/src/index.mjs"],
+      "cwd": "/abs/path/relay-mcp"
+    }
+  }
+}
+```
 
 ### Usage
 

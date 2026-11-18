@@ -3,6 +3,21 @@
 本项目遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 格式;
 版本号遵循 [SemVer](https://semver.org/lang/zh-CN/)。
 
+## [Unreleased]
+
+### Breaking
+
+- **Node 下界 18 → 22**:`engines.node`、doctor D1、skills、模板与 README 同步;与 CI 实测矩阵 22/24/26 对齐。
+- **npm 分发冻结**:`package.json` 置 `private: true`,移除 `bin`/`files`/安装器/发布护栏/打包与安装器冒烟;分发改为 `git clone`、Agent Plugins 插件包与 GitHub Release。
+
+### Changed
+
+- **归档机检面收窄**:R11 与 D8 只把 `docs/archive/LOG-*.md` 当作协议证据;`ARCHIVED-` 文档版本归档不再被误扫。R12 归档指针同样只承认 `docs/archive/LOG-*.md`。
+
+### 规模
+
+- `npm test` **23 套**;CI 覆盖 Node 22 / 24 / 26。
+
 ## [1.9.0] - 2026-11-09
 
 ### Added(协议结构机检)

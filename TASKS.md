@@ -14,14 +14,17 @@
 (空——认领后由 relay_claim 移入;认领锁在 .relay/claims/,TTL 4 小时,崩溃会话的认领到期自动可接管)
 
 ## 待办
-- [ ] T036 Tier 2 决策：npm 方向 / Node 下界 / 归档约定
-  验收: 人类拍板后执行；未拍板前不改代码
-  备注: 三项待决：①npm 发布走 scoped 包还是冻结；②Node 下界保持 >=18 还是上移 >=22；③templates/docs/README.md 的 ARCHIVED- 约定与 docs/archive 的 LOG 归档双语义如何隔离。每项先记 DECISIONS，再决定是否落代码。
-- [ ] T030 发布 npm(阻塞:包名 `relay-mcp` 属他人 + 本机无 npm 账号)
-  验收: 人类注册/登录 npm 后,二选一并执行——(a) 改用 scoped 包 `@<npm-username>/relay-mcp` 发布(`npm publish --access public`);或 (b) 换新的非 scoped 包名(先 `npm view <name>` 确认可用)并同步 README/安装器文案;发布后 `npm view <name>@1.9.0` 可查到
-  备注: GitHub v1.9.0 已发(Release 已补);npm 上 relay-mcp@1.2.0 是 derekluo 的另一个项目,不可覆盖;发布仍需人类登录或提供 granular token(agent 不代持凭据)
+- [ ] T037 发布 v2.0.0（Node>=22 / npm 冻结 / 归档收窄）
+  验收: npm test
+  备注: 破坏性变更：Node >=22、npm 冻结、归档机检收窄。发布版本/tag/GitHub Release 需人类授权；发布前跑 npm test 与 ./verify。
+- [ ] T030 发布 npm — 决策冻结,勿执行  (2026-11-18)
+  验收: 决策已落 DECISIONS(2026-11-18 Tier 2):冻结 npm;本任务不再执行
+  备注: 原阻塞(包名属他人 + 无 npm 账号)不再需要解决;分发改为 git clone / Agent Plugins / GitHub Release;原安装器/打包面已删除。
 
 ## 已完成
+- [x] T036 Tier 2 决策：npm 方向 / Node 下界 / 归档约定  (2026-11-18)
+  验收: npm test
+  备注: 决策已落 DECISIONS(2026-11-18 Tier 2):npm 冻结 / Node >=22 / 归档机检收窄到 docs/archive/LOG-*;代码、文档、模板、冒烟已同步。
 - [x] T035 Tier 1：facts.strict 废弃标注 + 死导出清理 + 归档头注  (2026-11-18)
   验收: npm test
   备注: 保留 facts.strict 解析与 KNOWN_NESTED_KEYS 兼容，仅从简报回显与文档移除并记 DECISIONS；recomputeCommitFileCount/lockTiming 删除或标 @internal；归档文件加内容区间头注，不重命名。
@@ -67,6 +70,7 @@
 - [x] T025 补 package.json 的 repository / bugs 字段(provenance 发布前置)  (2026-11-01)
   验收: test:scripts/smoke-pack.mjs
   断言: package.json 含 repository(指向 github.com/KentQi/relay-mcp)与 bugs(指向 /issues);现有 46 文件/129kB 打包断言不回归
+  备注: 原验收脚本已于 2026-11-18 npm 冻结时移除;该任务的历史证据见提交记录。
 - [x] T024 LOG 边界规则(P3-32 / T001 最小触发):新增 R12,LOG 活跃区 >150 行或完成条目 >20 → WARN(facts.strict 同款 strict 可升 ERROR);归档动作留人工  (2026-11-01)
   验收: test:scripts/smoke-r12-boundary.mjs
   断言: 151 行 LOG fixture → R12 WARN;120 行 → 全绿;CONTRACT.md 规则表含 `| R12 |` 行且 README 规则清单提及 R12(修宪三处一致:CONTRACT + relay_rules + AGENTS 模板)

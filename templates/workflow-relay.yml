@@ -11,7 +11,7 @@ jobs:
     strategy:
       # 版本矩阵对齐真实开发环境(单一旧版本会掩盖 node --test 之类的跨版本行为差异)
       matrix:
-        node-version: [22, 24]
+        node-version: [22, 24, 26]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
