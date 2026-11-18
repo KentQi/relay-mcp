@@ -100,7 +100,8 @@ try {
   console.log('\n== E. npm 分发冻结 ==');
   const pkg = JSON.parse(readFileSync(path.join(RELAY, 'package.json'), 'utf8'));
   ok(pkg.private === true, 'package.json private=true(机器层阻止误发布)');
-  ok(!pkg.bin && !pkg.files && !pkg.scripts?.prepublishOnly && !pkg.scripts?.['install:mcp'], 'npm 分发面已移除');
+  ok(!pkg.bin && !pkg.scripts?.prepublishOnly && !pkg.scripts?.['install:mcp'], 'npm 分发面已移除(bin/安装器/发布护栏)');
+  ok(Array.isArray(pkg.files) && pkg.files.length > 0, 'files 白名单保留(打包边界,private 不阻止 npm pack)');
 
   // ================= F. R5 提交原子性:哨兵文件名不可伪造提交头 =================
   // P0-1(PR #8 审计):git log --name-only 把文件名混进同一行流,旧实现用文本哨兵

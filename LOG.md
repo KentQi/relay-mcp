@@ -1,5 +1,11 @@
 # 会话日志(最新在上)
 
+## 2026-11-18 16:30 | model=claude-fable-fix-20261118 | task=T043 完成
+- 摘要: T043 恢复打包边界：package.json 重新加入 files 白名单（src/、templates/、skills/、plugin.json、mcp.json、scripts/validate-plugin.mjs、README、LICENSE），保留 private:true 与 npm 冻结；smoke-review-regressions 的冻结断言改为「bin/安装器/发布护栏已移除」+「files 白名单保留」。npm pack --dry-run 实测 51 文件 / 164KB，协议状态与 docs/、docs-design/ 均不进包；23 套全绿。
+- 事实(v2): mode=single | 文件 2 | ± +12/-1 | base=- | sha=- | branch=main || 验收: 通过 | verify: PASS 12·WARN 0·ERROR 0 | 耗时: 46s
+- 负结果: private:true 只阻止 npm publish，不阻止 npm pack；冻结 npm 仍必须保留 files 白名单，否则本地打包会把协议状态与开发文档带出去（实测 104 文件/371KB）。
+- 负结果: 删除分发面时把 files 与 bin 一起删掉，会让「冻结发布」和「打包边界」两个独立约束被混为一谈；后续改动必须区分。
+
 ## 2026-11-18 16:27 | model=claude-fable-fix-20261118 | task=T041 完成
 - 摘要: T041 修复 R12 悬空指针夹具：缺失目标改用 docs/archive/LOG-missing.md（合法 LOG-* 路径但文件缺失），并新增空目标文件用例，分别覆盖 findArchiveBoundary 的缺失与 size<=0 两条 fail-closed 分支；27 断言全绿。另按引擎修复指令把 T040 历史事实行的文件数从 10 校正为 9（git 实测），R10 恢复 PASS。
 - 事实(v2): mode=single | 文件 1 | ± +6/-2 | base=- | sha=- | branch=main || 验收: 通过 | verify: PASS 12·WARN 0·ERROR 0 | 耗时: 55s
