@@ -1,5 +1,10 @@
 # 会话日志(最新在上)
 
+## 2026-11-18 16:41 | model=claude-fable-fix-20261118 | task=T047 完成
+- 摘要: T047 让 T030 冻结态与 DECISIONS 一致：从待办区移除 `[ ] T030` 任务行，新增「已冻结」分区（缩进备注，不参与任务行解析与 session_start 派发），保留冻结决定与分发方式说明；解冻需先在 DECISIONS 记录新决定并恢复任务行。
+- 事实(v2): mode=single | 文件 0 | ± +0/-0 | base=- | sha=- | branch=main || 验收: 通过 | verify: PASS 12·WARN 0·ERROR 0 | 耗时: 47s
+- 负结果: 冻结任务不能继续以 [ ] 留在待办：session_start 只按任务行解析，会把冻结项当可执行任务派发；必须移出任务行（冻结分区用缩进备注），靠 DECISIONS 保留决定。
+
 ## 2026-11-18 16:39 | model=claude-fable-fix-20261118 | task=T046 完成
 - 摘要: T046 处置事实行手工校正：在 DECISIONS 记录 T035（7→6）与 T040（10→9）两次校正的事实、依据与影响，根因收敛为 single 模式写入侧从 porcelain 状态行派生文件数、与提交侧 numstat 在归档/重命名场景差 1（T039 已修 rename/大小写，剩余「多计 1」需改为暂存区 numstat 派生），并明确「事实行不得手改」无法机检、只能靠 session_end 流程与记录约束。
 - 事实(v2): mode=single | 文件 1 | ± +9/-0 | base=- | sha=- | branch=main || 验收: 通过 | verify: PASS 12·WARN 0·ERROR 0 | 耗时: 47s
