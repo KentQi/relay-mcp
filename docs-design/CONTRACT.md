@@ -389,4 +389,10 @@ export const startServer = async ({ onInit, onMethod }) => {
 - **失败签名与任务粒度**:出场失败时把 ERROR 规则 ID 集合写入运行时诊断 `.relay/last-failure.json`(gitignore 基线,不入库);同一签名连续出现 → 出场/简报提示"同一前提连续失败,先重述前提或升级人类";简报对同一任务跨 ≥3 个会话 → 提示拆分任务粒度。
 - **半写恢复**:出场在 TASKS 写完后、LOG 写前崩溃(完成戳在、完成日志缺席)时,`completionOwnershipError` 允许**仍持有该任务认领锁的原模型**重跑补写;锁不在则维持拒绝。`RELAY_CRASH_AT_WRITE` / `RELAY_CRASH_BEFORE_COMMIT` 为测试钩子,生产不设置时行为不变。
 
+## 2026-11-18 Tier 1 清理补充契约
+
+- **`manifest.facts.strict` 已废弃**:自 T023 起 R10 机检段篡改默认 ERROR,不再读取该键;为兼容旧 manifest 仍解析并保留于已知键白名单,但不产生任何行为,简报不再回显。计划 v2.0 移除。
+- **零调用导出标 `@internal`**:`src/engines/facts.mjs` 的 `recomputeCommitFileCount` 与 `src/util.mjs` 的 `lockTiming` 无调用点;保留以避免包外 import 断裂,明确不属于公共 API,计划 v2.0 删除。
+- **归档头注**:`docs/archive/LOG-2026-09-11.md` 仅补内容区间与顺序说明(实际覆盖 2026-09-29 ~ 2026-11-02,多次归档拼接、非全局有序),不重命名、不重排、不改历史条目。
+
 

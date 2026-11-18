@@ -14,14 +14,17 @@
 (空——认领后由 relay_claim 移入;认领锁在 .relay/claims/,TTL 4 小时,崩溃会话的认领到期自动可接管)
 
 ## 待办
-- [ ] T035 Tier 1：facts.strict 废弃标注 + 死导出清理 + 归档头注
-  验收: npm test
-  备注: 保留 facts.strict 解析与 KNOWN_NESTED_KEYS 兼容，仅从简报回显与文档移除并记 DECISIONS；recomputeCommitFileCount/lockTiming 删除或标 @internal；归档文件加内容区间头注，不重命名。
+- [ ] T036 Tier 2 决策：npm 方向 / Node 下界 / 归档约定
+  验收: 人类拍板后执行；未拍板前不改代码
+  备注: 三项待决：①npm 发布走 scoped 包还是冻结；②Node 下界保持 >=18 还是上移 >=22；③templates/docs/README.md 的 ARCHIVED- 约定与 docs/archive 的 LOG 归档双语义如何隔离。每项先记 DECISIONS，再决定是否落代码。
 - [ ] T030 发布 npm(阻塞:包名 `relay-mcp` 属他人 + 本机无 npm 账号)
   验收: 人类注册/登录 npm 后,二选一并执行——(a) 改用 scoped 包 `@<npm-username>/relay-mcp` 发布(`npm publish --access public`);或 (b) 换新的非 scoped 包名(先 `npm view <name>` 确认可用)并同步 README/安装器文案;发布后 `npm view <name>@1.9.0` 可查到
   备注: GitHub v1.9.0 已发(Release 已补);npm 上 relay-mcp@1.2.0 是 derekluo 的另一个项目,不可覆盖;发布仍需人类登录或提供 granular token(agent 不代持凭据)
 
 ## 已完成
+- [x] T035 Tier 1：facts.strict 废弃标注 + 死导出清理 + 归档头注  (2026-11-18)
+  验收: npm test
+  备注: 保留 facts.strict 解析与 KNOWN_NESTED_KEYS 兼容，仅从简报回显与文档移除并记 DECISIONS；recomputeCommitFileCount/lockTiming 删除或标 @internal；归档文件加内容区间头注，不重命名。
 - [x] T034 发布 v1.9.0(版本/CHANGELOG/tag/GitHub Release)+ 文档漂移修正  (2026-11-09)
   验收: npm test 25 套全绿 且 ./verify 无 ERROR 且 package.json/plugin.json 版本同步 1.9.0 且 CHANGELOG 定版 [1.9.0] - 2026-11-09 且 tag v1.9.0 指向发布提交并推送 且 GitHub Release v1.9.0 出现;历史 tag v1.7.0/v1.8.0 的缺失 Release 一并补建
   备注: 发布为人工授权动作;完成后 T030 的 npm 发布目标版本更新为 1.9.0

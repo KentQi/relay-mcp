@@ -658,7 +658,7 @@ export const relaySessionStart = async (args = {}) => {
     `- controlRoot: ${root}`,
     `- executionRoot: ${executionRoot}`,
     // 生效配置回显(T015):manifest 未知字段静默忽略是已文档化的漂移陷阱,一行回显让配置错误当场可见。
-    `- 生效配置: worktree=${briefWt ? `enabled=${briefWt.enabled},cacheDir=${briefWt.cacheDir},ttl=${briefWt.ttlHours}h,autoCleanup=${briefWt.autoCleanup}` : '不可读'} facts=${briefCfg.facts.enabled ? `on(since=${briefCfg.facts.since || '未设'},strict=${briefCfg.facts.strict})` : 'off'} contextBudget=${briefCfg.contextBudget}`,
+    `- 生效配置: worktree=${briefWt ? `enabled=${briefWt.enabled},cacheDir=${briefWt.cacheDir},ttl=${briefWt.ttlHours}h,autoCleanup=${briefWt.autoCleanup}` : '不可读'} facts=${briefCfg.facts.enabled ? `on(since=${briefCfg.facts.since || '未设'})` : 'off'} contextBudget=${briefCfg.contextBudget}`,
     ...lifecycleNotes,
     ...(failureNote ? [failureNote] : []),
     ...(taskSizeNote ? [taskSizeNote] : []),

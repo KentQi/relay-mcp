@@ -1,5 +1,14 @@
 # DECISIONS — 追加式决策日志(最新在上)
 
+## 2026-11-18 — Tier 1 真相清理:facts.strict 废弃、零调用导出标 @internal、归档头注
+
+- 背景: Tier 0 考古确认 `facts.strict` 自 T023 起已无消费者——R10 机检段篡改默认 ERROR,不再依赖该键;实验 A 证明 `strict=false/true` 的 R10 输出逐字相同。
+- 决定: 保留 `facts.strict` 的解析与 `KNOWN_NESTED_KEYS` 白名单(旧 manifest 不触发 D2 未知键),但简报不再回显、CONTRACT 明确标注废弃;计划 v2.0 移除。直接删除会让旧项目收到 doctor WARN,收益低于兼容成本。
+- 决定: `recomputeCommitFileCount`(facts.mjs)与 `lockTiming`(util.mjs)零调用;标 `@internal` 保留而不删除——包外 import 不可观测,删除的收益低于潜在破坏;v2.0 再删。
+- 决定: `docs/archive/LOG-2026-09-11.md` 只补内容区间与顺序头注(实际覆盖 2026-09-29 ~ 2026-11-02,多次归档拼接、非全局有序),不重命名、不重排、不改历史条目;文件名保留首次归档日期。
+- 否决: 硬删 `facts.strict`(旧 manifest 会 D2 WARN);重命名归档文件(牵动 R12 指针、D8 证据面与历史引用);删除零调用导出(包外 import 不可观测)。
+- 状态: 现行
+
 ## 2026-11-09 — ub-mode 借鉴裁定:只取协议结构机检,质量门登记为观察项(T031)
 
 - 背景: 对照 ub-mode(先跑通→再做对→留下证据 + CRAP/重复度/变异测试)评估 relay。其 Practice 与「First make it work」多数已被 R1–R12、事实行、有界简报、worktree 清理覆盖;真正空白是协议结构本身的 fail-open。

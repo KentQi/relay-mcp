@@ -384,6 +384,7 @@ const numEnv = (name, fallback, min) => {
 };
 let lockHeartbeatMs = numEnv('RELAY_LOCK_HEARTBEAT_MS', 20_000, 50);
 let emptyLockGraceMs = numEnv('RELAY_LOCK_EMPTY_GRACE_MS', 2_000, 10);
+/** @internal 零调用:仅保留为诊断/兼容面,不属于公共 API;计划 v2.0 删除。 */
 export const lockTiming = () => ({ heartbeatMs: lockHeartbeatMs, emptyGraceMs: emptyLockGraceMs });
 // 仅供冒烟测试缩短心跳/宽限(不改默认行为);返回还原函数。
 export const __setLockTimingForTest = ({ heartbeatMs, emptyGraceMs } = {}) => {

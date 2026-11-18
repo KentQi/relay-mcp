@@ -160,6 +160,7 @@ export const readManifestConfig = async (root, { manifest: preloaded } = {}) => 
     facts: {
       enabled: !!(m && m.facts && m.facts.enabled === true),
       since: m && m.facts && typeof m.facts.since === 'string' && m.facts.since.trim() ? m.facts.since.trim() : null,
+      // 已废弃(T023 起 R10 不再读取):保留解析仅为兼容旧 manifest,不产生任何行为;计划 v2.0 移除。
       strict: !!(m && m.facts && m.facts.strict === true),
     },
     // LOG 边界(T024/R12):活跃区行数/完成条目数超限 → WARN;strict 同 facts.strict 风格可升 ERROR。

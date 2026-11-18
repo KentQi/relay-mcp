@@ -1,5 +1,12 @@
 # 会话日志(最新在上)
 
+## 2026-11-18 13:33 | model=claude-fable-tier1-20261118 | task=T035 完成
+- 摘要: T035 Tier 1 真相清理：facts.strict 保留解析与 KNOWN_NESTED_KEYS 兼容，但简报不再回显、config/CONTRACT 明确标废弃（计划 v2.0 移除）；recomputeCommitFileCount 与 lockTiming 标 @internal（零调用，保留避免包外 import 断裂）；docs/archive/LOG-2026-09-11.md 补内容区间与顺序头注（实际覆盖 2026-09-29 ~ 2026-11-02，多次归档拼接、非全局有序），不重命名不重排；DECISIONS 新增 Tier 1 条目。npm test 全绿、./verify 0 ERROR、relay_doctor 健康。
+- 事实(v2): mode=single | 文件 7 | ± +19/-2 | base=- | sha=- | branch=main || 验收: 通过 | verify: PASS 12·WARN 0·ERROR 0 | 耗时: 43s
+- 负结果: 硬删 facts.strict 会让旧 manifest 触发 doctor D2 未知键 WARN；选择保留解析与白名单、停止简报回显并标废弃。
+- 负结果: 删除 recomputeCommitFileCount / lockTiming 对包外 import 不可观测；选择标 @internal 保留至 v2.0，避免破坏未知消费者。
+- 留给下一个: 三项待决：①npm 发布走 scoped 包还是冻结；②Node 下界保持 >=18 还是上移 >=22；③templates/docs/README.md 的 ARCHIVED- 约定与 docs/archive 的 LOG 归档双语义如何隔离。每项先记 DECISIONS，再决定是否落代码。
+
 ## 2026-11-18 13:28 | model=claude-fable-tier0-20261118 | task=无
 - 摘要: Tier 0 真相修复（零行为变更）：删除根目录 0 字节探针文件恢复 R2；doctor 的 CONTRACT 引用改为 docs-design/CONTRACT.md，D7 在未配置 relayHome 时不再谎称“一致”；CONTRIBUTING 规则区间 R1-R9→R1–R13 并纳入 smoke-r12-boundary 静态断言；CHANGELOG 工具计数修正为 10→13；docs/04-test/08 的套件数/检查数/规则区间与 CONTRACT 的 R1–R12 同步到当前事实；DECISIONS 将已被推翻的 npm 决策标为已废弃，并为 D11/D12/D14/D16 补后续注记。npm test 25 套全绿、./verify 无 ERROR、relay_doctor 健康。
 - 事实(v2): mode=single | 文件 7 | ± +23/-10 | base=- | sha=- | branch=main || 验收: 通过 | verify: PASS 11·WARN 0·ERROR 0 | 耗时: 47s

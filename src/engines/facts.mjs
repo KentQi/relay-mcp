@@ -224,7 +224,7 @@ export const recomputeCommitStats = async (root, parsed, { isRepo = undefined, h
   return diffStat(root, range);
 };
 
-/** 兼容包装:只取文件数。 */
+/** @internal 零调用兼容导出:不属于公共 API,保留以避免包外 import 断裂;计划 v2.0 删除。 */
 export const recomputeCommitFileCount = async (root, parsed, opts = {}) => {
   const stat = await recomputeCommitStats(root, parsed, opts);
   return stat ? stat.files : null;
