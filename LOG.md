@@ -1,5 +1,11 @@
 # 会话日志(最新在上)
 
+## 2026-11-18 15:39 | model=claude-fable-audit-20261118 | task=无
+- 摘要: 把多专家并行审计确认的 15 条缺陷全部登记为任务 T038–T047（按同一根因合并：归档指针口径 T038、事实行口径 T039、R11 密钥面 T040、R12 悬空夹具 T041、协议不变量机检 T042、打包边界 T043、分发面文案 T044、CHANGELOG Breaking 归类 T045、事实行手工改写处置 T046、T030 冻结态与账本一致 T047），每条带可执行验收与复现证据；DECISIONS 记录审计结论与根因判断（同一语义多份副本、只改其中几份）；T037 发布 v2.0.0 下移到修复之后。npm test 23 套全绿、./verify 0 ERROR、R13 解析新增任务行通过、relay_session_start 已把 T038–T040 列为待办首位。
+- 事实(v2): mode=single | 文件 1 | ± +10/-0 | base=- | sha=- | branch=main || 验收: 通过 | verify: PASS 12·WARN 0·ERROR 0 | 耗时: 45s
+- 负结果: 第一轮并行扇出有 31 个代理被账户 Token Plan 上限 429 截断；额度重置后改为分批验证（每代理 6 条、逐条独立投票）才跑通——说明「每个候选一个代理」的拓扑对本账户成本过高。
+- 负结果: 「零调用导出」不等于可删：facts.strict 与 lockTiming 保留解析/白名单是为兼容已接入仓库的 manifest；直接删除会让旧项目触发 doctor D2 未知键告警。
+
 ## 2026-11-18 14:08 | model=claude-fable-tier2-20261118 | task=T036 完成
 - 摘要: T036 Tier 2 三项决策落地：①npm 正式冻结——package.json 置 private=true，移除 bin/files/安装器/发布护栏，删除 install-mcp/check-publish-guard/smoke-install-mcp/smoke-pack，README 改为 git clone + Agent Plugins + mcpServers 片段，T030 保留为待办但明确冻结勿执行；②Node 下界 18→22——engines/doctor D1/bootstrap/skills/preset/CI 模板/README/SPEC 同步，CI 矩阵补 26；③归档机检收窄到 docs/archive/LOG-*.md——R11/D8 扫描面与 R12 指针同步，ARCHIVED- 文档版本归档不再被误扫，冒烟新增正反用例。期间修复 single 模式事实行把 LOG 归档计入文件数的口径 bug，并校正 T035 历史事实行。npm test 23 套全绿、./verify 0 ERROR、relay_doctor 健康。
 - 事实(v2): mode=single | 文件 25 | ± +137/-805 | base=- | sha=- | branch=main || 验收: 通过 | verify: PASS 12·WARN 0·ERROR 0 | 耗时: 46s

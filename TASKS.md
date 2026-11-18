@@ -14,9 +14,39 @@
 (空——认领后由 relay_claim 移入;认领锁在 .relay/claims/,TTL 4 小时,崩溃会话的认领到期自动可接管)
 
 ## 待办
+- [ ] T038 归档指针口径统一：写侧收窄到 LOG-* + D8 修复文案可执行
+  验收: test:scripts/smoke-archive-log.mjs
+  备注: 覆盖审计发现 1 与 5：src/engines/archive.mjs:17 归档目标仍用宽松正则（已复现：22 条历史被追加进 docs/archive/notes.md，写出的指针立刻被 R12 判「未被承认」，边界失效且 LOG 继续膨胀）；src/engines/doctor.mjs:126 的 D8 修复文案指向 relay_archive_log「会自动维护」，而该工具按旧正则继续写同一非法指针 → 照指引操作不会自愈。要求：归档目标只认 docs/archive/LOG-*.md；旧式非 LOG 指针改为新建 LOG 归档并保留旧文件不动；D8 文案改为真能生效的动作；补「旧式指针」冒烟用例。
+- [ ] T039 事实行文件数口径统一：重命名与大小写
+  验收: test:scripts/smoke-facts.mjs
+  备注: 覆盖审计发现 2 与 6：src/engines/facts.mjs:70 写入侧按 porcelain 计行数而校验侧按 numstat --no-renames（实测 git mv 时 1 行 vs 2 行，差 1 → 做过重命名的任务会被 R10 ERROR 拦死在出场门外）；src/engines/facts.mjs:19 归档谓词区分大小写而 verify/doctor 用 /i（同一仓库在 macOS 与 Linux CI 上结论不同）。要求：写入侧与校验侧同口径；归档谓词的大小写策略统一，并有用例钉住。
+- [ ] T040 R11 密钥扫描面收窄的显式化与回归
+  验收: test:scripts/smoke-security.mjs
+  备注: 覆盖审计发现 3：src/engines/verify.mjs:573 只扫 docs/archive/LOG-*.md，非 LOG 归档里的密钥不再被发现（A/B 复现：同一密钥在 LOG-*.md 报 ERROR、在 notes.md 或 ARCHIVED-*.md 放行），反转了 2026-11-01 审计 P2-2 的保证。要求：先在 DECISIONS 明确「文档旧版归档是否属于密钥扫描面」的取舍，再同步 R11 规则行/README/契约文案与用例；若决定回退全量扫描，同步 R12/D8 口径。
+- [ ] T041 修复 R12 悬空指针夹具命错分支
+  验收: test:scripts/smoke-security.mjs
+  备注: 覆盖审计发现 4：scripts/smoke-security.mjs:108 的指针写成 docs/archive/missing.md，被新正则 ARCHIVE_REL_RE 挡在「路径不合规」分支，「指针合法但目标缺失或为空」这条 fail-closed 路径自此失去覆盖。要求：夹具改指 docs/archive/LOG-missing.md，并补「目标存在但为空」的用例。
+- [ ] T042 恢复 engines 与零依赖等协议不变量的机检
+  验收: npm test
+  备注: 覆盖审计发现 11：删除 scripts/smoke-pack.mjs 后，engines.node >=22、零运行时依赖、两个入口的 shebang、cli --version 与 package.json 同步、files 白名单边界全部失去机检——engines 被误改回 >=18 或 >=20 不会让任何测试变红，零依赖也违反 SPEC「零运行时依赖」边界约束却无人拦。要求：新增一套协议不变量断言并接入 npm test。
+- [ ] T043 打包边界收口：恢复 files 白名单或明确不再产出 npm 制品
+  验收: npm test
+  备注: 覆盖审计发现 7：删除 files 白名单后 npm pack --dry-run 实测 104 文件/371KB，含 .relay/manifest.json、LOG.md、TASKS.md、DECISIONS.md、整个 docs/ 与 docs-design/ 及 25 个冒烟脚本——正是 CONTRACT T020 明令排除的内容（private:true 只挡 publish，挡不住本地打包分发）。要求：恢复白名单，或明确声明不再产出 npm 制品并删除相关断言，避免契约与现实脱节。
+- [ ] T044 分发面文案同步：Node 下界与已删除的 relay bin
+  验收: npm test
+  备注: 覆盖审计发现 8/9/10/12：src/cli.mjs:16 的 USAGE 主用法仍是 relay bin（已删，照做 command not found）；templates/verify.sh:8 仍让用户「安装 relay-mcp」（npm 已冻结，新接入项目照做必然失败）；README.md:5 的 Node 徽章仍写 ≥18（engines 已 >=22）；docs/04-test/08-handoff-case-study-v1.0.md:86 仍让读者 npm i -g . 后跑已删 bin；docs-design/CONTRACT.md:10/125 仍写 Node >= 18 与 bin relay。要求：统一改为「node src/cli.mjs + git clone 引擎 + RELAY_HOME」，并加一致性断言防止再次漂移。
+- [ ] T045 CHANGELOG 归档收窄改为 Breaking 并补存量项目迁移说明
+  验收: npm test
+  备注: 覆盖审计发现 15：CHANGELOG.md:15 把 R11/D8/R12 的归档收窄记在 Changed 段，但已接入项目的指针判定与密钥面会静默变化。要求：移入 Breaking 段，写明非 LOG 归档不再被扫、旧指针不再被承认，以及无迁移指引时的处置方式。
+- [ ] T046 事实行手工改写的协议处置
+  验收: npm test
+  备注: 覆盖审计发现 13：LOG.md:13 引擎派生的 T035 事实行文件数被手工从 7 改成 6，违反协议「事实(v2) 由引擎确定性派生、模型不得手写或改写」，该行此后无法与其它引擎产物区分。要求：决定是回退原行并由引擎重写，还是在 DECISIONS 明确记录本次校正与依据；并为「事实行不得手改」补机检。
+- [ ] T047 让 T030 冻结态与 DECISIONS 一致
+  验收: npm test
+  备注: 覆盖审计发现 14：TASKS.md:20 冻结的 T030 仍以 [ ] 留在待办区，relay_session_start 实测仍把它列入「待办(前 3)」当可执行任务，而 DECISIONS 写的是「T030 以冻结关闭」——两个权威互相矛盾。要求：队列与账本一致（移入明确的冻结分区，或补机检禁止把冻结任务当待办派发）。
 - [ ] T037 发布 v2.0.0（Node>=22 / npm 冻结 / 归档收窄）
   验收: npm test
-  备注: 破坏性变更：Node >=22、npm 冻结、归档机检收窄。发布版本/tag/GitHub Release 需人类授权；发布前跑 npm test 与 ./verify。
+  备注: 破坏性变更：Node >=22、npm 冻结、归档机检收窄。发布版本/tag/GitHub Release 需人类授权；发布前跑 npm test 与 ./verify。排在 T038–T047 之后：多专家审计已确认 15 条缺陷（其中 3 条会真实阻断协议行为），不应带着它们发 v2.0.0。
 - [ ] T030 发布 npm — 决策冻结,勿执行  (2026-11-18)
   验收: 决策已落 DECISIONS(2026-11-18 Tier 2):冻结 npm;本任务不再执行
   备注: 原阻塞(包名属他人 + 无 npm 账号)不再需要解决;分发改为 git clone / Agent Plugins / GitHub Release;原安装器/打包面已删除。
