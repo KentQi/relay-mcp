@@ -16,7 +16,19 @@ export const FACT_LINE_PREFIX_RE = /^- 事实\(v[12]\):\s*/;
 // T001:归档文件(docs/archive/LOG-*.md)同属协议面——归档工具搬移历史条目时不应把归档文件
 // 算成「本次任务的代码改动」,否则事实行会因维护动作虚增文件数。
 const PROTOCOL_FILES = new Set(['TASKS.md', 'LOG.md']);
-const isProtocolFile = (p) => PROTOCOL_FILES.has(p) || /^docs\/archive\/LOG-[^/\\]+\.md$/.test(p);
+const isProtocolFile = (p) => PROTOCOL_FILES.has(p) || /^docs\/archive\/LOG-[^/\\]+\.md$/i.test(p);
+
+/** porcelain 状态行 → 实际改动路径(rename/copy 展开为两条,与 diff --no-renames 的口径一致)。 */
+export const changedPathsFromStatus = (statusLines) => {
+  const out = [];
+  for (const line of statusLines || []) {
+    const raw = String(line || '').slice(3);
+    if (!raw) continue;
+    const parts = raw.includes(' -> ') ? raw.split(' -> ').map((s) => s.trim()) : [raw.trim()];
+    for (const p of parts) if (p && !isProtocolFile(p)) out.push(p);
+  }
+  return out;
+};
 
 // 一次 git 调用同时拿到文件数与 ±(--numstat 每行自带路径);两侧共用本函数。
 // 导出供 R10 使用:按候选提交逐个算 numstat,选「与事实行声明一致」的完成提交(防 grep 劫持)。
@@ -65,17 +77,13 @@ export const deriveFacts = async ({
     } else {
       // 单根:文件数取 git status(含未跟踪文件——它们会被随后的 git add -A 纳入提交);
       // ± 取工作区 vs HEAD(numstat 不含未跟踪文件,故 ± 可能为 0,不假装知道)。
-      const changed = (statusLines || [])
-        .map((l) => String(l).slice(3).trim())
-        .filter((p) => p && !isProtocolFile(p));
+      const changed = changedPathsFromStatus(statusLines);
       const nums = await diffStat(executionRoot, ['HEAD']);
       stat = { files: changed.length, insertions: nums ? nums.insertions : 0, deletions: nums ? nums.deletions : 0 };
     }
   }
   if (!stat) {
-    const files = (statusLines || [])
-      .map((l) => String(l).slice(3).trim())
-      .filter((p) => p && !isProtocolFile(p));
+    const files = changedPathsFromStatus(statusLines);
     stat = { files: files.length, insertions: 0, deletions: 0 };
   }
   const counts = { PASS: 0, WARN: 0, ERROR: 0 };

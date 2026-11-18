@@ -1,5 +1,10 @@
 # 会话日志(最新在上)
 
+## 2026-11-18 16:21 | model=claude-fable-fix-20261118 | task=T039 完成
+- 摘要: T039 统一事实行文件数口径：facts.mjs 新增 changedPathsFromStatus（porcelain 的 rename/copy 展开为两条路径，与 diff --numstat --no-renames 一致），单根与无 git 两条路径都改用它；isProtocolFile 的归档判定加 /i，与 verify/doctor 的大小写策略一致；smoke-facts 增加 5 条口径断言（rename 展开、协议面过滤、LOG-* 大小写），49 断言全绿。另删除出场时因 next 标题带任务号而误建的重复任务 T048。
+- 事实(v2): mode=single | 文件 2 | ± +23/-8 | base=- | sha=- | branch=main || 验收: 通过 | verify: PASS 12·WARN 0·ERROR 0 | 耗时: 57s
+- 负结果: 仅把 isProtocolFile 改成 /i 不够：写入侧按 porcelain 的 rename 行只计 1，而校验侧 --numstat --no-renames 计 2；必须把 rename/copy 行展开成两条路径，两侧才对得上。
+
 ## 2026-11-18 16:18 | model=claude-fable-fix-20261118 | task=T038 完成
 - 摘要: T038 修复归档指针写读口径分裂：src/engines/archive.mjs 的归档目标正则收窄到 docs/archive/LOG-*.md（与 R12/D8 一致），旧式非 LOG 指针改为新建 LOG-* 归档并保留旧文件不动；src/engines/doctor.mjs 的 D8 修复文案改为真能生效的动作；scripts/smoke-archive-log.mjs 的指针断言改为 LOG-*，并新增「旧式非 LOG 指针 → 新建 LOG-*、旧文件不改写、R12 PASS」用例（30 断言全绿）。
 - 事实(v2): mode=single | 文件 3 | ± +26/-4 | base=- | sha=- | branch=main || 验收: 通过 | verify: PASS 12·WARN 0·ERROR 0 | 耗时: 55s

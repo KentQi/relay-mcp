@@ -6,7 +6,7 @@ import { mkdtempSync, rmSync, readFileSync, writeFileSync, mkdirSync, appendFile
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { parseFactLine } from '../src/engines/facts.mjs';
+import { parseFactLine, changedPathsFromStatus } from '../src/engines/facts.mjs';
 
 const RELAY = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const CLI = path.join(RELAY, 'src', 'cli.mjs');
@@ -16,6 +16,13 @@ const ok = (cond, label, extra = '') => {
   if (cond) { pass++; console.log(`  ✓ ${label}`); }
   else { fail++; console.log(`  ✗ FAIL ${label}${extra ? ' — ' + extra : ''}`); }
 };
+
+console.log('\n== 0. porcelain 路径口径(rename 展开 / 协议面过滤 / 大小写) ==');
+ok(changedPathsFromStatus(['R  old.js -> new.js']).length === 2, 'rename 展开为两条(与 numstat --no-renames 一致)');
+ok(changedPathsFromStatus(['M  src/a.js']).length === 1, '普通修改计一条');
+ok(changedPathsFromStatus(['A  docs/archive/LOG-x.md']).length === 0, 'LOG-* 归档不计入文件数');
+ok(changedPathsFromStatus(['A  docs/archive/log-x.md']).length === 0, 'LOG-* 归档判定大小写不敏感');
+ok(changedPathsFromStatus(['A  docs/archive/notes.md']).length === 1, '非 LOG 归档仍按普通文件计入');
 
 const tmp = mkdtempSync(path.join(tmpdir(), 'relay-facts-'));
 const logPath = path.join(tmp, 'LOG.md');
