@@ -1,5 +1,11 @@
 # 会话日志(最新在上)
 
+## 2026-11-18 16:39 | model=claude-fable-fix-20261118 | task=T046 完成
+- 摘要: T046 处置事实行手工校正：在 DECISIONS 记录 T035（7→6）与 T040（10→9）两次校正的事实、依据与影响，根因收敛为 single 模式写入侧从 porcelain 状态行派生文件数、与提交侧 numstat 在归档/重命名场景差 1（T039 已修 rename/大小写，剩余「多计 1」需改为暂存区 numstat 派生），并明确「事实行不得手改」无法机检、只能靠 session_end 流程与记录约束。
+- 事实(v2): mode=single | 文件 1 | ± +9/-0 | base=- | sha=- | branch=main || 验收: 通过 | verify: PASS 12·WARN 0·ERROR 0 | 耗时: 47s
+- 负结果: 「事实行不得手改」无法机检：手改为正确值与引擎输出不可区分，R10 只能发现数值不一致；只能靠流程约束与 DECISIONS 记录。
+- 负结果: single 模式从 porcelain 状态行派生文件数会与提交侧 numstat 在归档/重命名场景差 1；根治需改为从暂存区 numstat 派生。
+
 ## 2026-11-18 16:37 | model=claude-fable-fix-20261118 | task=T045 完成
 - 摘要: T045 修正 CHANGELOG 归类：把归档机检面收窄从 Changed 移入 Breaking，补充存量项目迁移动作（非 LOG 指针需运行 relay_archive_log {confirm:true} 新建 LOG-* 并改指），明确 R11 密钥扫描保持全量；同时修正 npm 条目中「移除 files」的过时表述（files 白名单已恢复为打包边界）。
 - 事实(v2): mode=single | 文件 1 | ± +3/-6 | base=- | sha=- | branch=main || 验收: 通过 | verify: PASS 12·WARN 0·ERROR 0 | 耗时: 62s
