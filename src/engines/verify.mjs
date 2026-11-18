@@ -564,13 +564,12 @@ const checkR11 = async (root, snap) => {
     exempted += String(t).split('\n')
       .filter((l) => l.includes(SECRET_OK_MARKER) && scanSecrets(l).length > 0).length;
   }
-  // T001:归档文件也是协议面的一部分(从 LOG.md 搬出的历史条目),必须同样过密钥闸;
-  // 归档工具写盘前也会扫一次,这里兜住「人工 git mv / 手改归档文件」的路径。
+  // T001:归档目录下的所有 .md 都可能是协议历史或文档旧版,内容级密钥闸一律扫描;
+  // 证据面(D8 完成态 / R12 指针)只认 LOG-*.md,安全面不随证据面收窄。
   let archiveFiles = [];
   try {
     const names = await readdir(join(root, 'docs', 'archive'));
-    // 2026-11-18 决策:只有 LOG-*.md 是协议历史;ARCHIVED-* 文档版本归档不属协议面。
-    archiveFiles = names.filter((n) => /^LOG-.*\.md$/i.test(n)).sort();
+    archiveFiles = names.filter((n) => /\.md$/i.test(n)).sort();
   } catch { /* 无归档目录 → 跳过 */ }
   for (const name of archiveFiles) {
     const t = await readText(join(root, 'docs', 'archive', name));

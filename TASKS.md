@@ -14,9 +14,6 @@
 (空——认领后由 relay_claim 移入;认领锁在 .relay/claims/,TTL 4 小时,崩溃会话的认领到期自动可接管)
 
 ## 待办
-- [ ] T040 R11 密钥扫描面收窄的显式化与回归
-  验收: test:scripts/smoke-security.mjs
-  备注: 覆盖审计发现 3：src/engines/verify.mjs:573 只扫 docs/archive/LOG-*.md，非 LOG 归档里的密钥不再被发现（A/B 复现：同一密钥在 LOG-*.md 报 ERROR、在 notes.md 或 ARCHIVED-*.md 放行），反转了 2026-11-01 审计 P2-2 的保证。要求：先在 DECISIONS 明确「文档旧版归档是否属于密钥扫描面」的取舍，再同步 R11 规则行/README/契约文案与用例；若决定回退全量扫描，同步 R12/D8 口径。
 - [ ] T041 修复 R12 悬空指针夹具命错分支
   验收: test:scripts/smoke-security.mjs
   备注: 覆盖审计发现 4：scripts/smoke-security.mjs:108 的指针写成 docs/archive/missing.md，被新正则 ARCHIVE_REL_RE 挡在「路径不合规」分支，「指针合法但目标缺失或为空」这条 fail-closed 路径自此失去覆盖。要求：夹具改指 docs/archive/LOG-missing.md，并补「目标存在但为空」的用例。
@@ -46,6 +43,9 @@
   备注: 原阻塞(包名属他人 + 无 npm 账号)不再需要解决;分发改为 git clone / Agent Plugins / GitHub Release;原安装器/打包面已删除。
 
 ## 已完成
+- [x] T040 R11 密钥扫描面收窄的显式化与回归  (2026-11-18)
+  验收: test:scripts/smoke-security.mjs
+  备注: 覆盖审计发现 3：src/engines/verify.mjs:573 只扫 docs/archive/LOG-*.md，非 LOG 归档里的密钥不再被发现（A/B 复现：同一密钥在 LOG-*.md 报 ERROR、在 notes.md 或 ARCHIVED-*.md 放行），反转了 2026-11-01 审计 P2-2 的保证。要求：先在 DECISIONS 明确「文档旧版归档是否属于密钥扫描面」的取舍，再同步 R11 规则行/README/契约文案与用例；若决定回退全量扫描，同步 R12/D8 口径。
 - [x] T039 事实行文件数口径统一：重命名与大小写  (2026-11-18)
   验收: test:scripts/smoke-facts.mjs
   备注: 覆盖审计发现 2 与 6：src/engines/facts.mjs:70 写入侧按 porcelain 计行数而校验侧按 numstat --no-renames（实测 git mv 时 1 行 vs 2 行，差 1 → 做过重命名的任务会被 R10 ERROR 拦死在出场门外）；src/engines/facts.mjs:19 归档谓词区分大小写而 verify/doctor 用 /i（同一仓库在 macOS 与 Linux CI 上结论不同）。要求：写入侧与校验侧同口径；归档谓词的大小写策略统一，并有用例钉住。

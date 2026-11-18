@@ -1,7 +1,7 @@
 # relay-mcp 接口契约
 
 > 注:本文档是开源前并行开发的内部 memo("W1-W4"为当时的专家分工编号),保留作为设计记录;绝对路径已脱敏为占位符。
-> 2026-11-18 更新:Node 下界已上移至 >=22;npm 分发已冻结(`package.json` `private: true`,安装器/打包面已移除);R11/D8/R12 归档机检面收窄至 `docs/archive/LOG-*.md`。以下历史段落保留原样。
+> 2026-11-18 更新:Node 下界已上移至 >=22;npm 分发已冻结(`package.json` `private: true`,安装器/打包面已移除);D8/R12 证据面收窄至 `docs/archive/LOG-*.md`;R11 密钥扫描保持 `docs/archive/**/*.md` 全量(安全面不随证据面收窄)。以下历史段落保留原样。
 
 接力棒 MCP:让任意模型(Claude/Codex/Gemini/Cursor/ZCode…)在任意项目上接力开发。
 零依赖纯 Node ESM(仅用 node: 内置模块),**无构建步骤**,入口 `node src/index.mjs`。
@@ -400,6 +400,6 @@ export const startServer = async ({ onInit, onMethod }) => {
 
 - **npm 分发冻结**:`package.json` 置 `private: true`,移除 `bin` / `files` / `install:mcp` / `prepublishOnly` 与 `scripts/install-mcp.mjs`、`check-publish-guard.mjs`、`smoke-install-mcp.mjs`、`smoke-pack.mjs`;分发保留 `git clone`、Agent Plugins 与 GitHub Release。理由:包名属他人、无真实第二个消费者,半开火状态只增加维护面。T030 以「冻结」关闭。
 - **Node 下界 18 → 22**:`engines.node`、doctor D1、bootstrap 提示、skills、preset、CI 模板与 README 同步;与实测矩阵 22/24/26 对齐。理由:Node 18/20 已 EOL 且从未被 CI 覆盖,声明与实测不一致比破坏性变更更危险。
-- **归档机检面收窄**:R11 与 D8 只扫描 `docs/archive/LOG-*.md`;R12 指针只承认 `docs/archive/LOG-*.md`。`ARCHIVED-` 文档版本归档不属协议面。理由:`docs/archive/` 同时承载 LOG 历史与文档旧版,全量扫描会把文档版本误当协议证据;代价是非 LOG 文件不再过密钥闸,已在 DECISIONS 记录。
+- **归档机检面收窄**:D8 只扫描 `docs/archive/LOG-*.md`;R12 指针只承认 `docs/archive/LOG-*.md`。`ARCHIVED-` 文档版本归档不属协议证据面。**R11 密钥扫描保持 `docs/archive/**/*.md` 全量**——安全面不随证据面收窄;理由:`docs/archive/` 同时承载 LOG 历史与文档旧版,证据面收窄可避免文档版本被误当协议历史,但密钥漏扫的代价是密钥进入 git 历史且不可撤回。
 
 

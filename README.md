@@ -184,7 +184,7 @@ worktree 清理默认 dry-run：只删除已登记、已过期、非活跃、干
 - 改写备份：`relay_sync` / `relay_onboard` 在重写入口或 manifest 前生成 `*.relay-bak-*` 备份供人工恢复；该类文件已入 `.gitignore` 运行时基线，不会被 `git add -A` 卷进提交，恢复后请自行删除。
 - LOG 边界（R12）：LOG 活跃区（归档指针之前的行）超过 150 行、或完成条目超过 20 条 → `relay_verify` 报 WARN（`manifest.logBoundary.strict=true` 升 ERROR）；只报警不自动归档，归档动作由人工决定（`docs/archive/LOG-*.md` + 指针）；指针必须指向仓库内真实存在的 `LOG-*.md`，失效指针 → WARN 而非静默 PASS。
 - 协议结构（R13）：TASKS 任务行必须匹配契约正则且任务号唯一，`[~]` 带 `(model, YYYY-MM-DD HH:mm)`、`[x]` 带 `(YYYY-MM-DD)`；LOG 条目标题必须匹配 `## 时间 | model=<名> | task=<T### …>`；HTML 注释块与缩进行豁免。违规 → WARN（`manifest.structure.strict=true` 升 ERROR）。
-- 内容级密钥闸（R11）：协议面 8 个文件（`TASKS.md` / `LOG.md` / `AGENTS.md` / `CLAUDE.md` / `GEMINI.md` / `START.md` / `SPEC.md` / `DECISIONS.md`）与 `docs/archive/LOG-*.md` 命中 AWS / GitHub / Slack / OpenAI / Google 密钥样式或 PEM 私钥块 → `relay_verify` 报 ERROR，出场写盘前直接阻断（不写、不提交）；误报可在同一行标注 `relay:secret-ok` 豁免。扫描输出只给前 4 字符预览，绝不回显完整密钥。
+- 内容级密钥闸（R11）：协议面 8 个文件（`TASKS.md` / `LOG.md` / `AGENTS.md` / `CLAUDE.md` / `GEMINI.md` / `START.md` / `SPEC.md` / `DECISIONS.md`）与 `docs/archive/**/*.md`（含文档旧版）命中 AWS / GitHub / Slack / OpenAI / Google 密钥样式或 PEM 私钥块 → `relay_verify` 报 ERROR，出场写盘前直接阻断（不写、不提交）；误报可在同一行标注 `relay:secret-ok` 豁免。扫描输出只给前 4 字符预览，绝不回显完整密钥。安全面不随证据面收窄：D8/R12 只认 `LOG-*.md`，R11 仍扫全部归档文本。
 - 受保护路径：`verify`、`.relay/**`、`tests/**` 与测试文件改动不自动提交；最终防线是 CI 与人工审核。
 - 锁：仓库写锁带心跳与写前 fencing；任务认领锁刻意关闭心跳，保留 240 分钟 TTL 崩溃恢复。并发会话必须使用不同 `model` 标识（同名 model 无法区分持有者）。
 - 当前不提供 abort/release、任务 status 工具或 sessionId；恢复方式为 TTL 接管、出场释放或 cleanup。

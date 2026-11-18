@@ -12,7 +12,7 @@
 
 ### Changed
 
-- **归档机检面收窄**:R11 与 D8 只把 `docs/archive/LOG-*.md` 当作协议证据;`ARCHIVED-` 文档版本归档不再被误扫。R12 归档指针同样只承认 `docs/archive/LOG-*.md`。
+- **归档机检面收窄**:D8 与 R12 只把 `docs/archive/LOG-*.md` 当作协议证据;`ARCHIVED-` 文档版本归档不再被误当证据。R12 归档指针同样只承认 `docs/archive/LOG-*.md`。**R11 密钥扫描保持 `docs/archive/**/*.md` 全量**——安全面不随证据面收窄。
 
 ### 规模
 

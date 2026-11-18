@@ -440,7 +440,7 @@ const RULES_TEXT = `# relay 规则表(R 系列)
 | R8 | 风格归一化 | 项目存在 prettier/eslint 配置或 package.json scripts.format → 提示运行;不存在 → skip(不强加工具链) | relay_verify(full) |
 | R9 | LOG/TASKS 一致性 | LOG 最新条目 task=Txxx 完成 而 TASKS 中 Txxx 仍为未完成 → error | relay_verify / session_end 绿闸 |
 | R10 | 事实对账 | LOG 最新完成条目必须含引擎写入的「事实(v2)」行;机检段(mode/文件数/base/sha/branch)与 git 重算逐字段一致(managed 另含 ±),不一致 → ERROR;branch 必须真实包含声明的 sha(存在但不含 → ERROR;已删除但完成提交仍在当前分支历史 → PASS 带注记,否则 WARN);叙述段(验收/verify/耗时)不参与对账;无法定位提交 → WARN(永不 PASS);v1 旧格式只做结构校验 → WARN(数字权威仅 v2);缺事实行 → WARN;早于 facts.since 的旧条目豁免 | relay_verify / session_end 绿闸 |
-| R11 | 协议面敏感内容 | 协议面 8 个文件(TASKS/LOG/AGENTS/CLAUDE/GEMINI/START/SPEC/DECISIONS)+ docs/archive/LOG-*.md 内容级扫描(AWS/GitHub/Slack/OpenAI/Google 密钥样式与 PEM 私钥块);同行 \`relay:secret-ok\` 豁免;命中 → error,出场写盘前阻断且不提交 | relay_verify / session_end 绿闸 |
+| R11 | 协议面敏感内容 | 协议面 8 个文件(TASKS/LOG/AGENTS/CLAUDE/GEMINI/START/SPEC/DECISIONS)+ docs/archive/**/*.md(含文档旧版)内容级扫描(AWS/GitHub/Slack/OpenAI/Google 密钥样式与 PEM 私钥块);同行 \`relay:secret-ok\` 豁免;命中 → error,出场写盘前阻断且不提交 | relay_verify / session_end 绿闸 |
 | R12 | LOG 边界 | 活跃区(归档指针之前的行)>150 行 或 活跃区内完成条目 >20 → WARN(manifest.logBoundary.strict=true 升 ERROR);归档指针必须指向真实存在、非空且 realpath 仍在仓库内的 docs/archive/LOG-*.md 才被承认,否则指针不被承认且 R12 报 WARN(不静默 PASS);只报警不自动归档 | relay_verify / session_end 绿闸 |
 | R13 | 协议结构 | TASKS 任务行必须匹配契约正则且任务号唯一;[~] 必须带 (model, YYYY-MM-DD HH:mm),[x] 必须带 (YYYY-MM-DD);LOG 条目标题必须匹配「## 时间 ｜ model=名 ｜ task=…」;HTML 注释块与缩进行豁免;违规 → WARN(manifest.structure.strict=true 升 ERROR)——拼错的任务行/日志标题会被解析器静默跳过,本规则把「写错」与「没有」区分开 | relay_verify / session_end 绿闸 |
 
