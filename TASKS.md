@@ -14,9 +14,6 @@
 (空——认领后由 relay_claim 移入;认领锁在 .relay/claims/,TTL 4 小时,崩溃会话的认领到期自动可接管)
 
 ## 待办
-- [ ] T042 恢复 engines 与零依赖等协议不变量的机检
-  验收: npm test
-  备注: 覆盖审计发现 11：删除 scripts/smoke-pack.mjs 后，engines.node >=22、零运行时依赖、两个入口的 shebang、cli --version 与 package.json 同步、files 白名单边界全部失去机检——engines 被误改回 >=18 或 >=20 不会让任何测试变红，零依赖也违反 SPEC「零运行时依赖」边界约束却无人拦。要求：新增一套协议不变量断言并接入 npm test。
 - [ ] T044 分发面文案同步：Node 下界与已删除的 relay bin
   验收: npm test
   备注: 覆盖审计发现 8/9/10/12：src/cli.mjs:16 的 USAGE 主用法仍是 relay bin（已删，照做 command not found）；templates/verify.sh:8 仍让用户「安装 relay-mcp」（npm 已冻结，新接入项目照做必然失败）；README.md:5 的 Node 徽章仍写 ≥18（engines 已 >=22）；docs/04-test/08-handoff-case-study-v1.0.md:86 仍让读者 npm i -g . 后跑已删 bin；docs-design/CONTRACT.md:10/125 仍写 Node >= 18 与 bin relay。要求：统一改为「node src/cli.mjs + git clone 引擎 + RELAY_HOME」，并加一致性断言防止再次漂移。
@@ -37,6 +34,9 @@
   备注: 原阻塞(包名属他人 + 无 npm 账号)不再需要解决;分发改为 git clone / Agent Plugins / GitHub Release;原安装器/打包面已删除。
 
 ## 已完成
+- [x] T042 恢复 engines 与零依赖等协议不变量的机检  (2026-11-18)
+  验收: npm test
+  备注: 覆盖审计发现 11：删除 scripts/smoke-pack.mjs 后，engines.node >=22、零运行时依赖、两个入口的 shebang、cli --version 与 package.json 同步、files 白名单边界全部失去机检——engines 被误改回 >=18 或 >=20 不会让任何测试变红，零依赖也违反 SPEC「零运行时依赖」边界约束却无人拦。要求：新增一套协议不变量断言并接入 npm test。
 - [x] T043 打包边界收口：恢复 files 白名单或明确不再产出 npm 制品  (2026-11-18)
   验收: npm test
   备注: 覆盖审计发现 7：删除 files 白名单后 npm pack --dry-run 实测 104 文件/371KB，含 .relay/manifest.json、LOG.md、TASKS.md、DECISIONS.md、整个 docs/ 与 docs-design/ 及 25 个冒烟脚本——正是 CONTRACT T020 明令排除的内容（private:true 只挡 publish，挡不住本地打包分发）。要求：恢复白名单，或明确声明不再产出 npm 制品并删除相关断言，避免契约与现实脱节。

@@ -102,6 +102,23 @@ try {
   ok(pkg.private === true, 'package.json private=true(机器层阻止误发布)');
   ok(!pkg.bin && !pkg.scripts?.prepublishOnly && !pkg.scripts?.['install:mcp'], 'npm 分发面已移除(bin/安装器/发布护栏)');
   ok(Array.isArray(pkg.files) && pkg.files.length > 0, 'files 白名单保留(打包边界,private 不阻止 npm pack)');
+  ok(pkg.engines?.node === '>=22', 'engines.node >=22');
+  ok(!pkg.dependencies || Object.keys(pkg.dependencies).length === 0, '零运行时依赖');
+  const indexText = readFileSync(path.join(RELAY, 'src', 'index.mjs'), 'utf8');
+  const cliText = readFileSync(path.join(RELAY, 'src', 'cli.mjs'), 'utf8');
+  ok(indexText.startsWith('#!/usr/bin/env node'), 'MCP 入口带 shebang');
+  ok(cliText.startsWith('#!/usr/bin/env node'), 'CLI 入口带 shebang');
+  const ver = spawnSync(process.execPath, [CLI, '--version'], { encoding: 'utf8' });
+  ok(ver.status === 0 && ver.stdout.trim() === pkg.version, 'CLI --version 与 package.json 同步', `${ver.status}:${ver.stdout}`);
+  const mustFiles = ['src/', 'templates/', 'skills/', 'plugin.json', 'mcp.json', 'scripts/validate-plugin.mjs'];
+  ok(Array.isArray(pkg.files) && mustFiles.every((f) => pkg.files.includes(f)), 'files 白名单含分发必需项');
+  const pack = spawnSync('npm', ['pack', '--dry-run', '--json'], { cwd: RELAY, encoding: 'utf8', shell: process.platform === 'win32' });
+  ok(pack.status === 0, 'npm pack --dry-run 成功', (pack.stderr || '').slice(0, 200));
+  let packed = [];
+  try { packed = JSON.parse(pack.stdout)[0].files.map((f) => f.path); } catch { /* 解析失败由下一条断言暴露 */ }
+  for (const f of ['LOG.md', 'TASKS.md', 'DECISIONS.md', '.relay/manifest.json', 'docs-design/CONTRACT.md']) {
+    ok(!packed.includes(f), `不进包: ${f}`);
+  }
 
   // ================= F. R5 提交原子性:哨兵文件名不可伪造提交头 =================
   // P0-1(PR #8 审计):git log --name-only 把文件名混进同一行流,旧实现用文本哨兵

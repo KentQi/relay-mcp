@@ -1,5 +1,10 @@
 # 会话日志(最新在上)
 
+## 2026-11-18 16:32 | model=claude-fable-fix-20261118 | task=T042 完成
+- 摘要: T042 把删除 smoke-pack 时丢失的协议不变量补回机检：smoke-review-regressions 新增 engines.node >=22、零运行时依赖、两个入口 shebang、CLI --version 与 package.json 同步、files 白名单必需项，以及 npm pack --dry-run 的「协议状态与开发文档不进包」断言；43 断言全绿，23 套测试链不变。
+- 事实(v2): mode=single | 文件 1 | ± +17/-0 | base=- | sha=- | branch=main || 验收: 通过 | verify: PASS 12·WARN 0·ERROR 0 | 耗时: 49s
+- 负结果: 删除一套 smoke 不只删掉断言，还会让该套件覆盖的协议不变量静默消失；恢复时优先并入现有套件（避免套件计数与文档再次漂移），而不是新建一套。
+
 ## 2026-11-18 16:30 | model=claude-fable-fix-20261118 | task=T043 完成
 - 摘要: T043 恢复打包边界：package.json 重新加入 files 白名单（src/、templates/、skills/、plugin.json、mcp.json、scripts/validate-plugin.mjs、README、LICENSE），保留 private:true 与 npm 冻结；smoke-review-regressions 的冻结断言改为「bin/安装器/发布护栏已移除」+「files 白名单保留」。npm pack --dry-run 实测 51 文件 / 164KB，协议状态与 docs/、docs-design/ 均不进包；23 套全绿。
 - 事实(v2): mode=single | 文件 2 | ± +12/-1 | base=- | sha=- | branch=main || 验收: 通过 | verify: PASS 12·WARN 0·ERROR 0 | 耗时: 46s
