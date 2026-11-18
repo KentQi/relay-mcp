@@ -14,6 +14,9 @@
 (空——认领后由 relay_claim 移入;认领锁在 .relay/claims/,TTL 4 小时,崩溃会话的认领到期自动可接管)
 
 ## 待办
+- [ ] T035 Tier 1：facts.strict 废弃标注 + 死导出清理 + 归档头注
+  验收: npm test
+  备注: 保留 facts.strict 解析与 KNOWN_NESTED_KEYS 兼容，仅从简报回显与文档移除并记 DECISIONS；recomputeCommitFileCount/lockTiming 删除或标 @internal；归档文件加内容区间头注，不重命名。
 - [ ] T030 发布 npm(阻塞:包名 `relay-mcp` 属他人 + 本机无 npm 账号)
   验收: 人类注册/登录 npm 后,二选一并执行——(a) 改用 scoped 包 `@<npm-username>/relay-mcp` 发布(`npm publish --access public`);或 (b) 换新的非 scoped 包名(先 `npm view <name>` 确认可用)并同步 README/安装器文案;发布后 `npm view <name>@1.9.0` 可查到
   备注: GitHub v1.9.0 已发(Release 已补);npm 上 relay-mcp@1.2.0 是 derekluo 的另一个项目,不可覆盖;发布仍需人类登录或提供 granular token(agent 不代持凭据)

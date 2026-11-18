@@ -98,6 +98,9 @@ try {
       `${name} 的 R12 行内容一致(阈值 150/20 + 判定 WARN + 开关键名)`, text.slice(0, 180));
   }
   ok(/R1–R13/.test(readme) && !/R1–R12/.test(readme) && !/R1–R11/.test(readme), 'README 中英文两半规则区间均为 R1–R13(无 R1–R12/R1–R11 残留)');
+  const contributing = readFileSync(path.join(RELAY, 'CONTRIBUTING.md'), 'utf8');
+  ok(/R1–R13/.test(contributing) && !/R1–R12/.test(contributing) && !/R1–R11/.test(contributing) && !/R1-R9/.test(contributing),
+    'CONTRIBUTING 规则区间为 R1–R13(无 R1–R12/R1–R11/R1-R9 残留)');
   const walk = (dir) => readdirSync(dir, { withFileTypes: true })
     .flatMap((e) => (e.isDirectory() ? walk(path.join(dir, e.name)) : [path.join(dir, e.name)]));
   const stale = walk(path.join(RELAY, 'src')).filter((f) => {

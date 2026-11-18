@@ -163,12 +163,12 @@ const checkManifest = async (root) => {
   if (m.version !== 1) issues.push(`schema version=${JSON.stringify(m.version)}(期望 1)`);
   if (!Array.isArray(m.allowedTopLevel)) issues.push('缺 allowedTopLevel(R2 会跳过)');
   if (!Array.isArray(m.entryFiles)) issues.push('缺 entryFiles(R1 用默认三入口)');
-  if (issues.length) return warn('D2', 'manifest', issues.join(';'), '按 CONTRACT.md 的 manifest schema 补齐字段;或重跑 relay_onboard(保留既有自定义配置)');
+  if (issues.length) return warn('D2', 'manifest', issues.join(';'), '按 docs-design/CONTRACT.md 的 manifest schema 补齐字段;或重跑 relay_onboard(保留既有自定义配置)');
   // v1.7.0:拼错的键此前纯静默失效;doctor 点名 + 给最近似键建议(仍只读、不阻断)
   const unknown = collectUnknownManifestKeys(m);
   if (unknown.length) {
     const hints = unknown.map((k) => { const s = suggestManifestKey(k); return s ? `${k}(是想写 ${s}?)` : k; });
-    return warn('D2', 'manifest', `未知键:${hints.join(', ')}`, '拼错的键会被静默忽略;按 CONTRACT.md 的 manifest schema 改名或删除该键');
+    return warn('D2', 'manifest', `未知键:${hints.join(', ')}`, '拼错的键会被静默忽略;按 docs-design/CONTRACT.md 的 manifest schema 改名或删除该键');
   }
   return ok('D2', 'manifest', 'schema 兼容,关键字段齐全');
 };
@@ -276,7 +276,13 @@ const checkEnginePath = async (root, manifest) => {
   if (issues.length) {
     return warn('D7', '引擎路径', issues.join('; '), `统一为实际引擎路径:export RELAY_HOME=${engineRoot};或重跑 relay_sync 更新 manifest.relayHome`);
   }
-  return ok('D7', '引擎路径', `${engineRoot}(RELAY_HOME 与 manifest.relayHome 一致)`);
+  const pathSources = [];
+  if (envHome) pathSources.push('RELAY_HOME');
+  if (mfHome) pathSources.push('manifest.relayHome');
+  const pathDetail = pathSources.length
+    ? `${engineRoot}(${pathSources.join(' 与 ')} 一致)`
+    : `${engineRoot}(RELAY_HOME 与 manifest.relayHome 均未配置,按引擎实际位置解析)`;
+  return ok('D7', '引擎路径', pathDetail);
 };
 
 export const relayDoctor = async (args = {}) => {

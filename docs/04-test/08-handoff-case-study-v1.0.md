@@ -15,7 +15,7 @@ status: 现行
 交接协议大多承诺"上下文不丢",但很少有可验证的判据。relay 的判据是可机检的四件东西:
 
 1. **任务状态**(TASKS 的 `[ ]/[~]/[x]`)与 **LOG 完成条目**(`task=T### 完成`)一致(R9);
-2. **出场绿闸**:结构检查 R1–R12 + 项目可执行验收,任一红则拒绝提交;
+2. **出场绿闸**:结构检查 R1–R13 + 项目可执行验收,任一红则拒绝提交;
 3. **事实底账**(R10):每条完成日志带机检段(文件数、增删行、base/sha、分支),可从 git 重算;
 4. **成对证据**(受管 worktree):代码提交 SHA + 控制面提交 SHA,缺一不落完成。
 
@@ -79,11 +79,11 @@ status: 现行
 
 ```sh
 git clone https://github.com/KentQi/relay-mcp.git && cd relay-mcp
-npm test                        # 20 套冒烟;关注每套的「通过 / 失败 / 跳过」三元组
+npm test                        # 25 套冒烟;关注每套的「通过 / 失败 / 跳过」三元组
 node scripts/smoke-meta.mjs     # 元负控:假绿形态复现 + 静态规则
 node scripts/smoke-budget.mjs   # tools/list 体积预算
 node scripts/validate-plugin.mjs
-relay relay_doctor --root .     # 环境七检(需先 npm i -g . 或用 node src/cli.mjs)
+relay relay_doctor --root .     # 环境九检(需先 npm i -g . 或用 node src/cli.mjs)
 ```
 
 判读标准:

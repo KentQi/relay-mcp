@@ -168,7 +168,7 @@
 - `scripts/smoke-doctor.mjs`(17 断言)、`scripts/smoke-recall.mjs`(22 断言)、`scripts/smoke-pack.mjs`(28 断言)接入 `npm test`
 
 ### Changed
-- MCP 工具 11 → 13;`relay_rules`/`relay://protocol`/README/CONTRACT 同步检索与诊断能力
+- MCP 工具 10 → 13;`relay_rules`/`relay://protocol`/README/CONTRACT 同步检索与诊断能力
 
 ## [1.3.0] - 2026-11-01
 

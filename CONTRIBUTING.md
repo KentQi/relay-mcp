@@ -17,7 +17,7 @@ Thank you for your interest in relay-mcp! The project dogfoods its own relay pro
 
 - **零运行时依赖**:只用 `node:` 内置模块,禁止引入任何 npm 依赖(开发工具除外);
 - **模板即真相**:项目脚手架/入口文件的内容只改 `templates/`,生成的文件是投影,不要直接改投影侧样例;
-- **规则改动走修宪**:新增/修改检查器(R1-R9)必须同步 docs-design/CONTRACT.md 的规则表与 README,三处一致才算完整;
+- **规则改动走修宪**:新增/修改检查器(R1–R13)必须同步 docs-design/CONTRACT.md 的规则表、AGENTS 模板与 README,多处一致才算完整;
 - **非破坏铁律**:任何写盘操作对已存在的用户文件必须先备份(`*.relay-bak-*`),永不删除。
 
 ## 报告问题

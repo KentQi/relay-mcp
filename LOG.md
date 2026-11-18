@@ -1,5 +1,12 @@
 # 会话日志(最新在上)
 
+## 2026-11-18 13:28 | model=claude-fable-tier0-20261118 | task=无
+- 摘要: Tier 0 真相修复（零行为变更）：删除根目录 0 字节探针文件恢复 R2；doctor 的 CONTRACT 引用改为 docs-design/CONTRACT.md，D7 在未配置 relayHome 时不再谎称“一致”；CONTRIBUTING 规则区间 R1-R9→R1–R13 并纳入 smoke-r12-boundary 静态断言；CHANGELOG 工具计数修正为 10→13；docs/04-test/08 的套件数/检查数/规则区间与 CONTRACT 的 R1–R12 同步到当前事实；DECISIONS 将已被推翻的 npm 决策标为已废弃，并为 D11/D12/D14/D16 补后续注记。npm test 25 套全绿、./verify 无 ERROR、relay_doctor 健康。
+- 事实(v2): mode=single | 文件 7 | ± +23/-10 | base=- | sha=- | branch=main || 验收: 通过 | verify: PASS 11·WARN 0·ERROR 0 | 耗时: 47s
+- 负结果: 直接删除 facts.strict 会让旧 manifest 被 doctor D2 报未知键；正确路径是保留键、停止宣传并登记废弃周期。
+- 负结果: R5 对 merge 提交显式 SKIP（原子性无法判定）；managed 模式靠双提交成对证据兜底，不能靠 R5 本身。
+- 留给下一个: 保留 facts.strict 解析与 KNOWN_NESTED_KEYS 兼容，仅从简报回显与文档移除并记 DECISIONS；recomputeCommitFileCount/lockTiming 删除或标 @internal；归档文件加内容区间头注，不重命名。
+
 ## 2026-11-09 15:32 | model=dsh-lead-deepseek-v4.1 | task=T034 完成
 - 摘要: T034 发布 v1.9.0:package.json / plugin.json 版本同步 1.9.0(plugin 描述 R1–R12→R1–R13),CHANGELOG 定版 [1.9.0] - 2026-11-09(R13 协议结构机检、漂移备份闸、D8 归档证据面、文档与历史修正),README 冒烟套件计数 22→25,SPEC AC1 改为当前 25 套;npm test 25 套全绿、任务树 verify 全绿。出场后合并 relay/T034、在 main 上打 tag v1.9.0 并创建 GitHub Release,同时补建 v1.7.0/v1.8.0 缺失的 Release。
 - 事实(v2): mode=managed | 文件 5 | ± +27/-5 | base=5c8f24f8ad8b918699ebbe94061f6c19351a22d2 | sha=de0ec377d6d03f5143f9518a51d6df299aaa2454 | branch=relay/T034 || 验收: 通过 | verify: PASS 16·WARN 0·ERROR 0 | 耗时: 49s
