@@ -14,9 +14,9 @@
 (空——认领后由 relay_claim 移入;认领锁在 .relay/claims/,TTL 4 小时,崩溃会话的认领到期自动可接管)
 
 ## 待办
-- [ ] T038 归档指针口径统一：写侧收窄到 LOG-* + D8 修复文案可执行
-  验收: test:scripts/smoke-archive-log.mjs
-  备注: 覆盖审计发现 1 与 5：src/engines/archive.mjs:17 归档目标仍用宽松正则（已复现：22 条历史被追加进 docs/archive/notes.md，写出的指针立刻被 R12 判「未被承认」，边界失效且 LOG 继续膨胀）；src/engines/doctor.mjs:126 的 D8 修复文案指向 relay_archive_log「会自动维护」，而该工具按旧正则继续写同一非法指针 → 照指引操作不会自愈。要求：归档目标只认 docs/archive/LOG-*.md；旧式非 LOG 指针改为新建 LOG 归档并保留旧文件不动；D8 文案改为真能生效的动作；补「旧式指针」冒烟用例。
+- [ ] T048 T039 事实行文件数口径统一：重命名与大小写
+  验收: test:scripts/smoke-facts.mjs
+  备注: 覆盖审计发现 2/6：facts.mjs:70 写入侧 porcelain 计数与校验侧 numstat --no-renames 在 git mv 时差 1；facts.mjs:19 归档谓词区分大小写而 verify/doctor 用 /i。要求两侧同口径并加用例。
 - [ ] T039 事实行文件数口径统一：重命名与大小写
   验收: test:scripts/smoke-facts.mjs
   备注: 覆盖审计发现 2 与 6：src/engines/facts.mjs:70 写入侧按 porcelain 计行数而校验侧按 numstat --no-renames（实测 git mv 时 1 行 vs 2 行，差 1 → 做过重命名的任务会被 R10 ERROR 拦死在出场门外）；src/engines/facts.mjs:19 归档谓词区分大小写而 verify/doctor 用 /i（同一仓库在 macOS 与 Linux CI 上结论不同）。要求：写入侧与校验侧同口径；归档谓词的大小写策略统一，并有用例钉住。
@@ -52,6 +52,9 @@
   备注: 原阻塞(包名属他人 + 无 npm 账号)不再需要解决;分发改为 git clone / Agent Plugins / GitHub Release;原安装器/打包面已删除。
 
 ## 已完成
+- [x] T038 归档指针口径统一：写侧收窄到 LOG-* + D8 修复文案可执行  (2026-11-18)
+  验收: test:scripts/smoke-archive-log.mjs
+  备注: 覆盖审计发现 1 与 5：src/engines/archive.mjs:17 归档目标仍用宽松正则（已复现：22 条历史被追加进 docs/archive/notes.md，写出的指针立刻被 R12 判「未被承认」，边界失效且 LOG 继续膨胀）；src/engines/doctor.mjs:126 的 D8 修复文案指向 relay_archive_log「会自动维护」，而该工具按旧正则继续写同一非法指针 → 照指引操作不会自愈。要求：归档目标只认 docs/archive/LOG-*.md；旧式非 LOG 指针改为新建 LOG 归档并保留旧文件不动；D8 文案改为真能生效的动作；补「旧式指针」冒烟用例。
 - [x] T036 Tier 2 决策：npm 方向 / Node 下界 / 归档约定  (2026-11-18)
   验收: npm test
   备注: 决策已落 DECISIONS(2026-11-18 Tier 2):npm 冻结 / Node >=22 / 归档机检收窄到 docs/archive/LOG-*;代码、文档、模板、冒烟已同步。

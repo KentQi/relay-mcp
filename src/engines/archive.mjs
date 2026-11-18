@@ -14,7 +14,7 @@ import { resolveRelayRoots } from './worktree.mjs';
 import { LOG_TITLE_RE } from './verify.mjs';
 
 const POINTER_RE = /^\s*<!--\s*relay:log-archive:\s*(\S+)\s*-->\s*$/;
-const ARCHIVE_REL_RE = /^docs\/archive\/[^/\\]+\.md$/;
+const ARCHIVE_REL_RE = /^docs\/archive\/LOG-[^/\\]+\.md$/i;
 const DEFAULT_KEEP = 8;
 const MIN_KEEP = 3;
 

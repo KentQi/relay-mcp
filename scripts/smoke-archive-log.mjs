@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // T001 冒烟:relay_archive_log —— 默认 dry-run、只从尾部搬(方向正确)、留可验证指针、条目守恒、不可洗绿 R7。
 import { spawnSync } from 'node:child_process';
-import { mkdtempSync, rmSync, readFileSync, writeFileSync, existsSync, readdirSync, symlinkSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, rmSync, readFileSync, writeFileSync, existsSync, readdirSync, symlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -57,7 +57,7 @@ try {
   ok(run1.status === 0, 'confirm 执行成功', out(run1).slice(0, 400));
   const logAfter = readFileSync(logPath, 'utf8');
   const ptr = pointerOf(logAfter);
-  ok(/^docs\/archive\/[^/]+\.md$/.test(ptr), 'LOG.md 留了合法归档指针', ptr);
+  ok(/^docs\/archive\/LOG-[^/]+\.md$/.test(ptr), 'LOG.md 留了合法归档指针(LOG-*)', ptr);
   ok(ptr && existsSync(path.join(tmp, ptr)), '指针目标文件真实存在', ptr);
   const archivedText = ptr ? readFileSync(path.join(tmp, ptr), 'utf8') : '';
   ok(entryCount(logAfter) + entryCount(archivedText) === entryCount(logBefore),
@@ -66,6 +66,28 @@ try {
   ok(entryCount(logAfter) >= 3, 'live 至少保留 3 条(R7 窗口不退化)', String(entryCount(logAfter)));
   const v1 = run(tmp, 'relay_verify', { full: true });
   ok(v1.status === 0 && /R12\s*\|\s*PASS/.test(out(v1)), 'verify 通过且 R12 PASS', out(v1).slice(0, 400));
+
+  console.log('\n== 旧式非 LOG 指针:新建 LOG-* 归档并保留旧文件 ==');
+  {
+    const legacyTmp = mkdtempSync(path.join(tmpdir(), 'relay-archive-legacy-'));
+    try {
+      const li = run(legacyTmp, 'relay_init', { name: '旧式指针' });
+      ok(li.status === 0, 'legacy fixture init 成功', out(li).slice(0, 200));
+      mkdirSync(path.join(legacyTmp, 'docs', 'archive'), { recursive: true });
+      const legacyRel = 'docs/archive/notes.md';
+      const legacyPath = path.join(legacyTmp, legacyRel);
+      writeFileSync(legacyPath, '# 旧式归档\n\n## 2025-12-01 10:00 | model=x | task=T001 完成\n- 摘要: legacy\n');
+      const legacyBefore = readFileSync(legacyPath, 'utf8');
+      writeFileSync(path.join(legacyTmp, 'LOG.md'), makeLog(40) + `\n<!-- relay:log-archive: ${legacyRel} -->\n`);
+      const lr = run(legacyTmp, 'relay_archive_log', { confirm: true });
+      ok(lr.status === 0, '旧式指针下归档成功', out(lr).slice(0, 300));
+      const lptr = pointerOf(readFileSync(path.join(legacyTmp, 'LOG.md'), 'utf8'));
+      ok(/^docs\/archive\/LOG-[^/]+\.md$/.test(lptr), '指针改指新的 LOG-* 归档', lptr);
+      ok(readFileSync(legacyPath, 'utf8') === legacyBefore, '旧的非 LOG 归档文件未被改写', legacyRel);
+      const lv = run(legacyTmp, 'relay_verify', { full: true });
+      ok(lv.status === 0 && /R12\s*\|\s*PASS/.test(out(lv)), '新指针被 R12 承认', out(lv).slice(0, 400));
+    } finally { rmSync(legacyTmp, { recursive: true, force: true }); }
+  }
 
   console.log('\n== 方向:归档最旧,live 保留最新(P1-1) ==');
   const mLog = ['# 会话日志(最新在上)', ''];

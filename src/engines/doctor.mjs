@@ -123,7 +123,7 @@ const checkCompletionConsistency = async (root) => {
   if (missing.length) issues.push(`TASKS 标 [x] 但 LOG/归档无完成条目:${missing.join(', ')}`);
   if (regMissing.length) issues.push(`registry 记录控制面已提交但 TASKS 未完成:${regMissing.join(', ')}`);
   if (issues.length) {
-    return warn('D8', '完成状态', issues.join('; '), '让归档指针指向真实存在且非空的 docs/archive/LOG-*.md(relay_archive_log 会自动维护);补齐 LOG/归档完成条目或修正 TASKS 状态;证据不得删除,只可回填');
+    return warn('D8', '完成状态', issues.join('; '), '让归档指针指向真实存在且非空的 docs/archive/LOG-*.md;旧式非 LOG 指针不会被承认,运行 relay_archive_log {confirm:true} 会新建 LOG-*.md 并改指它。补齐 LOG/归档完成条目或修正 TASKS 状态;证据不得删除,只可回填');
   }
   const archiveNote = archived.size ? `,${archived.size} 个任务号来自归档` : '';
   return ok('D8', '完成状态', `TASKS [x] ${doneIds.length} 条与 LOG${archived.size ? '+归档' : ''} 完成条目一致${archiveNote}`);

@@ -1,5 +1,12 @@
 # 会话日志(最新在上)
 
+## 2026-11-18 16:18 | model=claude-fable-fix-20261118 | task=T038 完成
+- 摘要: T038 修复归档指针写读口径分裂：src/engines/archive.mjs 的归档目标正则收窄到 docs/archive/LOG-*.md（与 R12/D8 一致），旧式非 LOG 指针改为新建 LOG-* 归档并保留旧文件不动；src/engines/doctor.mjs 的 D8 修复文案改为真能生效的动作；scripts/smoke-archive-log.mjs 的指针断言改为 LOG-*，并新增「旧式非 LOG 指针 → 新建 LOG-*、旧文件不改写、R12 PASS」用例（30 断言全绿）。
+- 事实(v2): mode=single | 文件 3 | ± +26/-4 | base=- | sha=- | branch=main || 验收: 通过 | verify: PASS 12·WARN 0·ERROR 0 | 耗时: 55s
+- 负结果: 旧式非 LOG 指针不能继续追加：归档写侧若沿用旧指针，会把历史写进 R11/D8/R12 都不再承认的文件；正确做法是新建 LOG-* 归档并保留旧文件不动。
+- 负结果: 归档指针的「写侧」与「校验侧」必须共用同一正则；本次修复前 archive.mjs 与 verify/doctor 各持一份，任何一侧收窄都会分裂。
+- 留给下一个: 覆盖审计发现 2/6：facts.mjs:70 写入侧 porcelain 计数与校验侧 numstat --no-renames 在 git mv 时差 1；facts.mjs:19 归档谓词区分大小写而 verify/doctor 用 /i。要求两侧同口径并加用例。
+
 ## 2026-11-18 15:39 | model=claude-fable-audit-20261118 | task=无
 - 摘要: 把多专家并行审计确认的 15 条缺陷全部登记为任务 T038–T047（按同一根因合并：归档指针口径 T038、事实行口径 T039、R11 密钥面 T040、R12 悬空夹具 T041、协议不变量机检 T042、打包边界 T043、分发面文案 T044、CHANGELOG Breaking 归类 T045、事实行手工改写处置 T046、T030 冻结态与账本一致 T047），每条带可执行验收与复现证据；DECISIONS 记录审计结论与根因判断（同一语义多份副本、只改其中几份）；T037 发布 v2.0.0 下移到修复之后。npm test 23 套全绿、./verify 0 ERROR、R13 解析新增任务行通过、relay_session_start 已把 T038–T040 列为待办首位。
 - 事实(v2): mode=single | 文件 1 | ± +10/-0 | base=- | sha=- | branch=main || 验收: 通过 | verify: PASS 12·WARN 0·ERROR 0 | 耗时: 45s
