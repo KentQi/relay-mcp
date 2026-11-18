@@ -1,5 +1,11 @@
 # 会话日志(最新在上)
 
+## 2026-11-18 16:45 | model=claude-fable-release-20261118 | task=T037 完成
+- 摘要: T037 发布 v2.0.0：package.json / plugin.json 版本同步 2.0.0；CHANGELOG 将 Unreleased 定版为 [2.0.0] - 2026-11-18，Breaking 段记录 Node >=22、npm 冻结、归档收窄与迁移指引，Fixed 段汇总 T038–T047 的多专家审计修复；npm test 23 套全绿、./verify 0 ERROR、relay_doctor 健康。tag / push / GitHub Release 由本会话随后执行。
+- 事实(v2): mode=single | 文件 3 | ± +12/-3 | base=- | sha=- | branch=main || 验收: 通过 | verify: PASS 12·WARN 0·ERROR 0 | 耗时: 45s
+- 负结果: 发布 tag 必须打在 session_end 的完成提交上：先完成控制面提交，再在 main 上打 annotated tag 并推送，否则 Release 会指向旧提交。
+- 负结果: private:true 不等于打包边界；发布前必须用 npm pack --dry-run 复核 files 白名单，本次实测 51 文件/164KB 且无协议状态。
+
 ## 2026-11-18 16:41 | model=claude-fable-fix-20261118 | task=T047 完成
 - 摘要: T047 让 T030 冻结态与 DECISIONS 一致：从待办区移除 `[ ] T030` 任务行，新增「已冻结」分区（缩进备注，不参与任务行解析与 session_start 派发），保留冻结决定与分发方式说明；解冻需先在 DECISIONS 记录新决定并恢复任务行。
 - 事实(v2): mode=single | 文件 0 | ± +0/-0 | base=- | sha=- | branch=main || 验收: 通过 | verify: PASS 12·WARN 0·ERROR 0 | 耗时: 47s

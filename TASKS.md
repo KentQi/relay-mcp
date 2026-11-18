@@ -14,14 +14,14 @@
 (空——认领后由 relay_claim 移入;认领锁在 .relay/claims/,TTL 4 小时,崩溃会话的认领到期自动可接管)
 
 ## 待办
-- [ ] T037 发布 v2.0.0（Node>=22 / npm 冻结 / 归档收窄）
-  验收: npm test
-  备注: 破坏性变更：Node >=22、npm 冻结、归档机检收窄。发布版本/tag/GitHub Release 需人类授权；发布前跑 npm test 与 ./verify。排在 T038–T047 之后：多专家审计已确认 15 条缺陷（其中 3 条会真实阻断协议行为），不应带着它们发 v2.0.0。
 
 ## 已冻结
   冻结任务 T030:发布 npm — 决策冻结,不执行(见 DECISIONS 2026-11-18 Tier 2);原发布面已移除,分发改为 git clone / Agent Plugins / GitHub Release。冻结任务不进入 session_start 派发;解冻需先在 DECISIONS 记录新决定并恢复为 [ ] 任务行。
 
 ## 已完成
+- [x] T037 发布 v2.0.0（Node>=22 / npm 冻结 / 归档收窄）  (2026-11-18)
+  验收: npm test
+  备注: 破坏性变更：Node >=22、npm 冻结、归档机检收窄。发布版本/tag/GitHub Release 需人类授权；发布前跑 npm test 与 ./verify。排在 T038–T047 之后：多专家审计已确认 15 条缺陷（其中 3 条会真实阻断协议行为），不应带着它们发 v2.0.0。
 - [x] T047 让 T030 冻结态与 DECISIONS 一致  (2026-11-18)
   验收: npm test
   备注: 覆盖审计发现 14：TASKS.md:20 冻结的 T030 仍以 [ ] 留在待办区，relay_session_start 实测仍把它列入「待办(前 3)」当可执行任务，而 DECISIONS 写的是「T030 以冻结关闭」——两个权威互相矛盾。要求：队列与账本一致（移入明确的冻结分区，或补机检禁止把冻结任务当待办派发）。

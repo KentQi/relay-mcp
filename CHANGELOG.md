@@ -3,13 +3,22 @@
 本项目遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 格式;
 版本号遵循 [SemVer](https://semver.org/lang/zh-CN/)。
 
-## [Unreleased]
+## [2.0.0] - 2026-11-18
 
 ### Breaking
 
 - **Node 下界 18 → 22**:`engines.node`、doctor D1、skills、模板与 README 同步;与 CI 实测矩阵 22/24/26 对齐。Node 18/20 不再受支持。
 - **npm 分发冻结**:`package.json` 置 `private: true`,移除 `bin`/安装器/发布护栏/打包与安装器冒烟;保留 `files` 白名单作为打包边界(防止 `npm pack` 带出协议状态);分发改为 `git clone`、Agent Plugins 插件包与 GitHub Release。
 - **归档机检面收窄(存量项目需迁移)**:D8 与 R12 只把 `docs/archive/LOG-*.md` 当作协议证据;`ARCHIVED-` 文档版本归档不再被误当证据。R12 归档指针同样只承认 `docs/archive/LOG-*.md`——存量项目若用非 LOG 指针,需运行 `relay_archive_log {confirm:true}` 新建 LOG-* 归档并改指。**R11 密钥扫描保持 `docs/archive/**/*.md` 全量**——安全面不随证据面收窄。
+
+### Fixed(多专家审计 T038–T047)
+
+- **归档指针口径**(T038):归档写侧收窄到 `docs/archive/LOG-*.md`，与 R12/D8 一致；旧式非 LOG 指针改为新建 LOG-* 归档并保留旧文件；D8 修复文案改为可执行动作。
+- **事实行口径**(T039):single 模式把 porcelain 的 rename/copy 展开为两条路径，与 `git diff --numstat --no-renames` 同口径；归档谓词大小写与 verify/doctor 统一。
+- **R11 安全面**(T040):密钥扫描保持 `docs/archive/**/*.md` 全量，D8/R12 证据面仍只认 `LOG-*.md`；归档 13 条旧 LOG，R12 清零。
+- **R12 夹具**(T041):悬空用例改用合法 `LOG-*` 路径，并补空目标用例。
+- **打包边界**(T043):恢复 `files` 白名单，`npm pack` 51 文件/164KB，协议状态与 docs 不进包。
+- **协议不变量与分发文案**(T042/T044/T045/T046/T047):补回 engines/零依赖/shebang/CLI 版本/打包边界机检；Node 徽章、CLI 用法、模板指引、案例文档与契约同步；归档收窄移入 Breaking 并给迁移指引；记录事实行手工校正；T030 移入冻结区。
 
 ### 规模
 
