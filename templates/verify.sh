@@ -5,7 +5,7 @@ ROOT="$(cd "$(dirname "$0")" && pwd)"
 RELAY_HOME="${RELAY_HOME:-__RELAY_HOME__}"
 if [ ! -f "$RELAY_HOME/src/cli.mjs" ]; then
   echo "verify: 找不到 relay 引擎:$RELAY_HOME/src/cli.mjs" >&2
-  echo "修复:安装 relay-mcp 后 export RELAY_HOME=<relay-mcp 绝对路径>,再重跑 ./verify" >&2
+  echo "修复:克隆 relay-mcp 引擎仓库后 export RELAY_HOME=<relay-mcp 绝对路径>,再重跑 ./verify" >&2
   exit 2
 fi
 exec node "$RELAY_HOME/src/cli.mjs" relay_verify --root "$ROOT"

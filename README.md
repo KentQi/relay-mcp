@@ -2,7 +2,7 @@
 
 [![CI](https://github.com/KentQi/relay-mcp/actions/workflows/ci.yml/badge.svg)](https://github.com/KentQi/relay-mcp/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
-[![Node](https://img.shields.io/badge/node-%E2%89%A518-brightgreen)](package.json)
+[![Node](https://img.shields.io/badge/node-%E2%89%A522-brightgreen)](package.json)
 [![deps](https://img.shields.io/badge/dependencies-0-blue)](package.json)
 
 **多模型、多会话开发的接力协议 MCP server。** 状态存放在仓库文件中，由 R 系列机检规则（R1–R13）与可执行验收共同守门。

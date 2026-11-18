@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // relay-mcp — src/cli.mjs (W2)
-// `relay <tool> [--root path] [--json '{...}' | --json k=v k=v ...]`
+// `node src/cli.mjs <tool> [--root path] [--json '{...}' | --json k=v k=v ...]`
 // 复用 contract.mjs 的 dispatch,人类可读输出;isError → exit code 1。
 // verify.sh 与 CI(workflow-relay.yml)通过本文件调用 relay_verify。
 import { readFileSync } from 'node:fs';
@@ -13,13 +13,12 @@ const PKG_PATH = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..'
 const USAGE = `relay-mcp CLI — relay protocol tools from the shell
 
 用法:
-  relay <tool> [--root <path>] [--json '<JSON 对象>' | --json k=v k=v ...]
-  node src/cli.mjs <tool> ...        (等价写法,无需安装)
+  node src/cli.mjs <tool> [--root <path>] [--json '<JSON 对象>' | --json k=v k=v ...]
 
 示例:
-  relay relay_verify --root /path/to/repo
-  relay relay_verify --json '{"root":"/path/to/repo","full":true}'
-  relay relay_claim --root . --json task=T003 model=claude
+  node src/cli.mjs relay_verify --root /path/to/repo
+  node src/cli.mjs relay_verify --json '{"root":"/path/to/repo","full":true}'
+  node src/cli.mjs relay_claim --root . --json task=T003 model=claude
 
 说明:
   --root  等价于 --json 里的 root,缺省为当前目录(显式 --root 优先)

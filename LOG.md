@@ -1,5 +1,10 @@
 # 会话日志(最新在上)
 
+## 2026-11-18 16:35 | model=claude-fable-fix-20261118 | task=T044 完成
+- 摘要: T044 同步分发面文案：README Node 徽章 18→22；src/cli.mjs 的 USAGE 与文件头主用法改为 node src/cli.mjs（移除已删除的 relay bin）；templates/verify.sh 的修复指引改为「克隆 relay-mcp 引擎后设 RELAY_HOME」；docs/04-test/08 的 doctor 命令改为 node src/cli.mjs 且不再要求 npm i -g；docs-design/CONTRACT.md 的 Node 基线与 CLI 契约同步到 >=22 / 无 bin。23 套全绿。
+- 事实(v2): mode=single | 文件 5 | ± +10/-11 | base=- | sha=- | branch=main || 验收: 通过 | verify: PASS 12·WARN 0·ERROR 0 | 耗时: 46s
+- 负结果: 分发面文案不能只改 README 正文：徽章、CLI --help、模板 verify.sh、案例文档、契约基线是五处独立入口，任何一处残留都会把用户引向已删除的 relay bin 或不存在的 npm 安装。
+
 ## 2026-11-18 16:32 | model=claude-fable-fix-20261118 | task=T042 完成
 - 摘要: T042 把删除 smoke-pack 时丢失的协议不变量补回机检：smoke-review-regressions 新增 engines.node >=22、零运行时依赖、两个入口 shebang、CLI --version 与 package.json 同步、files 白名单必需项，以及 npm pack --dry-run 的「协议状态与开发文档不进包」断言；43 断言全绿，23 套测试链不变。
 - 事实(v2): mode=single | 文件 1 | ± +17/-0 | base=- | sha=- | branch=main || 验收: 通过 | verify: PASS 12·WARN 0·ERROR 0 | 耗时: 49s

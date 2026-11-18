@@ -83,7 +83,7 @@ npm test                        # 23 套冒烟;关注每套的「通过 / 失败
 node scripts/smoke-meta.mjs     # 元负控:假绿形态复现 + 静态规则
 node scripts/smoke-budget.mjs   # tools/list 体积预算
 node scripts/validate-plugin.mjs
-relay relay_doctor --root .     # 环境九检(需先 npm i -g . 或用 node src/cli.mjs)
+node src/cli.mjs relay_doctor --root .     # 环境九检(需 RELAY_HOME 指向引擎仓库,或在本仓库根运行)
 ```
 
 判读标准:

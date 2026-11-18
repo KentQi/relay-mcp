@@ -7,7 +7,7 @@
 零依赖纯 Node ESM(仅用 node: 内置模块),**无构建步骤**,入口 `node src/index.mjs`。
 
 - 项目根:`<relay-mcp 安装目录>`
-- Node >= 18,所有源码 `.mjs`,严格用 `import`/`export`
+- Node >= 22,所有源码 `.mjs`,严格用 `import`/`export`
 - 每个文件写完必须 `node --check <file>` 通过
 - 模板在**运行时**从 `templates/` 读取(用 `templatesDir()` 解析),绝不硬编码模板内容
 
@@ -122,7 +122,7 @@ export const startServer = async ({ onInit, onMethod }) => {
 | `relay_claim` | `{root, task:string, model:string}` | 并行模式:认领任务,标注 model+时间(W4) |
 | `relay_rules` | `{}` | 返回规则 ID 表(哪些可机检、执法点在哪) |
 
-`src/cli.mjs`:`relay <toolname> [--root path] [--json k=v ...]`(bin `relay`;等价写法 `node src/cli.mjs`)→ 复用 dispatch,人类可读输出;`--help`/`--version` 退出 0;`verify.sh` 与 CI 走它。
+`src/cli.mjs`:`node src/cli.mjs <toolname> [--root path] [--json k=v ...]`(npm 冻结后无 bin;历史 `relay` 命令已移除)→ 复用 dispatch,人类可读输出;`--help`/`--version` 退出 0;`verify.sh` 与 CI 走它。
 
 ## 仓库文件格式(跨专家一致性关键,W1 模板与 W4 解析器必须完全对齐)
 
