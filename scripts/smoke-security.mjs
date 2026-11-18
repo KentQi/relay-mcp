@@ -105,8 +105,12 @@ try {
     const r = run(root, 'relay_verify', { full: true });
     ok(/R12\s*\|\s*WARN/.test(row(r, 'R12')), 'R12:指针目标是绝对路径/越界 → WARN(不静默 PASS)', row(r, 'R12'));
     ok(/未被承认/.test(row(r, 'R12')), 'R12:文案说明指针未被承认');
-    writeFileSync(path.join(root, 'LOG.md'), '# 会话日志(最新在上)\n\n## 2026-01-01 10:00 | model=x | task=维护\n- 摘要: x\n\n<!-- relay:log-archive: docs/archive/missing.md -->\n');
-    ok(/R12\s*\|\s*WARN/.test(row(run(root, 'relay_verify', { full: true }), 'R12')), 'R12:悬空指针 → WARN');
+    writeFileSync(path.join(root, 'LOG.md'), '# 会话日志(最新在上)\n\n## 2026-01-01 10:00 | model=x | task=维护\n- 摘要: x\n\n<!-- relay:log-archive: docs/archive/LOG-missing.md -->\n');
+    ok(/R12\s*\|\s*WARN/.test(row(run(root, 'relay_verify', { full: true }), 'R12')), 'R12:悬空指针(合法 LOG-* 路径但目标缺失) → WARN');
+    mkdirSync(path.join(root, 'docs', 'archive'), { recursive: true });
+    writeFileSync(path.join(root, 'docs', 'archive', 'LOG-empty.md'), '');
+    writeFileSync(path.join(root, 'LOG.md'), '# 会话日志(最新在上)\n\n## 2026-01-01 10:00 | model=x | task=维护\n- 摘要: x\n\n<!-- relay:log-archive: docs/archive/LOG-empty.md -->\n');
+    ok(/R12\s*\|\s*WARN/.test(row(run(root, 'relay_verify', { full: true }), 'R12')), 'R12:空目标文件 → WARN');
   }
 
   console.log('\n== P2 R10 反查不被「提交消息含 T### 完成」劫持 ==');

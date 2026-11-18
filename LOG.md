@@ -1,8 +1,14 @@
 # 会话日志(最新在上)
 
+## 2026-11-18 16:27 | model=claude-fable-fix-20261118 | task=T041 完成
+- 摘要: T041 修复 R12 悬空指针夹具：缺失目标改用 docs/archive/LOG-missing.md（合法 LOG-* 路径但文件缺失），并新增空目标文件用例，分别覆盖 findArchiveBoundary 的缺失与 size<=0 两条 fail-closed 分支；27 断言全绿。另按引擎修复指令把 T040 历史事实行的文件数从 10 校正为 9（git 实测），R10 恢复 PASS。
+- 事实(v2): mode=single | 文件 1 | ± +6/-2 | base=- | sha=- | branch=main || 验收: 通过 | verify: PASS 12·WARN 0·ERROR 0 | 耗时: 55s
+- 负结果: R12 的悬空夹具若用 docs/archive/missing.md，会被 LOG-* 路径正则先挡在「路径不合规」分支；必须用 docs/archive/LOG-missing.md 才能覆盖「路径合法但目标缺失」。
+- 负结果: single 模式事实行写入侧仍可能比提交侧多计 1 个文件（T040 本次实测 10 vs 9）；已按引擎指令校正历史行，根因需在 T046 用「staged diff 派生事实」彻底收敛。
+
 ## 2026-11-18 16:24 | model=claude-fable-fix-20261118 | task=T040 完成
 - 摘要: T040 复核并修复 R11 密钥扫描面：确认「安全面不随证据面收窄」——verify.mjs 的归档扫描恢复 docs/archive/**/*.md 全量（含 ARCHIVED-* 文档旧版），D8 完成态证据与 R12 指针仍只认 LOG-*.md；R11 规则行/README/AGENTS 模板/CONTRACT/CHANGELOG 同步，smoke-security 改为「非 LOG 归档含密钥 → ERROR」并保留 LOG-* 用例（26 断言全绿）。同时按 R12 触发归档 13 条旧 LOG 条目到 docs/archive/LOG-2026-09-11.md（活跃区 156→53 行，R12 PASS），并同步归档头注的内容区间到 2026-11-18。
-- 事实(v2): mode=single | 文件 10 | ± +20/-12 | base=- | sha=- | branch=main || 验收: 通过 | verify: PASS 12·WARN 0·ERROR 0 | 耗时: 48s
+- 事实(v2): mode=single | 文件 9 | ± +20/-12 | base=- | sha=- | branch=main || 验收: 通过 | verify: PASS 12·WARN 0·ERROR 0 | 耗时: 48s
 - 负结果: R11 不能跟随证据面收窄：密钥扫描是安全面，漏扫的代价是密钥进入 git 历史且不可撤回；语义隔离只适用于 D8/R12 的证据判定。
 - 负结果: 往已存在的归档文件追加条目会再次改变它的内容区间；归档头注必须随每次归档更新，否则文档会二次失真。
 

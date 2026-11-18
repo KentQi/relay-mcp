@@ -14,9 +14,6 @@
 (空——认领后由 relay_claim 移入;认领锁在 .relay/claims/,TTL 4 小时,崩溃会话的认领到期自动可接管)
 
 ## 待办
-- [ ] T041 修复 R12 悬空指针夹具命错分支
-  验收: test:scripts/smoke-security.mjs
-  备注: 覆盖审计发现 4：scripts/smoke-security.mjs:108 的指针写成 docs/archive/missing.md，被新正则 ARCHIVE_REL_RE 挡在「路径不合规」分支，「指针合法但目标缺失或为空」这条 fail-closed 路径自此失去覆盖。要求：夹具改指 docs/archive/LOG-missing.md，并补「目标存在但为空」的用例。
 - [ ] T042 恢复 engines 与零依赖等协议不变量的机检
   验收: npm test
   备注: 覆盖审计发现 11：删除 scripts/smoke-pack.mjs 后，engines.node >=22、零运行时依赖、两个入口的 shebang、cli --version 与 package.json 同步、files 白名单边界全部失去机检——engines 被误改回 >=18 或 >=20 不会让任何测试变红，零依赖也违反 SPEC「零运行时依赖」边界约束却无人拦。要求：新增一套协议不变量断言并接入 npm test。
@@ -43,6 +40,9 @@
   备注: 原阻塞(包名属他人 + 无 npm 账号)不再需要解决;分发改为 git clone / Agent Plugins / GitHub Release;原安装器/打包面已删除。
 
 ## 已完成
+- [x] T041 修复 R12 悬空指针夹具命错分支  (2026-11-18)
+  验收: test:scripts/smoke-security.mjs
+  备注: 覆盖审计发现 4：scripts/smoke-security.mjs:108 的指针写成 docs/archive/missing.md，被新正则 ARCHIVE_REL_RE 挡在「路径不合规」分支，「指针合法但目标缺失或为空」这条 fail-closed 路径自此失去覆盖。要求：夹具改指 docs/archive/LOG-missing.md，并补「目标存在但为空」的用例。
 - [x] T040 R11 密钥扫描面收窄的显式化与回归  (2026-11-18)
   验收: test:scripts/smoke-security.mjs
   备注: 覆盖审计发现 3：src/engines/verify.mjs:573 只扫 docs/archive/LOG-*.md，非 LOG 归档里的密钥不再被发现（A/B 复现：同一密钥在 LOG-*.md 报 ERROR、在 notes.md 或 ARCHIVED-*.md 放行），反转了 2026-11-01 审计 P2-2 的保证。要求：先在 DECISIONS 明确「文档旧版归档是否属于密钥扫描面」的取舍，再同步 R11 规则行/README/契约文案与用例；若决定回退全量扫描，同步 R12/D8 口径。
