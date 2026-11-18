@@ -1,5 +1,10 @@
 # 会话日志(最新在上)
 
+## 2026-11-18 16:37 | model=claude-fable-fix-20261118 | task=T045 完成
+- 摘要: T045 修正 CHANGELOG 归类：把归档机检面收窄从 Changed 移入 Breaking，补充存量项目迁移动作（非 LOG 指针需运行 relay_archive_log {confirm:true} 新建 LOG-* 并改指），明确 R11 密钥扫描保持全量；同时修正 npm 条目中「移除 files」的过时表述（files 白名单已恢复为打包边界）。
+- 事实(v2): mode=single | 文件 1 | ± +3/-6 | base=- | sha=- | branch=main || 验收: 通过 | verify: PASS 12·WARN 0·ERROR 0 | 耗时: 62s
+- 负结果: 归档收窄不是内部重构：存量项目可能仍用非 LOG 指针，升级后会静默失去边界；必须写进 Breaking 并给迁移动作，不能放在 Changed。
+
 ## 2026-11-18 16:35 | model=claude-fable-fix-20261118 | task=T044 完成
 - 摘要: T044 同步分发面文案：README Node 徽章 18→22；src/cli.mjs 的 USAGE 与文件头主用法改为 node src/cli.mjs（移除已删除的 relay bin）；templates/verify.sh 的修复指引改为「克隆 relay-mcp 引擎后设 RELAY_HOME」；docs/04-test/08 的 doctor 命令改为 node src/cli.mjs 且不再要求 npm i -g；docs-design/CONTRACT.md 的 Node 基线与 CLI 契约同步到 >=22 / 无 bin。23 套全绿。
 - 事实(v2): mode=single | 文件 5 | ± +10/-11 | base=- | sha=- | branch=main || 验收: 通过 | verify: PASS 12·WARN 0·ERROR 0 | 耗时: 46s

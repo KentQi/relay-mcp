@@ -7,12 +7,9 @@
 
 ### Breaking
 
-- **Node 下界 18 → 22**:`engines.node`、doctor D1、skills、模板与 README 同步;与 CI 实测矩阵 22/24/26 对齐。
-- **npm 分发冻结**:`package.json` 置 `private: true`,移除 `bin`/`files`/安装器/发布护栏/打包与安装器冒烟;分发改为 `git clone`、Agent Plugins 插件包与 GitHub Release。
-
-### Changed
-
-- **归档机检面收窄**:D8 与 R12 只把 `docs/archive/LOG-*.md` 当作协议证据;`ARCHIVED-` 文档版本归档不再被误当证据。R12 归档指针同样只承认 `docs/archive/LOG-*.md`。**R11 密钥扫描保持 `docs/archive/**/*.md` 全量**——安全面不随证据面收窄。
+- **Node 下界 18 → 22**:`engines.node`、doctor D1、skills、模板与 README 同步;与 CI 实测矩阵 22/24/26 对齐。Node 18/20 不再受支持。
+- **npm 分发冻结**:`package.json` 置 `private: true`,移除 `bin`/安装器/发布护栏/打包与安装器冒烟;保留 `files` 白名单作为打包边界(防止 `npm pack` 带出协议状态);分发改为 `git clone`、Agent Plugins 插件包与 GitHub Release。
+- **归档机检面收窄(存量项目需迁移)**:D8 与 R12 只把 `docs/archive/LOG-*.md` 当作协议证据;`ARCHIVED-` 文档版本归档不再被误当证据。R12 归档指针同样只承认 `docs/archive/LOG-*.md`——存量项目若用非 LOG 指针,需运行 `relay_archive_log {confirm:true}` 新建 LOG-* 归档并改指。**R11 密钥扫描保持 `docs/archive/**/*.md` 全量**——安全面不随证据面收窄。
 
 ### 规模
 

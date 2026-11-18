@@ -14,9 +14,6 @@
 (空——认领后由 relay_claim 移入;认领锁在 .relay/claims/,TTL 4 小时,崩溃会话的认领到期自动可接管)
 
 ## 待办
-- [ ] T045 CHANGELOG 归档收窄改为 Breaking 并补存量项目迁移说明
-  验收: npm test
-  备注: 覆盖审计发现 15：CHANGELOG.md:15 把 R11/D8/R12 的归档收窄记在 Changed 段，但已接入项目的指针判定与密钥面会静默变化。要求：移入 Breaking 段，写明非 LOG 归档不再被扫、旧指针不再被承认，以及无迁移指引时的处置方式。
 - [ ] T046 事实行手工改写的协议处置
   验收: npm test
   备注: 覆盖审计发现 13：LOG.md:13 引擎派生的 T035 事实行文件数被手工从 7 改成 6，违反协议「事实(v2) 由引擎确定性派生、模型不得手写或改写」，该行此后无法与其它引擎产物区分。要求：决定是回退原行并由引擎重写，还是在 DECISIONS 明确记录本次校正与依据；并为「事实行不得手改」补机检。
@@ -31,6 +28,9 @@
   备注: 原阻塞(包名属他人 + 无 npm 账号)不再需要解决;分发改为 git clone / Agent Plugins / GitHub Release;原安装器/打包面已删除。
 
 ## 已完成
+- [x] T045 CHANGELOG 归档收窄改为 Breaking 并补存量项目迁移说明  (2026-11-18)
+  验收: npm test
+  备注: 覆盖审计发现 15：CHANGELOG.md:15 把 R11/D8/R12 的归档收窄记在 Changed 段，但已接入项目的指针判定与密钥面会静默变化。要求：移入 Breaking 段，写明非 LOG 归档不再被扫、旧指针不再被承认，以及无迁移指引时的处置方式。
 - [x] T044 分发面文案同步：Node 下界与已删除的 relay bin  (2026-11-18)
   验收: npm test
   备注: 覆盖审计发现 8/9/10/12：src/cli.mjs:16 的 USAGE 主用法仍是 relay bin（已删，照做 command not found）；templates/verify.sh:8 仍让用户「安装 relay-mcp」（npm 已冻结，新接入项目照做必然失败）；README.md:5 的 Node 徽章仍写 ≥18（engines 已 >=22）；docs/04-test/08-handoff-case-study-v1.0.md:86 仍让读者 npm i -g . 后跑已删 bin；docs-design/CONTRACT.md:10/125 仍写 Node >= 18 与 bin relay。要求：统一改为「node src/cli.mjs + git clone 引擎 + RELAY_HOME」，并加一致性断言防止再次漂移。
