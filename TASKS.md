@@ -14,9 +14,6 @@
 (空——认领后由 relay_claim 移入;认领锁在 .relay/claims/,TTL 4 小时,崩溃会话的认领到期自动可接管)
 
 ## 待办
-- [ ] T054 审计修复·takeover 直写 TASKS.md 绕过密钥闸与内容 CAS（审计 #5）
-  验收: test:scripts/smoke-rescue.mjs
-  备注: 见报告 #5。rescue.mjs:802 用裸 writeFileAtomic 写 TASKS.md,违反 util.mjs:346「TASKS/LOG 只能经由 writeProtocolFile 落盘」。后果:密钥样式串可入 git 历史且此后 relay_claim/session_end 全被 ProtocolSecretError 锁死;读改写之间的人工改动被静默覆盖。改用 writeProtocolFile + expectedHash + fencing。补「密钥串被拒」「并发手改不被覆盖」用例。
 - [ ] T055 审计修复·配置与快照（审计 #4 #8 #9 #13）
   验收: test:scripts/smoke-rescue.mjs
   备注: 见报告 #4/#8/#9/#13。(a) :416/:452 读错层级 → manifest.rescue.sources/maxAgeDays 完全失效、7 天窗口变 NaN 恒 false;(b) snap.note 从不被读 → 快照失败谎报「无未提交改动」,commit-tree 缺 gitIdentityArgs 兜底;(c) 快照密钥防护只看文件名,status 失败即全放行 → 应 fail-closed + 对暂存内容跑 scanSecrets;(d) 快照拍的是抢救者的 executionRoot 而非被救子代理 cwd → 可能保存无关会话的脏改动。补「maxAgeDays 生效」「快照失败可区分」「快照根=cwd」用例。
@@ -37,6 +34,9 @@
   冻结任务 T030:发布 npm — 决策冻结,不执行(见 DECISIONS 2026-11-18 Tier 2);原发布面已移除,分发改为 git clone / Agent Plugins / GitHub Release。冻结任务不进入 session_start 派发;解冻需先在 DECISIONS 记录新决定并恢复为 [ ] 任务行。
 
 ## 已完成
+- [x] T054 审计修复·takeover 直写 TASKS.md 绕过密钥闸与内容 CAS（审计 #5）  (2026-11-26)
+  验收: test:scripts/smoke-rescue.mjs
+  备注: 见报告 #5。rescue.mjs:802 用裸 writeFileAtomic 写 TASKS.md,违反 util.mjs:346「TASKS/LOG 只能经由 writeProtocolFile 落盘」。后果:密钥样式串可入 git 历史且此后 relay_claim/session_end 全被 ProtocolSecretError 锁死;读改写之间的人工改动被静默覆盖。改用 writeProtocolFile + expectedHash + fencing。补「密钥串被拒」「并发手改不被覆盖」用例。
 - [x] T053 审计修复·中断分类双向错判（审计 #3）  (2026-11-26)
   验收: test:scripts/smoke-rescue.mjs
   备注: 见报告 #3。(a) 子代理死在「tool_result 已落盘、下一轮 assistant 未开口」时末条是 user 记录,现判为 complete → 不可抢救,正是本工具的核心场景;(b) 只要历史出现过一次 is_error 就判 error → 正常完成的也被列为可抢救。修法:danglingToolUse 改为「末条 assistant 前存在未配对 tool_use」;末条为 user(tool_result) 且无后续 assistant 回应 → interrupted;toolError 只看末尾相邻。夹具补「末条是 user」与「历史报错但正常完成」。

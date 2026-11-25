@@ -1,5 +1,17 @@
 # 会话日志(最新在上)
 
+## 2026-11-26 01:03 | model=zcode-deepseek-t054 | task=T054 完成
+- 摘要: 本次会话在同一分支上完成 T054–T057 四个审计修复任务（同批文件，避免反复重置 worktree）。T054(#5 协议写入旁路)：takeover 写 TASKS.md 从裸 writeFileAtomic 改为 writeProtocolFile(内置 scanSecrets 密钥闸 + expectedHash 内容 CAS + fencing)，并加 RELAY_TEST_EXTERNAL_TASKS_WRITE 钩子验证并发手改不被覆盖；密钥型 agentId 进入标题时现在会被拒且 TASKS 逐字节不变。T055(#4 #8 #9 #13)：修正 manifest.rescue.sources/maxAgeDays 读取层级（此前恒 undefined，7 天窗口变 NaN 导致年龄过滤完全失效）；快照失败原因 snapshotNote 落盘并在 capture/show 区分「无改动」与「失败(原因)」；commit-tree 补 gitIdentityArgs 兜底；快照密钥防护改 fail-closed（status 失败即拒绝快照）+ 对暂存内容跑 scanSecrets（此前只看文件名）；快照根改用被救子代理的 cwd 而非调用者的 executionRoot。T056(#6 #7 #10 #14)：report 改用 takeover 时存下的真实 token 释放接力锁（此前空 token 必然 no-op 再按 holder 名手工 unlink，绕过 fencing）；takeover 的每条提前 return 与 state 写盘失败都释放接力锁（此前泄漏 240 分钟且卡片仍显示待接力）；拒收 `<你的模型标识>` 占位符（与 relay_claim 同口径，此前 sameHolder adopt 会让互斥失效）；drop 加持有者守卫 + 符号链接防线（此前可删掉正在接力的卡与唯一快照 ref）。T057(#15 + Notes)：修 ttl_hours 默认值事实错误（真实来源是 manifest.worktree.ttlHours）与 relay_recall 的 status " " 约定；CHANGELOG/CONTRACT 的 T049→T051 漂移；CONTRACT 配置面补 manifest.rescue；package.json/plugin.json 同步升 2.1.0（描述写 15 工具而版本仍是已发布的 2.0.0）。另修一个由测试暴露的真实缺陷：接续链 chainPrev 仅按毫秒级 createdAt 排序，同毫秒两卡会随机错指/为空，改为 (createdAt, id) 复合键。rescue 套件 126 断言全绿（连跑 8 次 + 全量 3 次稳定），npm test 24 套全绿，verify 双根全绿。
+- 事实(v2): mode=managed | 文件 7 | ± +312/-53 | base=bbea28c466e05031d2defe686acef6003d022355 | sha=0e7a544f1ae0ec1ccb6de47e1b8089a9c463e734 | branch=relay/T054 || 验收: 通过 | verify: PASS 15·WARN 0·ERROR 0 | 耗时: 51s
+- worktree: branch=relay/T054; sha=0e7a544f1ae0ec1ccb6de47e1b8089a9c463e734; 已验收,未合并(是否合并由人工决定)
+- 负结果: rescue 的 TASKS 写入必须走 writeProtocolFile,而不是「自己实现一个 fencing 回调」:fencing 只保证锁归属,不含密钥闸与内容 CAS。审计用「agentId 带 sk-ant」复现了密钥直入 git 历史。
+- 负结果: 快照的密钥防护不能只看文件名:仓库早就有内容级 scanSecrets(R11 在用),但快照路径从未调用。且 status 失败时把排除列表当空等于全放行——必须 fail-closed。
+- 负结果: 接力锁的释放必须用 takeover 时拿到的 token;空 token 调 releaseFileLock 是必然 no-op,此时再按 holder 名 unlink 就绕过了 fencing(同名 model 可删他人活锁)。
+- 负结果: 接续链排序不能只用毫秒级 createdAt:同毫秒两张卡会随机取错,必须用 (createdAt, id) 复合键。这个缺陷是测试偶发失败(1/3 概率)暴露的,单跑不易复现。
+- 负结果: worktree 的 baseSha 会被 registry 缓存:合并上一个任务后重新 claim 仍基于旧 main,必须手动 git reset --hard 到最新 main 才能拿到前序修复。
+- 负结果: 测试不要依赖前面测试段留下的锁状态:同签名告警改用独立仓库夹具后从偶发失败变为确定性通过。
+- 留给下一个: T048 只交付「接力单 + 可派发的接力提示词」。自动化需先决定:命令执行面(信任边界,参考 acceptance.commands 的逐字符签字)、后台进程生命周期与回收、重试上限、以及与 relay 认领锁/接力锁的衔接。开工前先记 DECISIONS(减法问)。对应任务 T051。ZCode 完整对话抢救为 T050(需人类授权只读 SQLite)。
+
 ## 2026-11-26 00:38 | model=zcode-deepseek-t053 | task=T053 完成
 - 摘要: T053 修复审计 #3 的中断分类双向错判，先红后绿。(a) 旧实现只看「最后一条记录是否 assistant+tool_use」判悬空，导致子代理死在「tool_result 已落盘、下一轮 assistant 未开口」时被判 complete、不可抢救——恰是本工具的核心场景。改为在解析器里维护 pendingToolUse 集合（发 tool_use 时加入、收到 tool_result 时按 tool_use_id 删除），悬空判定 = 集合非空；evidence 报出未配对数量与末条记录类型。(b) 旧实现只要历史出现过一次 is_error 就判 error，把正常跑完的代理也列为可抢救并登记假接管任务。改为：只有「最后一条记录本身就是那个 is_error 的 tool_result、模型之后没再开口」才算停因（stoppedAfterToolError）；历史报错仅作为正常完成时的说明性证据，不改判类别。顺带修掉一个真实缺陷：新增参数漏进 classifyFailure 解构导致解析器抛 ReferenceError，而 catch 把它吞成 transcriptOk:false（所有卡片被误标「转录损坏」）——这正好证明了审计对「异常被静默吞掉」的担忧。新增 6c 测试段（5 条断言 + 4 份定向夹具：末条 assistant 悬空、末条 user-result 但有未配对、历史报错后正常收尾、正常完成）。rescue 套件 99/0，npm test 24 套全绿。
 - 事实(v2): mode=managed | 文件 2 | ± +275/-43 | base=e5229208534e9b334422843329b763e273f04eb5 | sha=4ef6c05a4571af01df4ee74d36277422afe40e11 | branch=relay/T053 || 验收: 通过 | verify: PASS 15·WARN 0·ERROR 0 | 耗时: 66s
