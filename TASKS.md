@@ -14,12 +14,30 @@
 (空——认领后由 relay_claim 移入;认领锁在 .relay/claims/,TTL 4 小时,崩溃会话的认领到期自动可接管)
 
 ## 待办
+- [ ] T052 审计修复·信任边界：state.json 只存锚点 + 围栏转义 + 命令脱敏 + agentId 净化（审计 #1 #2 #11 #12）
+  验收: test:scripts/smoke-rescue.mjs
+  备注: 见 docs/04-test/09-audit-rescue-t048-v1.0.md 的 #1/#2/#11/#12。(a) 从 state.json 删除 prompt/lastNarrative/classification,一律从已校验 transcript 派生,且 sha256 为空时 fail-closed(现 if(state.sha256 && …) 静默跳过);(b) fence() 转义 payload 里的 ```,防围栏被提前闭合把注入文本推到指令位;(c) commands 与 edits[].path 同样过 redactSecrets(现三处出口裸奔);(d) 写 TASKS 前对 agentId 等外部串做 hasControlChars + 单行化(现仅 model 有检查)。夹具需补:prompt 含 ```、命令含密钥、agentId 含换行。
+- [ ] T053 审计修复·中断分类双向错判（审计 #3）
+  验收: test:scripts/smoke-rescue.mjs
+  备注: 见报告 #3。(a) 子代理死在「tool_result 已落盘、下一轮 assistant 未开口」时末条是 user 记录,现判为 complete → 不可抢救,正是本工具的核心场景;(b) 只要历史出现过一次 is_error 就判 error → 正常完成的也被列为可抢救。修法:danglingToolUse 改为「末条 assistant 前存在未配对 tool_use」;末条为 user(tool_result) 且无后续 assistant 回应 → interrupted;toolError 只看末尾相邻。夹具补「末条是 user」与「历史报错但正常完成」。
+- [ ] T054 审计修复·takeover 直写 TASKS.md 绕过密钥闸与内容 CAS（审计 #5）
+  验收: test:scripts/smoke-rescue.mjs
+  备注: 见报告 #5。rescue.mjs:802 用裸 writeFileAtomic 写 TASKS.md,违反 util.mjs:346「TASKS/LOG 只能经由 writeProtocolFile 落盘」。后果:密钥样式串可入 git 历史且此后 relay_claim/session_end 全被 ProtocolSecretError 锁死;读改写之间的人工改动被静默覆盖。改用 writeProtocolFile + expectedHash + fencing。补「密钥串被拒」「并发手改不被覆盖」用例。
+- [ ] T055 审计修复·配置与快照（审计 #4 #8 #9 #13）
+  验收: test:scripts/smoke-rescue.mjs
+  备注: 见报告 #4/#8/#9/#13。(a) :416/:452 读错层级 → manifest.rescue.sources/maxAgeDays 完全失效、7 天窗口变 NaN 恒 false;(b) snap.note 从不被读 → 快照失败谎报「无未提交改动」,commit-tree 缺 gitIdentityArgs 兜底;(c) 快照密钥防护只看文件名,status 失败即全放行 → 应 fail-closed + 对暂存内容跑 scanSecrets;(d) 快照拍的是抢救者的 executionRoot 而非被救子代理 cwd → 可能保存无关会话的脏改动。补「maxAgeDays 生效」「快照失败可区分」「快照根=cwd」用例。
+- [ ] T056 审计修复·锁与生命周期（审计 #6 #7 #10 #14）
+  验收: test:scripts/smoke-rescue.mjs
+  备注: 见报告 #6/#7/#10/#14。(a) report 用空 token 调 releaseFileLock 后手工 unlink,绕过 token fencing → 同名 model 可删掉他人活锁;(b) takeover 两条提前 return 泄漏接力锁 240 分钟,卡片仍显示「待接力」;(c) takeover 接受 `<你的模型标识>` 占位符且工具自己就打印它 → sameHolder adopt 使互斥失效;(d) drop 无持有者校验、无符号链接防线,会删掉正在接力的卡与唯一快照 ref。补「report 后锁不存在」「持有中不可 drop」「占位符被拒」用例。
+- [ ] T057 审计修复·测试有效性与文档漂移（审计 #15 + Notes）
+  验收: test:scripts/smoke-rescue.mjs
+  备注: 见报告 #15 与 Notes。(a) 删 smoke-rescue 的恒真断言(:350)、死分支(:362)、未创建 ref 的检查(:194);(b) :234 改为断言新增任务号(现正则未限定「待办」小节,模板自带任务会让它空转通过);(c) 补 report 释放锁断言;(d) 修 ttl_hours 默认值「24」的事实错误、恢复 status:" " 约定说明;(e) 修 runnning 停滞判据三方口径矛盾、START.md 探测用 controlRoot、source 路径重定基、scan 缺横幅、oversize 不可见、MAX_SCAN_CANDIDATES 截断不报告;(f) 文档:CHANGELOG/CONTRACT 的 T049→T051、CONTRACT 配置面清单补 rescue、plugin.json 版本与描述一致性。
 - [ ] T051 抢救后自动拉起备用模型接力（不再依赖编排会话手动拉起）
   验收: test:scripts/smoke-rescue-autolaunch.mjs
   备注: T048 只交付「接力单 + 可派发的接力提示词」,由编排会话或人用 harness 原生手段换模型拉起。自动化需先决定:命令执行面(信任边界,参考 acceptance.commands 的逐字符签字)、后台进程生命周期与回收、重试上限、以及与 relay 认领锁/接力锁的衔接。开工前先记 DECISIONS(减法问:能否复用 acceptance 白名单与 harness 原生 Agent 能力)。本条合并了原 T049 登记项(同一件事,勿重复成立)。
 - [ ] T050 ZCode 完整对话抢救（只读 ~/.zcode/cli/db/db.sqlite 的 message/part 行，默认关闭、manifest.rescue.sources 显式开启）
   验收: test:scripts/smoke-rescue-zcode-db.mjs
-  备注: 实测 ZCode 失败子代理只留 metadata.json + 错误文本，持久对话在 SQLite（message/part 两表，data.error 带 code=model_rate_limited/statusCode=429）。读该库需人类授权；实现须只读打开（node:sqlite readOnly）并在不可用时降级。
+  备注: 实测 ZCode 失败子代理只留 metadata.json + 错误文本，持久对话在 SQLite（message/part 两表，data.error 带 code=model_rate_limited/statusCode=429）。读该库需人类授权；实现须只读打开（node:sqlite readOnly）并在不可用时降级。注意 data.error 是嵌套 JSON **字符串**，需二次 JSON.parse（json_extract 单层取不到 code/statusCode，实测 193 条全空）。
 
 ## 已冻结
   冻结任务 T030:发布 npm — 决策冻结,不执行(见 DECISIONS 2026-11-18 Tier 2);原发布面已移除,分发改为 git clone / Agent Plugins / GitHub Release。冻结任务不进入 session_start 派发;解冻需先在 DECISIONS 记录新决定并恢复为 [ ] 任务行。
