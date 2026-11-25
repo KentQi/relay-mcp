@@ -46,7 +46,11 @@ const codePointClip = (s, n) => {
   const cps = Array.from(String(s ?? ''));
   return cps.length > n ? `${cps.slice(0, n).join('')}…[截断 ${cps.length - n} 字]` : cps.join('');
 };
-const fence = (text, lang = 'text') => ['```' + lang, text, '```'].join('\n');
+const FENCE_TICKS = '`'.repeat(3);
+// #2(审计):payload 里的三反引号必须被中和,否则不可信文本可自行闭合围栏、把注入内容推到
+// 围栏之外(「数据非指令」边界失效)。转义为 \`\`\`,渲染后仍可读,但不再构成 fence 标记。
+const neutralizeFence = (text) => String(text ?? '').split(FENCE_TICKS).join('`\\`\\`');
+const fence = (text, lang = 'text') => [FENCE_TICKS + lang, neutralizeFence(text), FENCE_TICKS].join('\n');
 const rescueRoot = (controlRoot) => path.join(controlRoot, RESCUE_REL);
 const rescueDir = (controlRoot, id) => path.join(rescueRoot(controlRoot), id);
 const isSafeId = (id) => /^[a-z0-9][a-z0-9._-]{0,80}$/i.test(String(id || ''));
@@ -395,7 +399,12 @@ const loadTranscript = async (controlRoot, state) => {
   const raw = await readFileSafe(p, null);
   if (raw == null) return { ok: false, why: `接力单缺 transcript 副本:${p}` };
   const actual = sha256Hex(raw);
-  if (state.sha256 && actual !== state.sha256) {
+  // #1(审计):哈希为空时**必须** fail-closed(旧实现 `if (state.sha256 && ...)` 会静默放行,
+  // 等于把「未受校验的副本」当成已验证的现场)。
+  if (!state.sha256) {
+    return { ok: false, why: '接力单缺少 transcript 的 sha256(校验信息丢失)——无法证明副本未被改动,拒绝接力;请重新 capture' };
+  }
+  if (actual !== state.sha256) {
     return { ok: false, why: `transcript 副本与 state.json 记录的 sha256 不一致(期望 ${String(state.sha256).slice(0, 12)}… 实际 ${actual.slice(0, 12)}…)——接力单可能被改动过,拒绝基于它接力` };
   }
   let parsed = null;
@@ -405,9 +414,10 @@ const loadTranscript = async (controlRoot, state) => {
   return { ok: true, parsed, raw };
 };
 
-const stateSummaryLine = (st) => {
-  const c = st.classification || {};
-  return `- \`${st.id}\` ${st.sourceStatus || ''} | ${c.label || c.kind || '未知'} | task=${st.task || '无'} | ${st.takeover ? `已移交 ${st.takeover.model}` : '待接力'} | ${st.createdAt || ''}`;
+// #1(审计):分类不再存于 state.json,摘要行只陈述锚点事实;需要分类时由调用方从 transcript 派生。
+const stateSummaryLine = (st, cls = null) => {
+  const label = cls ? (cls.label || cls.kind || '未知') : (st.sourceStatus ? `status=${st.sourceStatus}` : '待查');
+  return `- \`${st.id}\` ${label} | task=${st.task || '无'} | ${st.takeover ? `已移交 ${st.takeover.model}` : '待接力'} | ${st.createdAt || ''}`;
 };
 
 /* ---------------------------- 扫描(只读) ---------------------------- */
@@ -528,8 +538,10 @@ const renderScan = (controlRoot, described, states, notes, skipped) => {
   return lines.join('\n');
 };
 
-const renderCard = (controlRoot, state, parsed, view) => {
-  const c = state.classification || {};
+// #1(审计):classification / prompt / narrative 全部由调用方从**已校验**的 transcript 派生后传入,
+// renderCard 不再读 state(那些字段已不在 state.json 里)。
+const renderCard = (controlRoot, state, parsed, view, derived = {}) => {
+  const c = derived.classification || {};
   const lines = [
     `# 接力单 \`${state.id}\` — ${controlRoot}`,
     '',
@@ -551,10 +563,12 @@ const renderCard = (controlRoot, state, parsed, view) => {
   lines.push('', '## 现场');
   if (parsed) {
     lines.push(...(parsed.edits.length
-      ? ['已改文件:', ...parsed.edits.slice(0, EDIT_CAP).map((e) => `- ${e.tool} \`${e.path}\``)]
+      ? ['已改文件:', ...parsed.edits.slice(0, EDIT_CAP).map((e) => `- ${e.tool} \`${redactSecrets(e.path).text}\``)]
       : ['已改文件:(transcript 中未观察到写操作)']));
     if (parsed.commands.length) {
-      lines.push('', '跑过的命令:', fence(parsed.commands.slice(0, COMMAND_CAP).join('\n')));
+      // #11(审计):命令是 transcript 派生的不可信文本,必须与 prompt/narrative 同等脱敏。
+      const safeCmds = parsed.commands.slice(0, COMMAND_CAP).map((c) => redactSecrets(c).text);
+      lines.push('', '跑过的命令:', fence(safeCmds.join('\n')));
     }
     if (parsed.todos.length) {
       lines.push('', '它自己写的待办:', ...parsed.todos.map((t) => `- ${codePointClip(redactSecrets(t).text, 200)}`));
@@ -566,13 +580,13 @@ const renderCard = (controlRoot, state, parsed, view) => {
   }
 
   if (view === 'tail' || view === 'card') {
-    const lastText = parsed && parsed.narrative ? parsed.narrative : state.lastNarrative || '';
+    const lastText = (parsed && parsed.narrative) || derived.narrative || '';
     if (lastText) {
       lines.push('', `## 它最后说的话${view === 'tail' ? '(tail)' : ''}`, fence(codePointClip(redactSecrets(lastText).text, NARRATIVE_CAP)));
     }
   }
   if (view === 'commands') {
-    const cmds = parsed && parsed.commands ? parsed.commands : [];
+    const cmds = (parsed && parsed.commands ? parsed.commands : []).map((c) => redactSecrets(c).text);
     lines.push('', '## 命令', cmds.length ? fence(cmds.slice(0, COMMAND_CAP).join('\n')) : '(无)');
   }
   if (view === 'edits') {
@@ -583,7 +597,8 @@ const renderCard = (controlRoot, state, parsed, view) => {
     lines.push('> 现场若已丢失,可用上面的命令查看快照;恢复由人决定,relay 不自动 checkout/reset。');
   }
 
-  lines.push('', '## 原始任务(它当初收到的提示词)', fence(codePointClip(redactSecrets(state.prompt || '(无)').text, NARRATIVE_CAP)));
+  const originalPrompt = (parsed && parsed.prompt) || derived.prompt || '(该来源只有元数据,原始任务见 state.sourcePath)';
+  lines.push('', '## 原始任务(它当初收到的提示词)', fence(codePointClip(redactSecrets(originalPrompt).text, NARRATIVE_CAP)));
   lines.push(
     '',
     '接手:',
@@ -696,9 +711,9 @@ const actCapture = async ({ controlRoot, executionRoot, cfg, args, home }) => {
     executionRoot,
     task: args.task || '',
     branch: described.gitBranch || '',
-    prompt: described.prompt,
-    lastNarrative: described.parsed ? described.parsed.narrative : '',
-    classification: described.classification,
+    // #1(审计):prompt / lastNarrative / classification 是**可派生**的,按铁律 2 不落盘——
+    // 否则它们既绕过了 sha256 校验(校验只盖 transcript),又会成为第二真相源。
+    // 一律由 loadTranscript + parse 在每次读取时重新派生。
     sourceStatus: described.sourceStatus,
     sourceError: described.sourceError,
     snapshotRef: snap.ref || '',
@@ -716,7 +731,7 @@ const actCapture = async ({ controlRoot, executionRoot, cfg, args, home }) => {
     `# 接力单已生成 — \`${id}\``,
     '',
     `- 来源:${state.harness} / \`${state.agentId}\``,
-    `- 中断:${state.classification.label}(${state.classification.kind})`,
+    `- 中断:${described.classification.label}(${described.classification.kind})`,
     state.transcriptFile
       ? `- transcript:${state.bytes} 字节,sha256 ${state.sha256.slice(0, 12)}…`
       : '- transcript:(该来源只有元数据,未捕获对话;见 state.json 的 sourcePath)',
@@ -743,7 +758,14 @@ const actShow = async ({ controlRoot, args }) => {
   const t = await loadTranscript(controlRoot, state);
   if (!t.ok) return fail('relay rescue — show', t.why, ['', '修复:重新 capture 一份干净副本;不要基于被改过的接力单继续。']);
   const view = String(args.view || 'card').toLowerCase();
-  return textResult(renderCard(controlRoot, state, t.parsed, view));
+  const derived = {
+    classification: t.parsed ? t.parsed.classification : (state.sourceStatus || state.sourceError
+      ? classifyFailure({ metaStatus: state.sourceStatus, metaError: state.sourceError })
+      : {}),
+    narrative: t.parsed ? t.parsed.narrative : '',
+    prompt: t.parsed ? t.parsed.prompt : '',
+  };
+  return textResult(renderCard(controlRoot, state, t.parsed, view, derived));
 };
 
 const actTakeover = async ({ controlRoot, args }) => {
@@ -783,6 +805,11 @@ const actTakeover = async ({ controlRoot, args }) => {
     ]);
   }
 
+  // #1(审计):分类从**已校验**的 transcript 重新派生(纯元数据卡退化为按 sourceStatus/Error 判)。
+  const derivedClass = t.parsed
+    ? t.parsed.classification
+    : classifyFailure({ metaStatus: state.sourceStatus, metaError: state.sourceError });
+
   // 写 TASKS(仓库写锁 + CAS):重建一条可认领的任务,派发权与 relay 认领权解耦。
   let newTask = state.task || '';
   let tasksNote = '';
@@ -797,7 +824,10 @@ const actTakeover = async ({ controlRoot, args }) => {
       if (!fence.held) return fail('relay rescue — takeover', `仓库写锁在移交期间被接管(${fence.warning || ''})。`);
       const tasksRaw = await readFileSafe(path.join(controlRoot, 'TASKS.md'), null);
       if (tasksRaw == null) return fail('relay rescue — takeover', 'TASKS.md 不存在:该仓库尚未接入接力协议。');
-      const title = `接手抢救单 ${state.agentId || state.id}(${state.classification.label})`.slice(0, 120);
+      // #12(审计):agentId 来自外部 metadata,未净化时换行可伪造任务行、密钥样式串可入库。
+      // 与 session.mjs 对 model/task 的口径一致:控制字符→空格 + 折叠空白 + 截断。
+      const safeAgent = String(state.agentId || state.id).replace(/[\u0000-\u001f\u007f]+/g, ' ').replace(/\s+/g, ' ').trim();
+      const title = `接手抢救单 ${safeAgent}(${derivedClass.label || '未知'})`.slice(0, 120);
       const inserted = insertTodo(tasksRaw, title, '在接力单现场继续完成任务;通过后由本人 relay_session_end', `来源:relay_rescue ${state.id};接力者 ${model}`);
       await writeFileAtomic(path.join(controlRoot, 'TASKS.md'), inserted.text, {
         label: 'TASKS.md',
@@ -826,9 +856,13 @@ const actTakeover = async ({ controlRoot, args }) => {
   // 同失败签名在接续链上重复出现 → 明确告警(零 LLM 的「别原样重跑」提醒)
   const chainWarn = [];
   if (state.previousId) {
-    const prev = await readState(controlRoot, state.previousId);
-    if (prev && prev.classification && prev.classification.kind === state.classification.kind) {
-      chainWarn.push(`⚠ 同一失败签名第 2 棒:上一棒 \`${prev.id}\` 也以「${prev.classification.label}」结束——换额度池 / 降并发 / 拆小任务,不要原样重跑。`);
+    const prevState = await readState(controlRoot, state.previousId);
+    const prevT = prevState ? await loadTranscript(controlRoot, prevState) : null;
+    const prevClass = prevT && prevT.parsed
+      ? prevT.parsed.classification
+      : (prevState ? classifyFailure({ metaStatus: prevState.sourceStatus, metaError: prevState.sourceError }) : null);
+    if (prevClass && prevClass.kind === derivedClass.kind) {
+      chainWarn.push(`⚠ 同一失败签名第 2 棒:上一棒 \`${prevState.id}\` 也以「${prevClass.label}」结束——换额度池 / 降并发 / 拆小任务,不要原样重跑。`);
     }
   }
 
@@ -838,7 +872,7 @@ const actTakeover = async ({ controlRoot, args }) => {
     '',
     DATA_BANNER,
     '',
-    `- 中断:${state.classification.label}(${state.classification.kind})`,
+    `- 中断:${derivedClass.label || '未知'}(${derivedClass.kind || '?'})`,
     ...(chainWarn.map((w) => `- ${w}`)),
     `- ${tasksNote}`,
     '',
@@ -849,14 +883,14 @@ const actTakeover = async ({ controlRoot, args }) => {
     '',
     '## 可直接派发的接力提示词',
     fence([
-      `你接手一张抢救单 \`${id}\`(${state.classification.label})。原任务:`,
+      `你接手一张抢救单 \`${id}\`(${derivedClass.label || '未知'})。原任务:`,
       '',
-      codePointClip(redactSecrets(state.prompt || '(无)').text, 1800),
+      codePointClip(redactSecrets((p && p.prompt) || '(该来源只有元数据)').text, 1800),
       '',
       '原执行者已经做了下面这些,不要从零重来:',
-      ...(p && p.edits.length ? p.edits.slice(0, EDIT_CAP).map((e) => `- ${e.tool} ${e.path}`) : ['- (未观察到写操作;先自己确认现状)']),
+      ...(p && p.edits.length ? p.edits.slice(0, EDIT_CAP).map((e) => `- ${e.tool} ${redactSecrets(e.path).text}`) : ['- (未观察到写操作;先自己确认现状)']),
       ...(state.snapshotRef ? ['', `未提交改动的快照在 git ref ${state.snapshotRef};用 git diff HEAD..${state.snapshotRef} 查看。`] : []),
-      ...(p && p.commands.length ? ['', `它跑过的命令:\n${p.commands.slice(0, 10).join('\n')}`] : []),
+      ...(p && p.commands.length ? ['', `它跑过的命令:\n${p.commands.slice(0, 10).map((c) => redactSecrets(c).text).join('\n')}`] : []),
       ...(p && p.narrative ? ['', '它最后说的话:', codePointClip(redactSecrets(p.narrative).text, 1200)] : []),
       '',
       `RELATED_TASK=${newTask || '(无)'}:完成后用 relay_claim 认领它并 relay_session_end 出场;`,
