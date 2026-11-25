@@ -164,6 +164,12 @@ const parseClaudeTranscript = (text) => {
   let lastText = '';
   let apiError = null;
   let toolError = false;
+  // #3(审计):旧实现只看「最后一条记录是否 assistant+tool_use」判悬空,导致子代理死在
+  // 「tool_result 已落盘、下一轮 assistant 未开口」时被判 complete(不可抢救)——恰是本工具的核心场景。
+  // 改为显式跟踪:已发出但未收到 tool_result 的 tool_use id 集合,以及「末尾相邻」的工具错误。
+  const pendingToolUse = new Set();
+  let lastRecordKind = '';   // 'assistant' | 'user-result' | 'user-prompt' | 'api-error'
+  let trailingToolError = false;
   for (const r of good) {
     const msg = r.message && typeof r.message === 'object' ? r.message : null;
     if (!msg) continue;
@@ -176,6 +182,7 @@ const parseClaudeTranscript = (text) => {
       }
     }
     if (r.type === 'assistant' && Array.isArray(content)) {
+      lastRecordKind = 'assistant';
       for (const c of content) {
         if (!c || typeof c !== 'object') continue;
         if (c.type === 'text' && c.text) {
@@ -190,6 +197,7 @@ const parseClaudeTranscript = (text) => {
             edits.push({ tool: name, path: String(input.file_path) });
           }
           if (name === 'Bash' && input.command) commands.push(String(input.command).slice(0, 400));
+          if (c.id) pendingToolUse.add(String(c.id));
           if (name === 'TodoWrite' && Array.isArray(input.todos)) {
             for (const t of input.todos) if (t && t.content) todos.push(String(t.content).slice(0, 200));
           }
@@ -197,11 +205,17 @@ const parseClaudeTranscript = (text) => {
       }
     }
     if (r.type === 'user' && Array.isArray(content)) {
+      let sawResult = false;
       for (const c of content) {
-        if (c && c.type === 'tool_result' && c.is_error === true) toolError = true;
+        if (!c || c.type !== 'tool_result') continue;
+        sawResult = true;
+        if (c.tool_use_id) pendingToolUse.delete(String(c.tool_use_id));
+        if (c.is_error === true) toolError = true; // 历史出现过错误(仅作证据,不改判类别)
       }
+      if (sawResult) lastRecordKind = 'user-result';
     }
     if (r.isApiErrorMessage === true) {
+      lastRecordKind = 'api-error';
       apiError = {
         status: Number.isFinite(r.apiErrorStatus) ? r.apiErrorStatus : null,
         code: String(r.error || (msg.error && msg.error) || ''),
@@ -211,10 +225,25 @@ const parseClaudeTranscript = (text) => {
   }
   const last = good[good.length - 1] || {};
   const lastMsg = last.message && typeof last.message === 'object' ? last.message : {};
-  const danglingToolUse = last.type === 'assistant'
+  // #3(审计):悬空判定改为「存在已发出但未收到 tool_result 的 tool_use」。
+  // 这同时覆盖两种形态:(a) 末条就是 assistant(tool_use);(b) 末条是 user(tool_result) 但
+  // 仍有别的 tool_use 没被回应——旧实现只看末条记录,形态 (b) 会被误判 complete。
+  const danglingToolUse = pendingToolUse.size > 0
+    || (last.type === 'assistant'
+      && Array.isArray(lastMsg.content)
+      && lastMsg.content.some((c) => c && c.type === 'tool_use'));
+  // #3(审计):toolError 只有「末尾相邻」才算停因——即最后一条记录就是那个 is_error 的 tool_result、
+  // 模型之后没再开口。历史报错(之后有 assistant 继续)只是重试过程,不算失败。
+  const lastResultWasError = lastRecordKind === 'user-result'
+    && last.type === 'user'
     && Array.isArray(lastMsg.content)
-    && lastMsg.content.some((c) => c && c.type === 'tool_use');
-  const classification = classifyFailure({ apiError, danglingToolUse, toolError, apiErrorStatus: apiError && apiError.status });
+    && lastMsg.content.some((c) => c && c.type === 'tool_result' && c.is_error === true);
+  const stoppedAfterToolError = toolError && lastResultWasError;
+  const classification = classifyFailure({
+    apiError, danglingToolUse, toolError, stoppedAfterToolError,
+    lastRecordKind, pendingToolUseCount: pendingToolUse.size,
+    apiErrorStatus: apiError && apiError.status,
+  });
   return {
     prompt,
     cwd: first.cwd || '',
@@ -232,7 +261,7 @@ const parseClaudeTranscript = (text) => {
 
 // 确定性中断分类(零 LLM):只看可机的标记,类别永远附证据。
 const QUOTA_HINTS = /rate.?limit|429|quota|usage limit|额度|上限|1302|1308|2056|2067|insufficient/i;
-const classifyFailure = ({ apiError, danglingToolUse, toolError, apiErrorStatus, metaStatus, metaError, transcriptOk }) => {
+const classifyFailure = ({ apiError, danglingToolUse, toolError, stoppedAfterToolError, lastRecordKind, pendingToolUseCount, apiErrorStatus, metaStatus, metaError, transcriptOk }) => {
   const evidence = [];
   const status = Number.isFinite(apiErrorStatus) ? apiErrorStatus : null;
   if (apiError && QUOTA_HINTS.test(`${apiError.code} ${apiError.text}`)) {
@@ -255,10 +284,25 @@ const classifyFailure = ({ apiError, danglingToolUse, toolError, apiErrorStatus,
     }
     if (/^running$/i.test(metaStatus)) return { kind: 'interrupted', label: '疑似被杀(元数据仍为 running)', evidence: [`status=${metaStatus}`] };
   }
-  if (danglingToolUse) return { kind: 'interrupted', label: '半途被杀(末条是悬空工具调用)', evidence: ['最后一条 assistant 记录含未配对的 tool_use'] };
+  if (danglingToolUse) {
+    return {
+      kind: 'interrupted',
+      label: '半途被杀(存在未配对的工具调用)',
+      evidence: [pendingToolUseCount > 0
+        ? `有 ${pendingToolUseCount} 个 tool_use 未收到 tool_result(末条记录类型 ${lastRecordKind || '未知'})`
+        : '末条 assistant 记录含未配对的 tool_use'],
+    };
+  }
   if (transcriptOk === false) return { kind: 'error', label: '转录损坏', evidence };
-  if (toolError) return { kind: 'error', label: '工具报错后停止', evidence: ['含 is_error 的 tool_result'] };
-  return { kind: 'complete', label: '正常完成', evidence: ['末条 assistant 无悬空工具调用'] };
+  // #3(审计):只有「末尾相邻」的工具报错才判停因;历史报错是正常重试的一部分,不算失败。
+  if (stoppedAfterToolError) return { kind: 'error', label: '工具报错后停止', evidence: ['末条 tool_result 是 is_error'] };
+  return {
+    kind: 'complete',
+    label: '正常完成',
+    evidence: [toolError
+      ? '末条 assistant 正常收尾(历史工具报错已被后续重试覆盖,不算停因)'
+      : '末条 assistant 无悬空工具调用'],
+  };
 };
 
 const parseZcodeMeta = (raw) => {
