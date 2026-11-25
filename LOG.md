@@ -1,5 +1,14 @@
 # 会话日志(最新在上)
 
+## 2026-11-26 00:38 | model=zcode-deepseek-t053 | task=T053 完成
+- 摘要: T053 修复审计 #3 的中断分类双向错判，先红后绿。(a) 旧实现只看「最后一条记录是否 assistant+tool_use」判悬空，导致子代理死在「tool_result 已落盘、下一轮 assistant 未开口」时被判 complete、不可抢救——恰是本工具的核心场景。改为在解析器里维护 pendingToolUse 集合（发 tool_use 时加入、收到 tool_result 时按 tool_use_id 删除），悬空判定 = 集合非空；evidence 报出未配对数量与末条记录类型。(b) 旧实现只要历史出现过一次 is_error 就判 error，把正常跑完的代理也列为可抢救并登记假接管任务。改为：只有「最后一条记录本身就是那个 is_error 的 tool_result、模型之后没再开口」才算停因（stoppedAfterToolError）；历史报错仅作为正常完成时的说明性证据，不改判类别。顺带修掉一个真实缺陷：新增参数漏进 classifyFailure 解构导致解析器抛 ReferenceError，而 catch 把它吞成 transcriptOk:false（所有卡片被误标「转录损坏」）——这正好证明了审计对「异常被静默吞掉」的担忧。新增 6c 测试段（5 条断言 + 4 份定向夹具：末条 assistant 悬空、末条 user-result 但有未配对、历史报错后正常收尾、正常完成）。rescue 套件 99/0，npm test 24 套全绿。
+- 事实(v2): mode=managed | 文件 2 | ± +275/-43 | base=e5229208534e9b334422843329b763e273f04eb5 | sha=4ef6c05a4571af01df4ee74d36277422afe40e11 | branch=relay/T053 || 验收: 通过 | verify: PASS 15·WARN 0·ERROR 0 | 耗时: 66s
+- worktree: branch=relay/T053; sha=4ef6c05a4571af01df4ee74d36277422afe40e11; 已验收,未合并(是否合并由人工决定)
+- 负结果: 解析器的 `catch { parsed = null }` 会把任何异常静默降级为 transcriptOk:false —— 新增字段漏进 classifyFailure 解构时,全部卡片被误标「转录损坏」而毫无报错。定位时必须临时把 catch 改成打印 stack。
+- 负结果: 「末尾相邻」不能只看 lastRecordKind === 'user-result'(tool_result 之后就会设成它);必须同时检查最后一条记录本身是否含 is_error 的 tool_result,否则正常收尾的 end_turn 也会被误判为停因。
+- 负结果: worktree 的 baseSha 会被 registry 缓存:合并了上一个任务后重新 claim,T053 仍基于旧 main(e522920),必须手动 git reset --hard 到最新 main 才能拿到 T052 的修复。后续任务合并后应同步清理 registry 记录或手动重置。
+- 留给下一个: 见报告 #5。rescue.mjs 的 takeover 用裸 writeFileAtomic 写 TASKS.md,违反 util.mjs「TASKS/LOG 只能经由 writeProtocolFile 落盘」。后果:(1) 无 scanSecrets 闸 → 密钥样式串可进 git 历史,且此后每次 relay_claim/session_end 都会被 ProtocolSecretError 锁死;(2) 无 expectedHash 内容 CAS → 读改写之间的人工改动被静默覆盖。改用 writeProtocolFile(controlRoot,'TASKS.md',text,{token:repoLock.token,lockLabel:'仓库写锁',expectedHash:sha256Hex(tasksRaw)})。补「密钥串被拒」「并发手改不被覆盖」用例。对应任务 T054。
+
 ## 2026-11-26 00:29 | model=zcode-deepseek-t052 | task=T052 完成
 - 摘要: T052 修复审计确认的 4 条信任边界缺陷，全部先红后绿。#1 单一真相源：从 state.json 删除 prompt/lastNarrative/classification 三个可派生字段（它们绕过 sha256 校验、构成第二真相源），改为每次读取时从**已校验**的 transcript 重新派生；loadTranscript 的 `if (state.sha256 && …)` 改成空哈希 fail-closed。renderCard/actTakeover/actShow 全部改为接收 derived 参数，chainWarn 也从上一棒已校验 transcript 派生。#2 围栏逃逸：新增 neutralizeFence，把 payload 里的三反引号转义为 `\`\`\`，fence() 统一走它——不可信文本无法再自行闭合围栏把注入推到指令位。#11 命令脱敏：三处命令出口（卡片「跑过的命令」、view=commands、接力提示词）与 edits[].path 全部过 redactSecrets，此前它们是唯一未脱敏的 transcript 派生字段。#12 agentId 净化：写 TASKS 前对 agentId 做控制字符→空格 + 折叠空白 + 截断（与 session.mjs 对 model/task 的口径一致），换行不再能伪造任务行。顺带删掉审计点名的 3 处假绿断言（恒真的三元、对未创建 ref 的检查、被 if 包住永不执行的死分支）。新增 6b 信任边界测试段（16 条断言，含 ZCode metadata.json 的 agentId 注入夹具）。npm test 24 套全绿、verify 双根 12P+4P 全绿。
 - 事实(v2): mode=managed | 文件 2 | ± +164/-35 | base=de146a754eaf4c70ec90c02ec33179a45d52371a | sha=1a47ad43c46a9717b1bec87511fa9b6119d31cb8 | branch=relay/T052 || 验收: 通过 | verify: PASS 16·WARN 0·ERROR 0 | 耗时: 69s

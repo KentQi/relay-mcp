@@ -14,9 +14,6 @@
 (空——认领后由 relay_claim 移入;认领锁在 .relay/claims/,TTL 4 小时,崩溃会话的认领到期自动可接管)
 
 ## 待办
-- [ ] T053 审计修复·中断分类双向错判（审计 #3）
-  验收: test:scripts/smoke-rescue.mjs
-  备注: 见报告 #3。(a) 子代理死在「tool_result 已落盘、下一轮 assistant 未开口」时末条是 user 记录,现判为 complete → 不可抢救,正是本工具的核心场景;(b) 只要历史出现过一次 is_error 就判 error → 正常完成的也被列为可抢救。修法:danglingToolUse 改为「末条 assistant 前存在未配对 tool_use」;末条为 user(tool_result) 且无后续 assistant 回应 → interrupted;toolError 只看末尾相邻。夹具补「末条是 user」与「历史报错但正常完成」。
 - [ ] T054 审计修复·takeover 直写 TASKS.md 绕过密钥闸与内容 CAS（审计 #5）
   验收: test:scripts/smoke-rescue.mjs
   备注: 见报告 #5。rescue.mjs:802 用裸 writeFileAtomic 写 TASKS.md,违反 util.mjs:346「TASKS/LOG 只能经由 writeProtocolFile 落盘」。后果:密钥样式串可入 git 历史且此后 relay_claim/session_end 全被 ProtocolSecretError 锁死;读改写之间的人工改动被静默覆盖。改用 writeProtocolFile + expectedHash + fencing。补「密钥串被拒」「并发手改不被覆盖」用例。
@@ -40,6 +37,9 @@
   冻结任务 T030:发布 npm — 决策冻结,不执行(见 DECISIONS 2026-11-18 Tier 2);原发布面已移除,分发改为 git clone / Agent Plugins / GitHub Release。冻结任务不进入 session_start 派发;解冻需先在 DECISIONS 记录新决定并恢复为 [ ] 任务行。
 
 ## 已完成
+- [x] T053 审计修复·中断分类双向错判（审计 #3）  (2026-11-26)
+  验收: test:scripts/smoke-rescue.mjs
+  备注: 见报告 #3。(a) 子代理死在「tool_result 已落盘、下一轮 assistant 未开口」时末条是 user 记录,现判为 complete → 不可抢救,正是本工具的核心场景;(b) 只要历史出现过一次 is_error 就判 error → 正常完成的也被列为可抢救。修法:danglingToolUse 改为「末条 assistant 前存在未配对 tool_use」;末条为 user(tool_result) 且无后续 assistant 回应 → interrupted;toolError 只看末尾相邻。夹具补「末条是 user」与「历史报错但正常完成」。
 - [x] T052 审计修复·信任边界：state.json 只存锚点 + 围栏转义 + 命令脱敏 + agentId 净化（审计 #1 #2 #11 #12）  (2026-11-26)
   验收: test:scripts/smoke-rescue.mjs
   备注: 见 docs/04-test/09-audit-rescue-t048-v1.0.md 的 #1/#2/#11/#12。(a) 从 state.json 删除 prompt/lastNarrative/classification,一律从已校验 transcript 派生,且 sha256 为空时 fail-closed(现 if(state.sha256 && …) 静默跳过);(b) fence() 转义 payload 里的 ```,防围栏被提前闭合把注入文本推到指令位;(c) commands 与 edits[].path 同样过 redactSecrets(现三处出口裸奔);(d) 写 TASKS 前对 agentId 等外部串做 hasControlChars + 单行化(现仅 model 有检查)。夹具需补:prompt 含 ```、命令含密钥、agentId 含换行。
