@@ -13,7 +13,7 @@
 - **进场简报**:新增「待接力」小节(仅有待接力单时出现,≤5 行),不新增 git 子进程、不重读 LOG/TASKS/manifest。
 - **配置**:`manifest.rescue { sources?, maxAgeDays?, maxBytes? }`(默认 7 天 / 8 MiB),进已知键白名单。
 - **规模**:`tools/list` 15 个工具、9,894 字节(预算 10,240,靠压缩低频工具描述腾出空间);新增 `scripts/smoke-rescue.mjs`(80 断言,夹具在 `scripts/fixtures/rescue/`);`npm test` 24 套。
-- **范围外**:抢救后自动拉起备用模型 = T049;ZCode 完整对话(只读 SQLite)= T050。
+- **范围外**:抢救后自动拉起备用模型 = T051;ZCode 完整对话(只读 SQLite)= T050。
 
 ## [2.0.0] - 2026-11-18
 

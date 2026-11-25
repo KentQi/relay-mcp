@@ -18,7 +18,8 @@ import { randomUUID } from 'node:crypto';
 import path from 'node:path';
 import {
   acquireFileLock, acquireRepoLock, assertNoSymlinkComponents, ensureDir, findSensitiveChanges, gitRun,
-  isGitRepoAsync, nowIso, readFileSafe, redactSecrets, releaseFileLock, sha256Hex, stamp, writeFileAtomic,
+  gitIdentityArgs, isGitRepoAsync, nowIso, parseLockContent, readFileSafe, redactSecrets, releaseFileLock, scanSecrets, sha256Hex, stamp,
+  writeFileAtomic, writeProtocolFile,
 } from '../util.mjs';
 import { ensureGitignoreBaseline, readManifestConfig } from '../config.mjs';
 import { resolveRelayRoots } from './worktree.mjs';
@@ -389,8 +390,13 @@ const snapshotWorktree = async (executionRoot, controlRoot, id, { sensitiveSkipp
   await ensureDir(path.dirname(tmpIndex));
   const env = { GIT_INDEX_FILE: tmpIndex };
   // 排除疑似密钥文件:快照会进 git 对象库,密钥一旦成对象就难撤回。
+  // #9(审计):status 失败时旧代码把排除列表当空 → 不排除任何文件 → 密钥照样进对象库。
+  // 必须 fail-closed:读不到变更清单就不做快照。
   const statusRes = await gitRun(executionRoot, '-c', 'core.quotePath=false', 'status', '--porcelain', '-uall');
-  const lines = statusRes.ok ? statusRes.stdout.split('\n').map((s) => s.replace(/\r$/, '')).filter((s) => s.length >= 3) : [];
+  if (!statusRes.ok) {
+    return { ref: '', note: `git status 失败,拒绝生成快照(无法判定哪些文件含密钥):${statusRes.stderr.slice(0, 200)}` };
+  }
+  const lines = statusRes.stdout.split('\n').map((s) => s.replace(/\r$/, '')).filter((s) => s.length >= 3);
   const excluded = findSensitiveChanges(lines).map((h) => h.path);
   try {
     const rt = await gitRun(executionRoot, 'read-tree', headSha, { __gitOpts: true, env });
@@ -404,8 +410,30 @@ const snapshotWorktree = async (executionRoot, controlRoot, id, { sensitiveSkipp
     const tree = wt.stdout.trim();
     const baseTree = (await gitRun(executionRoot, 'rev-parse', `${headSha}^{tree}`)).stdout.trim();
     if (tree === baseTree) return { ref: '', note: '工作区无未提交改动,无需快照', excluded };
+    // #9(审计):路径规则只看文件名;对**将要入对象库的内容**再过一遍内容级扫描。
+    // 命中则不生成快照(fail-closed)——密钥一旦成 git 对象就难撤回。
+    const changed = await gitRun(executionRoot, 'diff', '--cached', '--name-only', { __gitOpts: true, env });
+    const changedFiles = changed.ok ? changed.stdout.split('\n').map((x) => x.trim()).filter(Boolean) : [];
+    const leaked = [];
+    for (const rel of changedFiles.slice(0, 500)) {
+      let content = null;
+      try { content = readFileSync(path.join(executionRoot, rel), 'utf8'); } catch { content = null; }
+      if (content == null) continue;
+      const hits = scanSecrets(content);
+      if (hits.length) leaked.push(`${rel}(第 ${hits[0].line} 行 ${hits[0].rule})`);
+      if (leaked.length >= 5) break;
+    }
+    if (leaked.length) {
+      return {
+        ref: '', excluded,
+        note: `拒绝生成快照:待暂存内容含疑似密钥(${leaked.join('; ')})。密钥一旦进入 git 对象库就难以撤回`,
+        leaked,
+      };
+    }
     const msg = `relay rescue snapshot ${id} @ ${stamp()}`;
-    const ct = await gitRun(executionRoot, 'commit-tree', tree, '-p', headSha, '-m', msg);
+    // #8(审计):CI/容器常无 user.name/email,commit-tree 会 fatal;复用仓库统一的身份兜底。
+    const idArgs = await gitIdentityArgs(executionRoot);
+    const ct = await gitRun(executionRoot, ...idArgs, 'commit-tree', tree, '-p', headSha, '-m', msg);
     if (!ct.ok) return { ref: '', note: `commit-tree 失败:${ct.stderr.slice(0, 200)}` };
     const commit = ct.stdout.trim();
     const ref = `refs/relay/rescue/${id}`;
@@ -467,7 +495,9 @@ const stateSummaryLine = (st, cls = null) => {
 /* ---------------------------- 扫描(只读) ---------------------------- */
 
 const scanSources = async (controlRoot, executionRoot, cfg, { sourcePath = '', home } = {}) => {
-  const maxAgeMs = cfg.maxAgeDays * 86400000;
+  // #4(审计):readManifestConfig 把这两个键放在 cfg.rescue.* 下;旧代码读顶层恒为 undefined,
+  // 导致 7 天窗口变成 NaN(cutoff=NaN,年龄过滤恒 false)且 sources 永不生效。
+  const maxAgeMs = cfg.rescue.maxAgeDays * 86400000;
   const cutoff = Date.now() - maxAgeMs;
   const roots = [controlRoot, executionRoot].filter(Boolean);
   const ownedBy = (cwd) => ownedByRoots(roots, cwd);
@@ -503,7 +533,7 @@ const scanSources = async (controlRoot, executionRoot, cfg, { sourcePath = '', h
     return { candidates: [cand], skipped: [], notes: ['来源由调用方显式指定(不校验归属,自行确认它属于本项目)'] };
   }
 
-  const configured = cfg.sources || [];
+  const configured = cfg.rescue.sources || [];
   const zc = configured.length ? [] : await zcodeCandidates(home, cutoff);
   const cc = configured.length ? [] : await claudeCandidates(home, cutoff);
   let explicit = [];
@@ -597,7 +627,7 @@ const renderCard = (controlRoot, state, parsed, view, derived = {}) => {
     `- 工作区:${state.executionRoot || controlRoot}`,
     `- 关联任务:${state.task || '未关联'}`,
     `- 状态:${state.takeover ? `已移交 ${state.takeover.model} @ ${state.takeover.at}` : '待接力'}`,
-    `- 快照:${state.snapshotRef || '(无未提交改动)'}`,
+    `- 快照:${state.snapshotRef || (state.snapshotNote && !/无未提交改动/.test(state.snapshotNote) ? `**未生成**(${state.snapshotNote})` : '(已确认无未提交改动)')}`,
     `- transcript:${state.transcriptFile ? `${state.transcriptFile}(${state.bytes} 字节,sha256 ${String(state.sha256).slice(0, 12)}…)` : '未捕获(该来源只有元数据)'}`,
     ...(state.previousId ? [`- 上一棒:\`${state.previousId}\``] : []),
   ];
@@ -730,8 +760,24 @@ const actCapture = async ({ controlRoot, executionRoot, cfg, args, home }) => {
   const gi = await ensureGitignoreBaseline(controlRoot, ['.relay/rescue/']);
   const id = `rs-${new Date().toISOString().replace(/[-:T.]/g, '').slice(0, 14)}-${randomUUID().slice(0, 6)}`;
   const previous = args.id ? await listStates(controlRoot) : [];
-  const chainPrev = previous.length ? previous.sort((a, b) => String(a.createdAt).localeCompare(String(b.createdAt))).pop() : null;
-  const snap = await snapshotWorktree(executionRoot, controlRoot, id, {});
+  // createdAt 是毫秒级:同一毫秒内的两张卡排序不稳定(会让 previousId 随机为空/错指)。
+  // 用 (createdAt, id) 复合键,id 内含时间戳与随机后缀,保证确定性。
+  const chainPrev = previous.length
+    ? previous.slice().sort((a, b) => {
+      const byTime = String(a.createdAt).localeCompare(String(b.createdAt));
+      return byTime !== 0 ? byTime : String(a.id).localeCompare(String(b.id));
+    }).pop()
+    : null;
+  // #13(审计):快照根必须是**被救子代理自己的 cwd**,不是发起抢救的会话的 executionRoot——
+  // 受管 worktree 下两者不同,拍错树会把无关会话的脏改动当成现场(或被救现场根本没进快照)。
+  const snapRootRaw = described.cwd || executionRoot;
+  const snapRoot = isInside(controlRoot, await realPathOf(snapRootRaw)) || isInside(await realPathOf(executionRoot), await realPathOf(snapRootRaw))
+    ? snapRootRaw
+    : executionRoot;
+  const snap = await snapshotWorktree(snapRoot, controlRoot, id, {});
+  const snapRootNote = snapRootRaw !== executionRoot
+    ? `快照根=${snapRoot}(被救子代理的 cwd;调用者的 executionRoot=${executionRoot})`
+    : '';
   const dir = rescueDir(controlRoot, id);
   await ensureDir(dir);
   const srcTranscriptPath = described.transcriptPath
@@ -762,6 +808,9 @@ const actCapture = async ({ controlRoot, executionRoot, cfg, args, home }) => {
     sourceError: described.sourceError,
     snapshotRef: snap.ref || '',
     snapshotSha: snap.commit || '',
+    // #8(审计):快照失败的原因必须可见——否则「快照失败」与「现场本来就干净」在输出上不可区分。
+    snapshotNote: [snap.note, snapRootNote].filter(Boolean).join(' | '),
+    snapshotRoot: snapRoot,
     snapshotExcluded: snap.excluded || [],
     previousId: chainPrev ? chainPrev.id : '',
     note: String(args.note || ''),
@@ -779,7 +828,11 @@ const actCapture = async ({ controlRoot, executionRoot, cfg, args, home }) => {
     state.transcriptFile
       ? `- transcript:${state.bytes} 字节,sha256 ${state.sha256.slice(0, 12)}…`
       : '- transcript:(该来源只有元数据,未捕获对话;见 state.json 的 sourcePath)',
-    `- 工作区快照:${state.snapshotRef ? `${state.snapshotRef}(HEAD..快照的改动可用 \`git diff\` 查看)` : '(无未提交改动或非 git 仓库)'}`,
+    state.snapshotRef
+      ? `- 工作区快照:${state.snapshotRef}(HEAD..快照的改动可用 \`git diff\` 查看)`
+      : (state.snapshotNote && !/无未提交改动/.test(state.snapshotNote)
+        ? `- 工作区快照:**未生成**(${state.snapshotNote});被救现场可能仍有未提交改动未保存,接手前请人工确认`
+        : '- 工作区快照:(已确认无未提交改动)'),
     ...(state.snapshotExcluded.length ? [`- 已排除疑似密钥文件:${state.snapshotExcluded.join(', ')}(不进快照)`] : []),
     ...(gi.added.length ? [`- .gitignore:补了 ${gi.added.length} 条运行时基线`] : []),
     ...(chainPrev ? [`- 接续链:上一棒 \`${chainPrev.id}\``] : []),
@@ -818,6 +871,13 @@ const actTakeover = async ({ controlRoot, args }) => {
   if (!isSafeId(id)) return fail('relay rescue — takeover', `非法接力单 id:${JSON.stringify(id)}`);
   if (!model) return fail('relay rescue — takeover', 'takeover 需要 `model`(接力者的模型标识;认领与互斥都以它为准)。');
   if (/[\u0000-\u001f\u007f]/.test(model)) return fail('relay rescue — takeover', '`model` 含换行/控制字符,已拒绝。', ['', '修复:改为单行纯文本标识。']);
+  // #10(审计):工具自己就打印 `"model": "<你的模型标识>"`。照抄占位符会让 relay 锁 holder 变成占位符,
+  // 且 second 会话因 sameHolder adopt 拿到 ok:true → 派发权互斥失效。与 relay_claim 同口径拒收。
+  if (/[<>]/.test(model) || /你的模型|your model/i.test(model)) {
+    return fail('relay rescue — takeover', `model="${model}" 是示例占位符,不能直接使用。`, [
+      '', '修复:把 model 替换为你的真实模型标识(如 "claude-a"、"glm-4.7")再 takeover。',
+    ]);
+  }
   if (args.confirm !== true) {
     return fail('relay rescue — takeover(dry-run)', `将把接力单 \`${id}\` 移交给 \`${model}\`,但未写盘:需要 \`confirm: true\`。`);
   }
@@ -863,23 +923,45 @@ const actTakeover = async ({ controlRoot, args }) => {
       await releaseFileLock(controlRoot, path.join(RESCUE_REL, id, LOCK_NAME), lock.token, '接力锁');
       return fail('relay rescue — takeover', `仓库写锁被 ${repoLock.holder} 持有,稍后重试。`);
     }
+    // #7(审计):以下任何一条提前 return 都必须释放接力锁,否则卡片被锁 240 分钟却仍显示「待接力」。
+    let keepTakeoverLock = false;
     try {
       const fence = await repoLock.check();
-      if (!fence.held) return fail('relay rescue — takeover', `仓库写锁在移交期间被接管(${fence.warning || ''})。`);
+      if (!fence.held) {
+        await releaseFileLock(controlRoot, path.join(RESCUE_REL, id, LOCK_NAME), lock.token, '接力锁');
+        return fail('relay rescue — takeover', `仓库写锁在移交期间被接管(${fence.warning || ''})。`);
+      }
       const tasksRaw = await readFileSafe(path.join(controlRoot, 'TASKS.md'), null);
-      if (tasksRaw == null) return fail('relay rescue — takeover', 'TASKS.md 不存在:该仓库尚未接入接力协议。');
+      if (tasksRaw == null) {
+        await releaseFileLock(controlRoot, path.join(RESCUE_REL, id, LOCK_NAME), lock.token, '接力锁');
+        return fail('relay rescue — takeover', 'TASKS.md 不存在:该仓库尚未接入接力协议。');
+      }
       // #12(审计):agentId 来自外部 metadata,未净化时换行可伪造任务行、密钥样式串可入库。
       // 与 session.mjs 对 model/task 的口径一致:控制字符→空格 + 折叠空白 + 截断。
       const safeAgent = String(state.agentId || state.id).replace(/[\u0000-\u001f\u007f]+/g, ' ').replace(/\s+/g, ' ').trim();
       const title = `接手抢救单 ${safeAgent}(${derivedClass.label || '未知'})`.slice(0, 120);
       const inserted = insertTodo(tasksRaw, title, '在接力单现场继续完成任务;通过后由本人 relay_session_end', `来源:relay_rescue ${state.id};接力者 ${model}`);
-      await writeFileAtomic(path.join(controlRoot, 'TASKS.md'), inserted.text, {
-        label: 'TASKS.md',
-        fencing: async () => {
-          const v = await repoLock.check();
-          return v.held ? { ok: true } : { ok: false, warning: v.warning };
-        },
-      });
+      // #5(审计):TASKS.md 只能经 writeProtocolFile 落盘——它内置 scanSecrets 密钥闸 + 内容 CAS
+      // (expectedHash)+ fencing。裸 writeFileAtomic 会让密钥样式串直接进 git 历史,并让此后
+      // 每次 relay_claim/session_end 被 ProtocolSecretError 锁死;同时丢掉「读改写之间被外部修改」的检测。
+      // 测试钩子(仅当环境变量存在时生效,生产路径无此变量):模拟「读 TASKS 之后、写之前」
+      // 有非协作写入者改动文件,用于验证内容 CAS 会拦下而不是静默覆盖。
+      if (process.env.RELAY_TEST_EXTERNAL_TASKS_WRITE) {
+        await writeFile(path.join(controlRoot, 'TASKS.md'), String(process.env.RELAY_TEST_EXTERNAL_TASKS_WRITE), 'utf8');
+      }
+      try {
+        await writeProtocolFile(controlRoot, 'TASKS.md', inserted.text, {
+          token: repoLock.token,
+          lockLabel: '仓库写锁',
+          expectedHash: sha256Hex(tasksRaw),
+        });
+      } catch (e) {
+        if (e && e.code === 'RELAY_SECRET') {
+          const hits = (e.hits || []).map((h) => `第 ${h.line} 行 命中 ${h.rule} ${h.preview}`);
+          throw new Error(`接力任务内容含疑似密钥,已阻断写入 TASKS.md(${hits.length} 处):${hits.slice(0, 3).join('; ')}。修复:清理来源 metadata 中的密钥样式串后重新 capture`);
+        }
+        throw e;
+      }
       newTask = inserted.id;
       tasksNote = `TASKS.md: 已登记 \`${inserted.id}\`(待办区顶部);用 \`relay_claim { task: "${inserted.id}", model: "${model}" }\` 认领后正式接管。`;
       state.task = newTask;
@@ -964,29 +1046,34 @@ const actReport = async ({ controlRoot, args }) => {
   if (args.confirm !== true) {
     return fail('relay rescue — report(dry-run)', `将回写结果并释放派发权,但未写盘:需要 \`confirm: true\`。`);
   }
+  // #6(审计):旧实现用空 token 调 releaseFileLock(必然 no-op),再按 holder 字符串手工 unlink——
+  // 绕过 token fencing,同名 model 可以删掉别人正在持有的活锁。改为用 takeover 时存下的真实 token 释放。
+  const heldToken = state.takeover.token || '';
+  const lockPath = path.join(controlRoot, RESCUE_REL, id, LOCK_NAME);
+  let released = false;
+  let releaseWarning = '';
+  if (heldToken) {
+    const rel = await releaseFileLock(controlRoot, path.join(RESCUE_REL, id, LOCK_NAME), heldToken, '接力锁')
+      .catch((e) => ({ ok: false, warning: e?.message || String(e) }));
+    released = rel.ok === true;
+    releaseWarning = rel.warning || '';
+  } else {
+    // 兼容旧接力单(未记录 token):锁不在场视为已释放,否则明确报告不可释放。
+    const raw = await readFileSafe(lockPath, null);
+    if (raw == null) released = true;
+    else releaseWarning = '该接力单未记录接力锁 token(旧格式),拒绝按 holder 名删除;可人工检查该文件';
+  }
   state.report = { model, summary: redactSecrets(summary).text.slice(0, 2000), at: nowIso(), task: state.task || '' };
   state.updatedAt = nowIso();
   state.takeover = null;
   await writeFileAtomic(path.join(rescueDir(controlRoot, id), STATE_NAME), `${JSON.stringify(state, null, 2)}\n`, { label: '接力单 state.json' });
-  const rel = await releaseFileLock(controlRoot, path.join(RESCUE_REL, id, LOCK_NAME), '', '接力锁').catch(() => ({ ok: false }));
-  // releaseFileLock 需要 token;这里按持有者身份删除(同 model 幂等场景下 token 已被 adopt)
-  const lockPath = path.join(controlRoot, RESCUE_REL, id, LOCK_NAME);
-  let released = false;
-  try {
-    const raw = await readFileSafe(lockPath, null);
-    if (raw == null) released = true;
-    else {
-      const { parseLockContent } = await import('../util.mjs');
-      if (parseLockContent(raw).holder === model) { await unlink(lockPath); released = true; }
-    }
-  } catch { /* 释放失败不改变已写回的结果 */ }
   return textResult([
     `# 接力单 \`${id}\` 已回写结果`,
     '',
     `- 接力者:${model}`,
     `- 关联任务:${state.task || '未关联'}`,
     `- 结果:${codePointClip(redactSecrets(summary).text, 800)}`,
-    `- 派发权:${released || rel.ok ? '已释放' : '释放失败(锁可能已被接管),可人工检查 .relay/rescue/' + id + '/takeover.lock'}`,
+    `- 派发权:${released ? '已释放' : `释放失败(${releaseWarning || '锁可能已被接管'}),可人工检查 .relay/rescue/${id}/takeover.lock`}`,
     '',
     '下一步:若任务已完成,用 relay_claim 认领并 relay_session_end 出场;接力单可用 `action: "drop"` 清理。',
   ].join('\n'));
@@ -994,20 +1081,43 @@ const actReport = async ({ controlRoot, args }) => {
 
 const actDrop = async ({ controlRoot, args }) => {
   const id = String(args.id ?? '').trim();
+  const model = String(args.model ?? '').trim();
   if (!isSafeId(id)) return fail('relay rescue — drop', `非法接力单 id:${JSON.stringify(id)}`);
   const state = await readState(controlRoot, id);
   if (!state) return fail('relay rescue — drop', `接力单 \`${id}\` 不存在。`);
+
+  // #14(审计):drop 会递归删除目录 + 删掉**唯一**指向现场的快照 ref,因此必须有持有者守卫与
+  // 符号链接防线。旧实现两条都没有:正在接力中的卡会被删掉,接手者 report 时报「不存在」。
+  const lockPath = path.join(controlRoot, RESCUE_REL, id, LOCK_NAME);
+  const lockRaw = await readFileSafe(lockPath, null);
+  const lockInfo = lockRaw ? parseLockContent(lockRaw) : null;
+  const holder = lockInfo && lockInfo.holder ? lockInfo.holder : '';
+  const held = !!holder;
+  if (held && holder !== model) {
+    return fail('relay rescue — drop', `接力单 \`${id}\` 正被 **${holder}** 持有派发权,拒绝删除。`, [
+      '', `修复:让持有者先 report;或确认它已崩溃后等锁过期(TTL ${TAKEOVER_TTL_MIN} 分钟)再删。`,
+      model ? '' : '（也可传 `model` 表明你就是要删这张卡的人）',
+    ].filter(Boolean));
+  }
+  if (held && holder === model && args.confirm === true) {
+    // 同 model 且已确认 → 允许删除(自己清理自己的卡)
+  }
   if (args.confirm !== true) {
     return textResult([
       `# relay rescue — drop(dry-run)`,
       '',
       `将删除接力单 \`${id}\`(${state.bytes || 0} 字节 transcript + state.json)。`,
       `- 快照 ref:${state.snapshotRef || '(无)'} —— ${state.snapshotRef ? '会一并删除(refs/relay/rescue/ 下)' : '无需清理'}`,
+      `- 派发权:${held ? `**${holder} 持有**(删除会中断它的接力)` : '无人持有'}`,
       '',
       'dry-run:未删除任何东西。',
       `确认删除:《{"root":"${controlRoot}","action":"drop","id":"${id}","confirm":true}》`,
     ].join('\n'));
   }
+  // #14(审计):与 actCapture 同款符号链接防线——.relay 或 .relay/rescue 是符号链接时,
+  // rm 会把删除作用到仓库外的子树。
+  await assertNoSymlinkComponents(controlRoot, '.relay', '.relay 目录');
+  await assertNoSymlinkComponents(controlRoot, RESCUE_REL, '接力单目录');
   await rm(rescueDir(controlRoot, id), { recursive: true, force: true });
   let refNote = '无快照 ref 需要清理';
   if (state.snapshotRef && /^refs\/relay\/rescue\//.test(state.snapshotRef)) {
