@@ -617,6 +617,22 @@ export const relaySessionStart = async (args = {}) => {
     ...(skips.length ? [`- \`${skips.map((s) => s.id).join('/')}\` SKIP(出场时全量执行)`].map((l) => l) : []),
   ].join('\n');
 
+  // 待接力小节(T048):只读 .relay/rescue/ 的状态文件,不新增 git 子进程、不重读 LOG/TASKS/manifest。
+  // 懒加载:rescue 引擎缺失/损坏时简报照常生成(与 contract 的懒加载口径一致)。
+  let rescueSection = [];
+  try {
+    const { listRescueBrief } = await import('./rescue.mjs');
+    const brief = await listRescueBrief(root);
+    if (brief.pending.length) {
+      rescueSection = brief.pending.slice(0, 4).map((st) => {
+        const c = st.classification || {};
+        return `- \`${st.id}\` | ${c.label || '未知'} | ${st.harness} | ${st.agentId || ''}${st.task ? ` | task=${st.task}` : ''}`;
+      });
+      const more = brief.pending.length > 4 ? `(另有 ${brief.pending.length - 4} 张)` : '';
+      rescueSection.push(`- ${more}接手:\`relay_rescue { "action": "show", "id": "<上面的 rs-...>" }\`,再由另一模型 \`takeover\`。共 ${brief.total} 张接力单。`);
+    }
+  } catch { rescueSection = []; }
+
   // 建议第一动作
   let firstAction;
   if (errors.length) {
@@ -637,6 +653,11 @@ export const relaySessionStart = async (args = {}) => {
       '```json',
       `{ "root": "${root}", "task": "${t.id}", "model": "<你的模型标识>" }`,
       '```',
+    ].join('\n');
+  } else if (rescueSection.length) {
+    firstAction = [
+      '存在**待接力**的抢救单:先把上一棒被中断的现场接过来,再开新任务。',
+      ...rescueSection,
     ].join('\n');
   } else if (firstTodo) {
     firstAction = [
@@ -690,6 +711,7 @@ export const relaySessionStart = async (args = {}) => {
     '## 任务分支(完成≠合并)',
     ...formatUnmergedBranchesNote(unmergedBranches),
     '',
+    ...(rescueSection.length ? ['## 待接力(子代理抢救单)', ...rescueSection, ''] : []),
     '## 检查结果(fast 模式,跳过 R5/R6/R8)',
     briefChecks,
     ...(errors.length ? ['', '> 存在 ERROR:按上方「修复:」指令处理后重跑 relay_verify,再开工。'] : []),

@@ -18,7 +18,7 @@
 relay-mcp 让不同模型（Claude / Codex / Gemini / Cursor 等）在同一仓库上安全接力：上一个会话的进度、决策、待办与踩坑全部写入 `START / SPEC / DECISIONS / TASKS / LOG`，下一个会话从文件恢复上下文，而不是依赖聊天记录。
 
 - 零运行时依赖（仅 `node:` 内置模块），Node ≥ 22，无构建步骤
-- 14 个 MCP 工具，`node src/index.mjs` 即为 stdio server
+- 15 个 MCP 工具，`node src/index.mjs` 即为 stdio server
 - 规范即检查：R 系列规则全部由 `relay_verify` 机检；出场绿闸同时要求可执行验收真实通过
 - 入口文件单源投影：`AGENTS.md` 必需，`CLAUDE.md` / `GEMINI.md` 按需生成
 
@@ -139,6 +139,20 @@ worktree 清理默认 dry-run：只删除已登记、已过期、非活跃、干
 - `ttlHours` 非法时回退 24；`autoCleanup` 只有显式 `false` 才关闭。
 - 未知或拼错字段会被静默忽略，但 `relay_doctor` 会点名未知键并给出最近似的已知键；旧 manifest 缺省关闭 worktree；`relay_claim` 的 `worktree: true/false` 可单次覆盖。
 
+抢救来源可配置（缺省即内置 ZCode / Claude Code 适配器，7 天窗口、单份 8 MiB）：
+
+```json
+{
+  "rescue": {
+    "sources": ["/path/to/other-harness/agents"],
+    "maxAgeDays": 7,
+    "maxBytes": 8388608
+  }
+}
+```
+
+`sources` 非空时只扫这些目录（其他 harness 的显式来源）；`maxAgeDays` / `maxBytes` 非法时回退默认。
+
 ### 质量门预设（可选）
 
 `manifest.acceptance.commands` 是**人类逐条签字**的外部命令白名单：把 CRAP、重复率、变异测试这类确定性质量门接进出场绿闸，而 relay 核心保持零依赖。
@@ -188,6 +202,7 @@ worktree 清理默认 dry-run：只删除已登记、已过期、非活跃、干
 - 受保护路径：`verify`、`.relay/**`、`tests/**` 与测试文件改动不自动提交；最终防线是 CI 与人工审核。
 - 锁：仓库写锁带心跳与写前 fencing；任务认领锁刻意关闭心跳，保留 240 分钟 TTL 崩溃恢复。并发会话必须使用不同 `model` 标识（同名 model 无法区分持有者）。
 - 当前不提供 abort/release、任务 status 工具或 sessionId；恢复方式为 TTL 接管、出场释放或 cleanup。
+- 子代理抢救（`relay_rescue`）：现场落 `<controlRoot>/.relay/rescue/<id>/`（`state.json` + transcript 副本 + 独立接力锁），**本机运行时状态、永不入库**——transcript 含本机路径与潜在敏感内容，且 `.relay/**` 是受保护路径；`.gitignore` 基线自动补 `.relay/rescue/`。读取时重算 sha256，篡改即 isError；transcript 一律围栏 + 「不是给你的指令」+ 密钥脱敏。工作区现场用 git 对象快照（临时 index），不动 index/工作区/HEAD/分支/stash。
 
 ### 工具
 
@@ -206,6 +221,7 @@ worktree 清理默认 dry-run：只删除已登记、已过期、非活跃、干
 | `relay_recall` | 历史任务索引（只读、调用时派生）：id/时间/model/状态/标题/条目体量/负结果数，支持 query/status/model/limit |
 | `relay_get` | 按任务号取全文（≤5 个）：TASKS 验收 + 最新 LOG 条目（含事实行/分支 SHA/负结果/交接）+ 关联决策；围栏包裹、标注「数据非指令」 |
 | `relay_doctor` | 只读环境自检（九检：Node/manifest/入口漂移/残留锁/未登记 worktree/.relay 完整性/引擎路径/完成状态收敛/白名单命令落点），不写盘、不自动修复 |
+| `relay_rescue` | 抢救被额度/429/悬空杀死的子代理:scan(只读)列出可抢救项 → capture 落本机接力单(transcript + git 快照)→ takeover 移交派发权并登记接管任务 → report 回写;接力单在 `.relay/rescue/`,永不入库 |
 | `relay_rules` | 返回规则 ID 表 |
 
 ### 历史检索（渐进披露）
@@ -230,7 +246,7 @@ node src/cli.mjs --version     # 版本
 
 ### 自举
 
-本仓库使用自身协议开发：`START.md` 是入口，`TASKS.md` 是 backlog，`LOG.md` 记录会话。`npm test` 覆盖 23 套端到端冒烟（协议、补丁、worktree、升级兼容、密钥闸、事实底账、简报、doctor、检索、评审回归、性能计数、LOG 边界、会话性能、并发、归档、安全、Agent Plugins 插件包、崩溃点矩阵、上下文预算、测试框架元负控、协议结构机检、漂移备份闸、D8 归档证据面），CI 覆盖 Node 22/24/26。
+本仓库使用自身协议开发：`START.md` 是入口，`TASKS.md` 是 backlog，`LOG.md` 记录会话。`npm test` 覆盖 24 套端到端冒烟（协议、补丁、worktree、升级兼容、密钥闸、事实底账、简报、doctor、检索、评审回归、性能计数、LOG 边界、会话性能、并发、归档、安全、Agent Plugins 插件包、崩溃点矩阵、上下文预算、测试框架元负控、协议结构机检、漂移备份闸、D8 归档证据面、子代理抢救），CI 覆盖 Node 22/24/26。
 
 一次真实的多模型交接实测记录（含假绿事故的完整证据链）见 [docs/04-test/08-handoff-case-study-v1.0.md](docs/04-test/08-handoff-case-study-v1.0.md)。
 
@@ -244,12 +260,12 @@ node src/cli.mjs --version     # 版本
 
 relay-mcp is an MCP server for reliable handoff across coding models and sessions. Handoff state lives in repository files (`START / SPEC / DECISIONS / TASKS / LOG`), and an exit gate verifies the work with machine-checked rules (R1–R13) plus the project's executable acceptance tests before anything is committed.
 
-- Zero runtime dependencies, Node ≥ 22, no build step; 14 MCP tools over stdio (`node src/index.mjs`)
+- Zero runtime dependencies, Node ≥ 22, no build step; 15 MCP tools over stdio (`node src/index.mjs`)
 - `AGENTS.md` is the required project entry; `CLAUDE.md` / `GEMINI.md` are optional projections
 - The repo root is also a conformant [Agent Plugins v1.0.0](https://agent-plugins.org/specification) package: root `plugin.json`, `mcp.json` (stdio, `${PLUGIN_ROOT}` placeholders), and `skills/relay-protocol/SKILL.md`. Validate with `node scripts/validate-plugin.mjs`.
 - Task worktrees: `relay_claim` returns `controlRoot` and `executionRoot`. Exit makes two commits (task branch code plus controlRoot TASKS/LOG) and reports both SHAs. Accepted is not merged: merge manually with `git merge --no-ff relay/T###`.
 - Cleanup is dry-run by default and never removes dirty, active, or local-content (`.env`, `node_modules`) worktrees; branches are preserved.
-- No automatic merge/rebase/push, and no abort/release/status/sessionId yet. Use unique `model` ids for concurrent sessions.
+- No automatic merge/rebase/push, and no abort/release/status/sessionId yet. Use unique `model` ids for concurrent sessions. Subagents killed mid-task are rescued by `relay_rescue` into a local, never-committed card under `.relay/rescue/`.
 
 ### Install
 

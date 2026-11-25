@@ -1,5 +1,16 @@
 # DECISIONS — 追加式决策日志(最新在上)
 
+## 2026-11-25 — 子代理抢救落成本机接力单,而不是把 transcript 写进仓库(T048)
+
+- 背景: 子代理被 Token Plan 额度上限 / 429 / 悬空杀死后「白跑」——它读过的文件、改到一半的代码、已得的结论只存在于自己的 transcript 里。实证:LOG 记录一次并行扇出有 31 个代理被 429 截断;本机 ZCode 有 140 个 failed 子代理;Claude Code 子代理 transcript 内有 70 条 API 错误记录(62 条 rate_limit)。relay 现有恢复全是会话级:claim 只写 `[~]` + 锁,session_end 过绿闸才写 LOG——任务中途被杀,现场没有任何落盘手段。
+- 决定: 新增 `relay_rescue`,把现场抢救成 `<controlRoot>/.relay/rescue/<id>/` 的**本机接力单**(state.json + transcript 副本 + 独立接力锁),另一个模型凭 `takeover` 接管续跑。接力单永不入库。
+- 理由: transcript 含本机路径与潜在敏感内容,入库与「公开仓库的接力信息脱敏」决策直接冲突,还会撞 R2(顶层白名单)与 R11(密钥扫描面);`.relay/**` 本就是受保护路径,定位与 `.relay/claims/` 一致,是**运行时诊断**而非协议面(同 `.relay/last-failure.json` 的先例)。
+- 减法: 不新增规则编号、不新增第二套任务/日志格式——接管任务仍走 TASKS 待办区与 `relay_claim`/`relay_session_end`,接力单只是「现场的证据包」。`state.json` 只存不可派生的锚点,prompt/中断类别/改动/命令每次从 transcript 即时派生(复用 relay_recall 的零持久索引铁律),因此没有第二真相源。工具做成单个 action 驱动,而不是 scan/capture/takeover 三个工具——`tools/list` 每会话固定成本,预算维持 10 KiB。
+- 工作区现场: 用 git 对象快照(临时 index + commit-tree + update-ref),不 stash、不 checkout、不动 index/HEAD——「备份不得改变现场」,恢复由人决定。
+- ZCode 完整对话: 实测其失败子代理只留 metadata + 错误文本,持久对话在 `~/.zcode/cli/db/db.sqlite`;读它需人类授权,登记为 T050,本任务只抢救元数据 + 工作区现场,并在接力单里显式标注(不假装完整)。
+- 否决: 把 transcript 直接写进仓库(泄密与 R2/R11 冲突);stash 工作区(会改变现场、且 stash 是全局栈,并发会话互相干扰);用 LLM 压缩 transcript 当交接(引幻觉、破零依赖);把 takeover 与 relay 认领锁合成一把锁(派发权属于「谁接手这张单」,认领权属于「谁写这个任务」,混在一起会让崩溃的接力者永久占住任务)。
+- 状态: 现行
+
 ## 2026-11-18 — 事实行手工校正的处置:记录依据并收敛根因
 
 - 事实: T035 与 T040 两条引擎派生的事实行被手工校正过(T035 7→6、T040 10→9),原因是 single 模式写入侧按 porcelain 状态行计数,与提交侧 `git diff --numstat --no-renames` 的口径在归档/重命名场景下多计 1。协议明文规定事实行由引擎派生、模型不得手写或改写,这两次校正削弱了该保证。

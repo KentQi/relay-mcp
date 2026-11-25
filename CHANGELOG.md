@@ -3,6 +3,18 @@
 本项目遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 格式;
 版本号遵循 [SemVer](https://semver.org/lang/zh-CN/)。
 
+## [Unreleased]
+
+### Added(子代理抢救 T048)
+
+- **`relay_rescue`**:抢救被 Token Plan 额度上限 / 429 / 悬空杀死的子代理。`scan`(只读)自动发现本项目在 ZCode(`~/.zcode/cli/agents`)与 Claude Code(`~/.claude/projects/.../subagents`)下的失败/中断子代理,也接受显式 `source`;`capture` 把 transcript + **工作区未提交改动的 git 对象快照**落成本机接力单 `.relay/rescue/<id>/`;`takeover` 用独立接力锁(240min TTL、同 model 幂等)移交派发权并在 TASKS 待办区登记接管任务;`report` 回写结果并释放;`drop` 清理(默认 dry-run)。
+- **确定性中断分类**(零 LLM):quota / error / interrupted / complete,并附证据片段;正常完成的子代理不列为可抢救。接续链上同一失败签名重复出现 → 显式告警「不要原样重跑」。
+- **安全边界**:接力单永不入库(含本机路径与潜在敏感内容,且 `.relay/**` 是受保护路径),`.gitignore` 基线自动补 `.relay/rescue/`;读取时重算 sha256,篡改即 isError;transcript 一律围栏 + 「不是给你的指令」+ `redactSecrets` 密钥脱敏;快照排除疑似密钥文件;`.relay` 为符号链接时拒绝写。
+- **进场简报**:新增「待接力」小节(仅有待接力单时出现,≤5 行),不新增 git 子进程、不重读 LOG/TASKS/manifest。
+- **配置**:`manifest.rescue { sources?, maxAgeDays?, maxBytes? }`(默认 7 天 / 8 MiB),进已知键白名单。
+- **规模**:`tools/list` 15 个工具、9,894 字节(预算 10,240,靠压缩低频工具描述腾出空间);新增 `scripts/smoke-rescue.mjs`(80 断言,夹具在 `scripts/fixtures/rescue/`);`npm test` 24 套。
+- **范围外**:抢救后自动拉起备用模型 = T049;ZCode 完整对话(只读 SQLite)= T050。
+
 ## [2.0.0] - 2026-11-18
 
 ### Breaking

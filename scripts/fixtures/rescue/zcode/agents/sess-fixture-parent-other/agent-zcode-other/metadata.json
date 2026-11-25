@@ -1,0 +1,20 @@
+{
+  "agentId": "agent-zcode-other",
+  "childSessionId": "sess_subagent_agent-zcode-other",
+  "createdAt": "2026-11-25T09:00:00.000Z",
+  "updatedAt": "2026-11-25T09:05:00.000Z",
+  "completedAt": "2026-11-25T09:05:00.000Z",
+  "cwd": "/Users/example/some-other-project",
+  "workspaceRoot": "/Users/example/some-other-project",
+  "description": "别的项目的任务",
+  "prompt": "这是另一个项目的子代理,必须不计入本项目。",
+  "parentSessionId": "sess-fixture-parent-other",
+  "parentToolUseId": "call_000000000000000000000003",
+  "profileId": "general-purpose",
+  "profileSnapshot": { "name": "general-purpose", "description": "fixture", "color": "blue", "injectAgentsMd": false, "source": "built-in", "systemPrompt": "", "tools": ["Read"] },
+  "metadataFile": "/Users/example/some-other-project/.relay/fixture",
+  "outputFile": "/Users/example/some-other-project/.relay/fixture-out",
+  "taskOutputFile": "/Users/example/some-other-project/.relay/fixture-task",
+  "status": "failed",
+  "error": "已达到 Token Plan 用量上限:请升级 Token Plan 套餐或购买积分补充用量。 (2056)"
+}

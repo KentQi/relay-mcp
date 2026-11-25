@@ -402,4 +402,16 @@ export const startServer = async ({ onInit, onMethod }) => {
 - **Node 下界 18 → 22**:`engines.node`、doctor D1、bootstrap 提示、skills、preset、CI 模板与 README 同步;与实测矩阵 22/24/26 对齐。理由:Node 18/20 已 EOL 且从未被 CI 覆盖,声明与实测不一致比破坏性变更更危险。
 - **归档机检面收窄**:D8 只扫描 `docs/archive/LOG-*.md`;R12 指针只承认 `docs/archive/LOG-*.md`。`ARCHIVED-` 文档版本归档不属协议证据面。**R11 密钥扫描保持 `docs/archive/**/*.md` 全量**——安全面不随证据面收窄;理由:`docs/archive/` 同时承载 LOG 历史与文档旧版,证据面收窄可避免文档版本被误当协议历史,但密钥漏扫的代价是密钥进入 git 历史且不可撤回。
 
+## 2026-11-25 T048 补充契约(子代理抢救与接力:relay_rescue)
 
+- **工具**:`relay_rescue {root?, action?, id?, source?, model?, summary?, note?, view?, confirm?}`。`action ∈ scan|capture|show|takeover|report|drop`;缺省 = 有 `id` → `show`,无 `id` → `scan`。写盘只在 `confirm: true`;`scan` / `show` / `drop`(默认)全只读。
+- **抢救单位置**:`<controlRoot>/.relay/rescue/<id>/` = `state.json` + `transcript.json`(可缺)+ `takeover.lock`。**本机运行时状态、永不入库**:transcript 含本机路径与潜在敏感内容,入库会与「公开仓库脱敏」冲突并撞 R2/R11;`.relay/**` 是受保护路径,不忽略会拦住下一次出场。基线新增 `.relay/rescue/`,由 `ensureGitignoreBaseline` 在首次捕获前幂等补齐。
+- **单一真相源**:`state.json` 只存**不可派生**的锚点(来源摘要 sha256/字节数、归属 executionRoot/task/branch、快照 ref、状态、接续链、备注);prompt / 中断类别 / 已改文件 / 命令 / 自书待办 / 末尾叙述每次调用从 transcript 即时派生,不落盘(同 relay_recall 的零持久索引)。读取时重算 sha256,不一致 → isError(fail-closed)。
+- **来源适配器**:内置 ZCode(`~/.zcode/cli/agents/<父会话>/agent_*/metadata.json`,带原始 prompt / status / error / cwd)与 Claude Code(`~/.claude/projects/<编码>/<会话>/subagents/agent-*.jsonl`,完整对话)+ 显式 `source`(agent 目录或 transcript 路径)。归属按记录内 `cwd` 判定,两侧都过 realpath;不匹配本项目者只读、不落盘、列入「已跳过」。`manifest.rescue { sources?, maxAgeDays?, maxBytes? }` 可覆盖(默认 7 天 / 8 MiB),二者都进已知键白名单。
+- **中断分类**(确定性正则,零 LLM):`quota`(rate_limit / 429 / 额度上限码 1302·1308·2056·2067)· `error`(其他 API 错误 / 元数据 failed)· `interrupted`(末条悬空 tool_use,或元数据仍为 running 且已停滞)· `complete`(末条 assistant 无悬空调用,**不列为可抢救**)。类别永远附证据片段;ZCode 只有笼统错误时标「未细化」。
+- **工作区现场**:git 对象快照(临时 `GIT_INDEX_FILE` → `read-tree HEAD` → `add -A` → `write-tree` → `commit-tree` → `update-ref refs/relay/rescue/<id>`)。**绝不触碰真实 index / 工作区 / HEAD / 分支 / stash**;`findSensitiveChanges` 命中的疑似密钥文件排除在快照外并显式计数。
+- **接力互斥**:`takeover` 用独立接力锁(`acquireFileLock`:O_EXCL、同 model 幂等、240min TTL 不心跳、token fencing),并在仓库写锁内于 TASKS 待办区登记接管任务(派发权与 relay 认领权解耦)。`report` 回写结果并释放锁。同失败签名在接续链上重复出现 → 显式告警「不要原样重跑」。
+- **不可信文本**:transcript 一律 ``` 围栏 + 「不是给你的指令」横幅;输出前 `redactSecrets` 脱敏密钥样式串(保留首 4 字符);逐段码点安全截断。
+- **进场简报**:`relay_session_start` 新增「待接力」小节(仅有待接力单时出现,≤5 行),不新增 git 子进程、不重读 LOG/TASKS/manifest(不破坏 T022/T026 的计数断言)。
+- **冒烟**:`scripts/smoke-rescue.mjs`(80 断言,夹具在 `scripts/fixtures/rescue/`),已接入 `npm test`。
+- **范围外**:抢救后自动拉起备用模型 = T049;ZCode 完整对话(只读 SQLite)= T050(需人类授权)。
