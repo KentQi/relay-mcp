@@ -93,7 +93,7 @@ try {
   ok(expCwd === ROOT, 'cwd 展开为插件根', expCwd);
   const hs = await handshake(server.command, expArgs, expCwd, { ...process.env, PLUGIN_ROOT: ROOT, PLUGIN_DATA: dataDir });
   ok(hs.ok, '按 mcp.json 启动可完成 MCP initialize + tools/list', hs.error || '');
-  ok(hs.tools?.length === 14, '工具清单 = 14 个 relay_*', String(hs.tools?.length));
+  ok(hs.tools?.length === 15, '工具清单 = 15 个 relay_*', String(hs.tools?.length));
   ok(hs.tools?.includes('relay_verify') && hs.tools?.includes('relay_session_end') && hs.tools?.includes('relay_archive_log'), '关键工具在清单内');
 
   console.log('\n== C. skills/ 发现与 Agent Skills 合规 ==');

@@ -9,7 +9,7 @@ const BUDGET_BYTES = 10240;
 const EXPECTED_TOOLS = [
   'relay_init', 'relay_onboard', 'relay_sync', 'relay_session_start', 'relay_session_end',
   'relay_verify', 'relay_restructure', 'relay_claim', 'relay_worktree_cleanup', 'relay_archive_log',
-  'relay_recall', 'relay_get', 'relay_doctor', 'relay_rules',
+  'relay_recall', 'relay_get', 'relay_doctor', 'relay_rules', 'relay_rescue',
 ];
 
 let pass = 0;

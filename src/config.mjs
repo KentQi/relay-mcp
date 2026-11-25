@@ -13,6 +13,9 @@ export const DEFAULT_DOCS_ROOTS = ['docs'];                    // verify.mjs R6 
 export const DEFAULT_COMMIT_TEMPLATE = 'relay: session end — {{task}}{{summary}}';
 // 简报字符预算(T015 使用):超限只告警、不裁剪(裁剪=静默降级,违反公理)。
 export const DEFAULT_CONTEXT_BUDGET = 6000;
+// 抢救扫描默认值(T048):7 天窗口、单份 transcript 8 MiB 上限。两者都可在 manifest.rescue 覆盖。
+export const DEFAULT_RESCUE_MAX_AGE_DAYS = 7;
+export const DEFAULT_RESCUE_MAX_BYTES = 8 * 1024 * 1024;
 // worktree 配置真值表(解析在 worktree.mjs readWorktreeConfig,本文件只放默认值):
 //   enabled    只认 JSON 布尔 true;字符串 "true"、数字 1、其它真值一律视为 false(静默关闭);
 //   cacheDir   只允许 controlRoot 内相对路径(绝对路径 / .. / 盘符 / 控制字符 / .git 前缀非法);
@@ -30,7 +33,7 @@ export const KNOWN_MANIFEST_KEYS = Object.freeze([
   'version', 'projectName', 'preset', 'entryFiles', 'allowedTopLevel', 'docsPhases', 'onboardedAt',
   'relayHome', 'restructuredAt', 'strictDocs', 'worktree', 'facts', 'acceptance',
   'commitMessageTemplate', 'autoCommit', 'entryFilesTakeover', 'codeRoots', 'docsRoots',
-  'docsIgnore', 'protectedPaths', 'logBoundary', 'structure', 'contextBudget',
+  'docsIgnore', 'protectedPaths', 'logBoundary', 'structure', 'contextBudget', 'rescue',
 ]);
 export const KNOWN_NESTED_KEYS = Object.freeze({
   worktree: ['enabled', 'cacheDir', 'ttlHours', 'autoCleanup'],
@@ -38,6 +41,7 @@ export const KNOWN_NESTED_KEYS = Object.freeze({
   logBoundary: ['strict'],
   structure: ['strict'],
   acceptance: ['commands'],
+  rescue: ['sources', 'maxAgeDays', 'maxBytes'],
 });
 
 // 收集 manifest 里的未知键(顶层 + 四个已知对象内)。纯函数,不做 I/O。
@@ -64,6 +68,9 @@ export const GITIGNORE_BASELINE = Object.freeze([
   '.relay/claims/', '.relay/relay.lock',
   '.relay/worktrees/', '.relay/worktrees.json', '.relay/worktrees.lock',
   '.relay/last-failure.json',
+  // 抢救接力单(T048):本机运行时状态,内含 transcript 副本与工作区快照锚点。
+  // 必须忽略:.relay/** 是受保护路径,不忽略会让下一次出场触发护栏而拒绝提交。
+  '.relay/rescue/',
   '*.relay-bak-*',
   'coverage/', '*.log',
 ]);
@@ -174,5 +181,14 @@ export const readManifestConfig = async (root, { manifest: preloaded } = {}) => 
     },
     // 简报字符预算(T015):非有限数/非正数 → 回退默认;不改变既有行为(只影响告警阈值)。
     contextBudget: m && Number.isFinite(m.contextBudget) && m.contextBudget > 0 ? m.contextBudget : DEFAULT_CONTEXT_BUDGET,
+    // 抢救(T048):来源适配器的目录、扫描窗口与单份 transcript 上限。
+    // 缺省 = 内置 ZCode / Claude Code 适配器 + 7 天 + 8 MiB;显式 sources 时只扫这些目录。
+    rescue: {
+      sources: strArr(m && m.rescue && m.rescue.sources),
+      maxAgeDays: m && m.rescue && Number.isFinite(m.rescue.maxAgeDays) && m.rescue.maxAgeDays > 0
+        ? Math.floor(m.rescue.maxAgeDays) : DEFAULT_RESCUE_MAX_AGE_DAYS,
+      maxBytes: m && m.rescue && Number.isFinite(m.rescue.maxBytes) && m.rescue.maxBytes > 0
+        ? Math.floor(m.rescue.maxBytes) : DEFAULT_RESCUE_MAX_BYTES,
+    },
   };
 };

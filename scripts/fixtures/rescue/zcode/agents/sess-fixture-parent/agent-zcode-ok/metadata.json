@@ -1,0 +1,20 @@
+{
+  "agentId": "agent-zcode-ok",
+  "childSessionId": "sess_subagent_agent-zcode-ok",
+  "createdAt": "2026-11-25T10:00:00.000Z",
+  "updatedAt": "2026-11-25T10:12:00.000Z",
+  "completedAt": "2026-11-25T10:12:00.000Z",
+  "cwd": "<<ROOT>>",
+  "workspaceRoot": "<<ROOT>>",
+  "description": "把账单模块的导出改成流式",
+  "prompt": "重构 src/billing/export.js：把一次性拼接改成流式写入,并补一个回归测试 tests/billing-export.test.js。完成后汇报改了哪些文件。",
+  "parentSessionId": "sess-fixture-parent",
+  "parentToolUseId": "call_000000000000000000000001",
+  "profileId": "general-purpose",
+  "profileSnapshot": { "name": "general-purpose", "description": "fixture", "color": "blue", "injectAgentsMd": false, "source": "built-in", "systemPrompt": "", "tools": ["Read", "Write", "Bash"] },
+  "metadataFile": "<<ROOT>>/.relay/fixture",
+  "outputFile": "<<ROOT>>/.relay/fixture-out",
+  "taskOutputFile": "<<ROOT>>/.relay/fixture-task",
+  "status": "failed",
+  "error": "[1308][已达到 5 小时的使用上限。您的限额将在 2026-11-25 15:55:33 重置。][req_fixture]"
+}

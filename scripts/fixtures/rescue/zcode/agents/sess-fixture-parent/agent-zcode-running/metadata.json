@@ -1,0 +1,18 @@
+{
+  "agentId": "agent-zcode-running",
+  "childSessionId": "sess_subagent_agent-zcode-running",
+  "createdAt": "2026-11-25T10:20:00.000Z",
+  "updatedAt": "2026-11-25T10:21:00.000Z",
+  "cwd": "<<ROOT>>",
+  "workspaceRoot": "<<ROOT>>",
+  "description": "仍在运行的任务",
+  "prompt": "这个子代理还在跑,不应被列为可抢救。",
+  "parentSessionId": "sess-fixture-parent",
+  "parentToolUseId": "call_000000000000000000000002",
+  "profileId": "Explore",
+  "profileSnapshot": { "name": "Explore", "description": "fixture", "color": "cyan", "injectAgentsMd": false, "source": "built-in", "systemPrompt": "", "tools": ["Read"] },
+  "metadataFile": "<<ROOT>>/.relay/fixture",
+  "outputFile": "<<ROOT>>/.relay/fixture-out",
+  "taskOutputFile": "<<ROOT>>/.relay/fixture-task",
+  "status": "running"
+}

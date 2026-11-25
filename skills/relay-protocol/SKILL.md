@@ -44,6 +44,7 @@ relay-mcp 把交接状态写进仓库文件(START / SPEC / DECISIONS / TASKS / L
 | 入口文件重投影 | `relay_sync` |
 | LOG 归档(默认 dry-run) | `relay_archive_log` |
 | worktree 清理(默认 dry-run) | `relay_worktree_cleanup` |
+| 子代理抢救(scan 只读;写操作需 confirm) | `relay_rescue` |
 
 ## 关键约束
 
@@ -60,3 +61,4 @@ relay-mcp 把交接状态写进仓库文件(START / SPEC / DECISIONS / TASKS / L
 - 认领锁残留:等待 240 分钟 TTL 到期接管,或由原会话出场释放;`relay_doctor` 可诊断。
 - 出场报内容冲突:说明 TASKS/LOG 被外部改过;重跑 `relay_session_end` 会重读后重建,不要手工合并。
 - 入口漂移(R1):运行 `relay_sync` 重投影;无标记的既有 AGENTS.md 用 `relay_onboard` 接管。
+- 子代理被额度/429/悬空打断:先 `relay_rescue`(scan,只读)找到它,再 `capture {confirm:true}` 落成接力单,由另一个模型 `takeover` 接手续跑;接力单在 `.relay/rescue/`,不入库。

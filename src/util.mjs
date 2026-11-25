@@ -106,13 +106,22 @@ export const isGitRepoAsync = async (root) => {
 
 // execFile('git', ['-C', root, ...args]) 包装:8 秒超时,永不抛错
 // 返回 {ok, stdout, stderr};ok = exit 0
-export const gitRun = async (root, ...args) => {
+// env 只用于给单条 git 命令追加环境(如抢救快照的临时 GIT_INDEX_FILE),不读也不改全局配置。
+export const gitRun = async (root, ...rest) => {
+  const last = rest[rest.length - 1];
+  const opts = last && typeof last === 'object' && !Array.isArray(last) && last.__gitOpts === true ? last : null;
+  const args = opts ? rest.slice(0, -1) : rest;
   traceGit(false);
   try {
     const { stdout, stderr } = await execFileAsync(
       'git',
       ['-C', root, ...args],
-      { timeout: 8000, maxBuffer: 10 * 1024 * 1024, encoding: 'utf8' },
+      {
+        timeout: 8000,
+        maxBuffer: 10 * 1024 * 1024,
+        encoding: 'utf8',
+        ...(opts && opts.env ? { env: { ...process.env, ...opts.env } } : {}),
+      },
     );
     return { ok: true, stdout: String(stdout ?? ''), stderr: String(stderr ?? '') };
   } catch (e) {
@@ -214,6 +223,22 @@ export const scanSecrets = (text, { allowMarker = false } = {}) => {
 };
 export const formatSecretHits = (hits, file = '') =>
   (hits || []).map((h) => `${file ? `${file}:` : ''}${h.line} 命中 ${h.rule} ${h.preview}`).join('; ');
+// 输出脱敏:把文本里的密钥样式串就地替换为 [REDACTED:规则名],并保留首 4 字符便于辨认。
+// 与 scanSecrets 的区别:scanSecrets 只报告位置(供 R11 阻断),redactSecrets 用于「会把不可信文本
+// 回显给模型」的路径(rescue 的 transcript 片段),避免密钥随上下文继续扩散。
+// 只影响展示;落盘内容不变(写入前的阻断仍由 scanSecrets / writeProtocolFile 负责)。
+export const redactSecrets = (text) => {
+  let out = String(text ?? '');
+  const hits = [];
+  for (const [rule, re] of SECRET_CONTENT_RULES) {
+    const global = new RegExp(re.source, re.flags.includes('g') ? re.flags : `${re.flags}g`);
+    out = out.replace(global, (m) => {
+      hits.push(rule);
+      return `[REDACTED:${rule}:${m.slice(0, 4)}…]`;
+    });
+  }
+  return { text: out, hits };
+};
 
 // =====================================================================
 // 协议文件安全写 / 符号链接防线 / 锁协议(JSON v2,兼容旧文本 v1)
