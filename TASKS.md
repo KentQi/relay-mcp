@@ -14,11 +14,23 @@
 (空——认领后由 relay_claim 移入;认领锁在 .relay/claims/,TTL 4 小时,崩溃会话的认领到期自动可接管)
 
 ## 待办
+- [ ] T051 抢救后自动拉起备用模型接力（不再依赖编排会话手动拉起）
+  验收: test:scripts/smoke-rescue-autolaunch.mjs
+  备注: T048 只交付「接力单 + 可派发的接力提示词」。自动化需先决定命令执行面（信任边界，参考 acceptance.commands 的逐字符签字）、后台进程生命周期与回收、重试上限、与 relay 认领锁/接力锁的衔接。开工前先记 DECISIONS（减法问）。
+- [ ] T049 抢救后自动拉起备用模型接力（rescue 的 takeover 之后自动派发，不再依赖编排会话手动拉起）
+  验收: test:scripts/smoke-rescue-autolaunch.mjs
+  备注: T048 只交付「接力单 + 可派发的接力提示词」，由编排会话或人用 harness 原生手段换模型拉起。自动化需先决定命令执行面与后台进程生命周期；本任务为登记项，开工前须先记 DECISIONS。
+- [ ] T050 ZCode 完整对话抢救（只读 ~/.zcode/cli/db/db.sqlite 的 message/part 行，默认关闭、manifest.rescue.sources 显式开启）
+  验收: test:scripts/smoke-rescue-zcode-db.mjs
+  备注: 实测 ZCode 失败子代理只留 metadata.json + 错误文本，持久对话在 SQLite（message/part 两表，data.error 带 code=model_rate_limited/statusCode=429）。读该库需人类授权；实现须只读打开（node:sqlite readOnly）并在不可用时降级。
 
 ## 已冻结
   冻结任务 T030:发布 npm — 决策冻结,不执行(见 DECISIONS 2026-11-18 Tier 2);原发布面已移除,分发改为 git clone / Agent Plugins / GitHub Release。冻结任务不进入 session_start 派发;解冻需先在 DECISIONS 记录新决定并恢复为 [ ] 任务行。
 
 ## 已完成
+- [x] T048 子代理抢救与接力：relay_rescue（scan/capture/show/takeover/report/drop，接力单存 .relay/rescue/、git 对象快照工作区、自动发现 ZCode+Claude Code+显式路径、确定性中断分类、接力互斥）  (2026-11-25)
+  验收: test:scripts/smoke-rescue.mjs
+  备注: 抢救因 Token Plan 额度/429/悬空被杀的子代理现场（transcript + 未提交改动），供另一模型凭接力单接管续跑。ZCode 的完整对话在 SQLite 库内，归 T050。tools/list 预算维持 10 KiB（压缩低频工具描述）。
 - [x] T037 发布 v2.0.0（Node>=22 / npm 冻结 / 归档收窄）  (2026-11-18)
   验收: npm test
   备注: 破坏性变更：Node >=22、npm 冻结、归档机检收窄。发布版本/tag/GitHub Release 需人类授权；发布前跑 npm test 与 ./verify。排在 T038–T047 之后：多专家审计已确认 15 条缺陷（其中 3 条会真实阻断协议行为），不应带着它们发 v2.0.0。

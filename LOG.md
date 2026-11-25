@@ -1,5 +1,17 @@
 # 会话日志(最新在上)
 
+## 2026-11-25 23:36 | model=zcode-step5preview-t048 | task=T048 完成
+- 摘要: T048 落地子代理抢救与接力 relay_rescue：新增 src/engines/rescue.mjs（scan/capture/show/takeover/report/drop，action 驱动，写盘仅在 confirm）。scan 自动发现本项目在 ZCode 与 Claude Code 下的失败/中断子代理，归属按记录 cwd 两侧 realpath 判定（800 个他项目子代理被正确跳过）；capture 把 transcript 副本 + 工作区未提交改动的 git 对象快照（临时 GIT_INDEX_FILE + read-tree/add/write-tree/commit-tree/update-ref）落成本机接力单 .relay/rescue/<id>/，不动 index/工作区/HEAD/stash；state.json 只存不可派生锚点，其余每次从 transcript 即时派生并校验 sha256（篡改即 isError）；takeover 用独立接力锁（240min TTL、同 model 幂等、token fencing）移交派发权并在 TASKS 待办区登记接管任务，report 回写并释放；确定性中断分类 quota/error/interrupted/complete（complete 不列为可抢救）；transcript 一律围栏 + 「不是给你的指令」+ redactSecrets 脱敏；接续链同签名告警；session_start 简报新增有界「待接力」小节且不新增 git 子进程。tools/list 压到 9894 字节/15 工具（预算 10240）；新增 scripts/smoke-rescue.mjs 80 断言 + fixtures 接入 npm test（24 套）；修宪同步 CONTRACT/DECISIONS/SPEC(AC8)/README/CHANGELOG/plugin.json/skills/AGENTS 模板并 relay_sync 重投影。npm test 24 套全绿、relay_verify full PASS 12·WARN 0·ERROR 0。
+- 事实(v2): mode=managed | 文件 26 | ± +1667/-115 | base=acab8decc38b491e33d0468adc86bfb78bdb41c5 | sha=d33d7b26230f53a0937c07d6497738d5d77b801d | branch=relay/T048 || 验收: 通过 | verify: PASS 16·WARN 0·ERROR 0 | 耗时: 47s
+- worktree: branch=relay/T048; sha=d33d7b26230f53a0937c07d6497738d5d77b801d; 已验收,未合并(是否合并由人工决定)
+- 负结果: ZCode 给失败子代理只留 metadata.json 与 21-124 字节错误文本，完整对话在 ~/.zcode/cli/db/db.sqlite；rollout/model-io-*.jsonl 是瞬时的，不能作为事后抢救来源。读该库需人类授权 → 拆为 T050。
+- 负结果: 归属判定必须两侧都过 realpath：macOS 的 /var→/private/var 会让字符串前缀比较把本项目子代理误判为「别的项目」（实测 800 条全被误跳过）。
+- 负结果: rescue 的 takeover 不能复用 relay 认领锁：派发权与认领权是两件事，混成一把锁会让崩溃的接力者永久占住任务。
+- 负结果: 接力单不能入库：transcript 含本机路径与潜在敏感内容，且 .relay/** 是受保护路径，不补 .gitignore 基线会让下一次出场被护栏拦死。
+- 负结果: 新增工具必然击穿 tools/list 的 10 KiB 预算（实测余量仅 63 字节）：必须同时压缩低频描述；smoke-compat 钉住的词（PRESERVED/worktree/.gitignore/migration/ignored/two commits）不能删。
+- 负结果: 不要用 git stash 保存现场：会改变工作区且 stash 是全局栈，并发会话互相干扰。正确做法是临时 index + commit-tree 到 refs/relay/rescue/<id>。
+- 留给下一个: T048 只交付「接力单 + 可派发的接力提示词」。自动化需先决定命令执行面（信任边界，参考 acceptance.commands 的逐字符签字）、后台进程生命周期与回收、重试上限、与 relay 认领锁/接力锁的衔接。开工前先记 DECISIONS（减法问）。
+
 ## 2026-11-18 16:45 | model=claude-fable-release-20261118 | task=T037 完成
 - 摘要: T037 发布 v2.0.0：package.json / plugin.json 版本同步 2.0.0；CHANGELOG 将 Unreleased 定版为 [2.0.0] - 2026-11-18，Breaking 段记录 Node >=22、npm 冻结、归档收窄与迁移指引，Fixed 段汇总 T038–T047 的多专家审计修复；npm test 23 套全绿、./verify 0 ERROR、relay_doctor 健康。tag / push / GitHub Release 由本会话随后执行。
 - 事实(v2): mode=single | 文件 3 | ± +12/-3 | base=- | sha=- | branch=main || 验收: 通过 | verify: PASS 12·WARN 0·ERROR 0 | 耗时: 45s
