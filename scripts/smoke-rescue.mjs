@@ -436,6 +436,65 @@ try {
   }
 
   // ==========================================================================
+  console.log('\n== 6c. 中断分类双向错判(审计 #3)==');
+  // ==========================================================================
+  {
+    const H7 = mkTmp('home7');
+    const repos = path.join(H7, '.claude', 'projects', '-cls');
+    const mkAgent = (sess, agentId, recs) => {
+      const d = path.join(repos, sess, 'subagents');
+      mkdirSync(d, { recursive: true });
+      writeFileSync(path.join(d, `agent-${agentId}.jsonl`), recs.map((r) => JSON.stringify(r)).join('\n') + '\n');
+    };
+    const clsRepo = freshRepo('classify', '分类夹具');
+    const e7 = { RELAY_RESCUE_HOME: H7 };
+    const U = (sess, agent, content) => ({ type: 'user', uuid: 'u1', sessionId: sess, agentId: agent, isSidechain: true, cwd: clsRepo, timestamp: '2026-11-26T01:00:00.000Z', message: { role: 'user', content } });
+    const A = (sess, agent, uuid, parentUuid, content, stopReason) => ({ type: 'assistant', uuid, parentUuid, sessionId: sess, agentId: agent, isSidechain: true, cwd: clsRepo, timestamp: '2026-11-26T01:00:10.000Z', message: { role: 'assistant', model: 'm', stop_reason: stopReason, content } });
+    const RES = (sess, agent, parentUuid, toolUseId, isErr) => ({ type: 'user', uuid: 'r-' + toolUseId, parentUuid, sessionId: sess, agentId: agent, isSidechain: true, cwd: clsRepo, timestamp: '2026-11-26T01:00:05.000Z', message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: toolUseId, ...(isErr ? { is_error: true } : {}), content: 'ok' }] } });
+
+    // (a) 死在「tool_result 已落盘、下一轮 assistant 未开口」→ 末条是 user-record,旧实现判 complete
+    mkAgent('sess-dangling', 'dangling', [
+      U('sess-dangling', 'dangling', '做一件事'),
+      A('sess-dangling', 'dangling', 'a1', 'u1', [{ type: 'text', text: '读文件。' }, { type: 'tool_use', id: 'tu-1', name: 'Read', input: { file_path: '/x' } }], 'tool_use'),
+      A('sess-dangling', 'dangling', 'a2', 'r-tu-1', [{ type: 'text', text: '再改文件。' }, { type: 'tool_use', id: 'tu-2', name: 'Edit', input: { file_path: '/x' } }], 'tool_use'),
+      RES('sess-dangling', 'dangling', 'a2', 'tu-2', false),
+      // 注意:tu-2 的 tool_result 也有,但 a2 里还有 tu-3 未落结果 → 悬空
+    ]);
+    // 更精确地构造:最后一条 assistant 发 tu-3,之后只有 tu-2 的 result
+    mkAgent('sess-dangling2', 'dangling2', [
+      U('sess-dangling2', 'dangling2', '做一件事'),
+      A('sess-dangling2', 'dangling2', 'a1', 'u1', [{ type: 'tool_use', id: 'tu-1', name: 'Read', input: { file_path: '/x' } }], 'tool_use'),
+      RES('sess-dangling2', 'dangling2', 'a1', 'tu-1', false),
+      A('sess-dangling2', 'dangling2', 'a2', 'r-tu-1', [{ type: 'tool_use', id: 'tu-2', name: 'Edit', input: { file_path: '/x' } }], 'tool_use'),
+      A('sess-dangling2', 'dangling2', 'a3', 'r-tu-2', [{ type: 'tool_use', id: 'tu-3', name: 'Bash', input: { command: 'npm test' } }], 'tool_use'),
+      RES('sess-dangling2', 'dangling2', 'a3', 'tu-2', false),
+    ]);
+
+    // (b) 正常完成,但历史里出现过一次工具报错(重试后成功)
+    mkAgent('sess-recovered', 'recovered', [
+      U('sess-recovered', 'recovered', '跑测试'),
+      A('sess-recovered', 'recovered', 'a1', 'u1', [{ type: 'tool_use', id: 'tu-1', name: 'Bash', input: { command: 'npm test' } }], 'tool_use'),
+      RES('sess-recovered', 'recovered', 'a1', 'tu-1', true),
+      A('sess-recovered', 'recovered', 'a2', 'r-tu-1', [{ type: 'tool_use', id: 'tu-2', name: 'Bash', input: { command: 'npm test --reporter=dot' } }], 'tool_use'),
+      RES('sess-recovered', 'recovered', 'a2', 'tu-2', false),
+      A('sess-recovered', 'recovered', 'a3', 'r-tu-2', [{ type: 'text', text: '测试通过,任务完成。' }], 'end_turn'),
+    ]);
+
+    const scan = out(cli(clsRepo, 'relay_rescue', { action: 'scan' }, e7));
+    const rescuable = (scan.match(/## 可抢救\((\d+)\)([\s\S]*?)(?=\n## )/) || ['', '', ''])[2];
+
+    ok(/dangling/.test(rescuable), '(a) 末条是 user(tool_result) 但仍有未配对 tool_use → 判为可抢救(审计 #3)', scan.slice(0, 800));
+    ok(!/recovered/.test(rescuable), '(b) 历史工具报错但正常收尾 → 不列为可抢救(审计 #3)', rescuable);
+    ok(/recovered/.test(scan), '(b) recovered 出现在「已正常完成」而非消失', scan.slice(-600));
+
+    // capture 必须能抓住 dangling(旧实现会以「已正常完成」拒绝)
+    const capD = cli(clsRepo, 'relay_rescue', { action: 'capture', id: 'dangling2', confirm: true }, e7);
+    ok(capD.status === 0, '(a) 悬空形态可被 capture(旧实现拒绝)', out(capD).slice(0, 400));
+    const capR = cli(clsRepo, 'relay_rescue', { action: 'capture', id: 'recovered', confirm: true }, e7);
+    ok(capR.status === 1 && /正常完成/.test(out(capR)), '(b) 正常完成的仍被 capture 拒绝', out(capR).slice(0, 300));
+  }
+
+  // ==========================================================================
   console.log('\n== 7. drop:默认 dry-run,confirm 才删 ==');
   // ==========================================================================
   {
