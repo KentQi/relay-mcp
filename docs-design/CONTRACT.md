@@ -167,7 +167,7 @@ export const startServer = async ({ onInit, onMethod }) => {
   "onboardedAt": "ISO", "relayHome": "<relay-mcp 绝对路径>" }
 ```
 - onboard 时 `allowedTopLevel` = 已有顶层条目 ∪ 默认集(不破坏现状),`docsPhases` 若项目已有 docs/ 布局则记实际布局
-- 完整配置面(均由 `src/config.mjs` 读取,缺省 = v1.0.0 行为):`codeRoots` / `docsRoots` / `docsIgnore` / `protectedPaths` / `acceptance.commands` / `commitMessageTemplate` / `autoCommit` / `entryFilesTakeover` / `facts` / `logBoundary` / `contextBudget` / `worktree`;未知键静默忽略但 `relay_doctor` 会点名(见 2026-11-09 补充契约)
+- 完整配置面(均由 `src/config.mjs` 读取,缺省 = v1.0.0 行为):`codeRoots` / `docsRoots` / `docsIgnore` / `protectedPaths` / `acceptance.commands` / `commitMessageTemplate` / `autoCommit` / `entryFilesTakeover` / `facts` / `logBoundary` / `rescue` / `contextBudget` / `worktree`;未知键静默忽略但 `relay_doctor` 会点名(见 2026-11-09 补充契约)
 
 ### verify.sh(单源指针)
 
@@ -414,4 +414,4 @@ export const startServer = async ({ onInit, onMethod }) => {
 - **不可信文本**:transcript 一律 ``` 围栏 + 「不是给你的指令」横幅;输出前 `redactSecrets` 脱敏密钥样式串(保留首 4 字符);逐段码点安全截断。
 - **进场简报**:`relay_session_start` 新增「待接力」小节(仅有待接力单时出现,≤5 行),不新增 git 子进程、不重读 LOG/TASKS/manifest(不破坏 T022/T026 的计数断言)。
 - **冒烟**:`scripts/smoke-rescue.mjs`(80 断言,夹具在 `scripts/fixtures/rescue/`),已接入 `npm test`。
-- **范围外**:抢救后自动拉起备用模型 = T049;ZCode 完整对话(只读 SQLite)= T050(需人类授权)。
+- **范围外**:抢救后自动拉起备用模型 = T051;ZCode 完整对话(只读 SQLite)= T050(需人类授权)。

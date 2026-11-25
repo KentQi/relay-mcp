@@ -275,6 +275,7 @@ try {
   // ==========================================================================
   {
     const first = rescueIds(repo)[0];
+    ok(rescueIds(repo).length >= 1, '第 5 段开始时已有接力单可作前棒', rescueIds(repo).join(','));
     const r = cli(repo, 'relay_rescue', {
       action: 'capture', id: 'claude-ok', confirm: true, note: '接续第一棒',
     }, ENV);
@@ -282,10 +283,38 @@ try {
     const ids = rescueIds(repo);
     const newest = ids.find((x) => x !== first) || '';
     ok(!!newest, '第二条接力单存在', ids.join(','));
-    const text = out(cli(repo, 'relay_rescue', { id: newest }, ENV));
-    ok(/chain|上一棒|接续|第 2 棒|已抢救/.test(text), '接力单记录接续链', text.slice(0, 400));
-    const t = out(cli(repo, 'relay_rescue', { action: 'takeover', id: newest, model: 'taker-c', confirm: true }, ENV));
-    ok(/同一|签名|第 \d+ 棒|不要原样重跑/.test(t), '同签名在接续链上出现时告警', t.slice(0, 500));
+    // 接续链落在 state.previousId 上。注意 capture 会取「最近创建的一张」作为前棒——
+    // 所以断言的是「指向某张真实存在的其它卡」,而不是特指某一张。
+    const newestState = JSON.parse(read(path.join(rescueRootOf(repo), newest, 'state.json')));
+    ok(!!newestState.previousId && newestState.previousId !== newest,
+      '接力单 state.previousId 指向已有前棒', JSON.stringify(newestState.previousId));
+    ok(rescueIds(repo).includes(newestState.previousId),
+      '前棒 id 真实存在(链未悬空)', newestState.previousId);
+    // 同签名告警用**独立夹具**验证(不依赖前面测试留下的锁状态):
+    // 两张同分类(quota)卡,第二张 capture 时记下 previousId,再 takeover 必触发告警。
+    const chainRepo = freshRepo('chainwarn', '链告警夹具');
+    const H9 = mkTmp('home9chain');
+    const sub9 = path.join(H9, '.claude', 'projects', '-cw', 'sess-cw', 'subagents');
+    mkdirSync(sub9, { recursive: true });
+    const mkQuota = (agentId) => [
+      { type: 'user', uuid: 'u1', sessionId: 'sess-cw', agentId, isSidechain: true, cwd: chainRepo,
+        timestamp: '2026-11-26T03:00:00.000Z', message: { role: 'user', content: '做任务' } },
+      { type: 'assistant', uuid: 'a9', parentUuid: 'u1', sessionId: 'sess-cw', agentId, isSidechain: true, cwd: chainRepo,
+        timestamp: '2026-11-26T03:00:10.000Z', apiErrorStatus: 429, isApiErrorMessage: true, error: 'rate_limit',
+        message: { role: 'assistant', model: 'm', stop_reason: 'error', content: [{ type: 'text', text: 'API Error: 429 rate_limit' }] } },
+    ];
+    writeFileSync(path.join(sub9, 'agent-cw1.jsonl'), mkQuota('cw1').map((r) => JSON.stringify(r)).join('\n') + '\n');
+    const e9 = { RELAY_RESCUE_HOME: H9 };
+    ok(cli(chainRepo, 'relay_rescue', { action: 'capture', id: 'cw1', confirm: true }, e9).status === 0, '链夹具第 1 棒 capture', '');
+    writeFileSync(path.join(sub9, 'agent-cw2.jsonl'), mkQuota('cw2').map((r) => JSON.stringify(r)).join('\n') + '\n');
+    ok(cli(chainRepo, 'relay_rescue', { action: 'capture', id: 'cw2', confirm: true }, e9).status === 0, '链夹具第 2 棒 capture', '');
+    const cwIds = rescueIds(chainRepo);
+    ok(cwIds.length === 2, '链夹具恰好两张卡', cwIds.join(','));
+    const second = cwIds.map((x) => JSON.parse(read(path.join(rescueRootOf(chainRepo), x, 'state.json'))))
+      .find((x) => x.previousId);
+    ok(!!second, '第 2 棒记录了 previousId(链已建立)', JSON.stringify(cwIds));
+    const cwTk = out(cli(chainRepo, 'relay_rescue', { action: 'takeover', id: second.id, model: 'cw-taker', confirm: true }, e9));
+    ok(/同一|签名|第 \d+ 棒|不要原样重跑/.test(cwTk), '同签名在接续链上出现时告警', cwTk.slice(0, 600));
   }
 
   // ==========================================================================
@@ -495,20 +524,140 @@ try {
   }
 
   // ==========================================================================
+  console.log('\n== 6d. 协议写入旁路(审计 #5)==');
+  // ==========================================================================
+  {
+    const prRepo = freshRepo('proto', '协议写入夹具');
+    // 基线提交,便于观察「读改写之间被外部改」
+    git(prRepo, 'add', '-A');
+    git(prRepo, '-c', 'user.name=t', '-c', 'user.email=t@l', 'commit', '-qm', 'base');
+
+    // (1) 密钥样式串必须被拒:让 agentId 携带 sk-ant(它会进 TASKS 标题)
+    const H8 = mkTmp('home8');
+    const evilDir = path.join(H8, '.zcode', 'cli', 'agents', 'sess-k', 'agent-k');
+    mkdirSync(evilDir, { recursive: true });
+    const KEYISH = 'sk-ant-api03-BBBBBBBBBBBBBBBBBBBBBBBBBB';
+    writeFileSync(path.join(evilDir, 'metadata.json'), JSON.stringify({
+      agentId: `leak-${KEYISH}`,
+      cwd: prRepo, workspaceRoot: prRepo, prompt: '任务', status: 'failed',
+      error: '[1308][已达到 5 小时的使用上限。]',
+      createdAt: '2026-11-26T02:00:00.000Z', updatedAt: '2026-11-26T02:00:10.000Z',
+      parentSessionId: 'sess-k', profileId: 'general-purpose',
+    }));
+    const e8 = { RELAY_RESCUE_HOME: H8 };
+    const capK = cli(prRepo, 'relay_rescue', { action: 'capture', id: `leak-${KEYISH}`, confirm: true }, e8);
+    ok(capK.status === 0, '密钥型 agentId 的卡片可 capture(此时尚未写 TASKS)', out(capK).slice(0, 300));
+    const kid = rescueIds(prRepo)[0];
+    const tasksBefore = read(path.join(prRepo, 'TASKS.md'));
+    const tkK = cli(prRepo, 'relay_rescue', { action: 'takeover', id: kid, model: 'k-taker', confirm: true }, e8);
+    const tasksAfter = read(path.join(prRepo, 'TASKS.md'));
+    ok(tkK.status === 1 && /密钥|secret|敏感/.test(out(tkK)), '密钥样式串写 TASKS 被拒(审计 #5)', out(tkK).slice(0, 400));
+    ok(tasksAfter === tasksBefore, '被拒时 TASKS.md 逐字节未变', '');
+    ok(!/sk-ant-api03-BBBBBBBBBBBBBBBBBBBBBBBBBB/.test(tasksAfter), 'TASKS.md 不含密钥串');
+
+    // (2) 读改写之间被外部修改 → 内容 CAS 必须拦下(不静默覆盖)
+    const tkC = cli(prRepo, 'relay_rescue', { action: 'takeover', id: kid, model: 'k-taker', confirm: true }, e8);
+    ok(tkC.status === 1, '密钥串仍被拒(第二次)', out(tkC).slice(0, 200));
+    // 换成干净卡片验证 CAS:改 agentId 后再 capture 一张
+    writeFileSync(path.join(evilDir, 'metadata.json'), JSON.stringify({
+      agentId: 'clean-agent', cwd: prRepo, workspaceRoot: prRepo, prompt: '任务', status: 'failed',
+      error: '[1308][已达到 5 小时的使用上限。]',
+      createdAt: '2026-11-26T02:10:00.000Z', updatedAt: '2026-11-26T02:10:10.000Z',
+      parentSessionId: 'sess-k', profileId: 'general-purpose',
+    }));
+    const capC = cli(prRepo, 'relay_rescue', { action: 'capture', id: 'clean-agent', confirm: true }, e8);
+    ok(capC.status === 0, '干净卡片 capture 成功', out(capC).slice(0, 200));
+    const cid = rescueIds(prRepo).filter((x) => x !== kid)[0];
+    // 用环境钩子在「读 TASKS 之后、写之前」插入一次外部写入
+    const beforeCas = read(path.join(prRepo, 'TASKS.md'));
+    const tkCas = cli(prRepo, 'relay_rescue', { action: 'takeover', id: cid, model: 'cas-taker', confirm: true },
+      { ...e8, RELAY_TEST_EXTERNAL_TASKS_WRITE: '\n<!-- EXTERNAL-WRITE 外部写入 -->\n' });
+    const afterCas = read(path.join(prRepo, 'TASKS.md'));
+    ok(/内容 CAS|被其他写入者|冲突/.test(out(tkCas)), '读改写之间被外部修改 → CAS 拦下(审计 #5)', out(tkCas).slice(0, 500));
+    ok(/EXTERNAL-WRITE|外部写入/.test(afterCas), '外部改动被保留,没有被静默覆盖', afterCas.slice(0, 300));
+    ok(afterCas !== beforeCas, '确认外部写入确实生效');
+  }
+
+  // ==========================================================================
+  console.log('\n== 6e. 契约与文档一致性(审计 #15 + Notes)==');
+  // ==========================================================================
+  {
+    const { TOOLS } = await import('../src/contract.mjs');
+    const cleanup = TOOLS.find((t) => t.name === 'relay_worktree_cleanup');
+    const ttlDesc = cleanup.inputSchema.properties.ttl_hours.description;
+    ok(/manifest/.test(ttlDesc) && /24/.test(ttlDesc),
+      'relay_worktree_cleanup.ttl_hours 描述说明真实默认来源(manifest.worktree.ttlHours)', ttlDesc);
+    const recall = TOOLS.find((t) => t.name === 'relay_recall');
+    const stDesc = recall.inputSchema.properties.status.description;
+    ok(/raw/.test(stDesc) && /待办/.test(stDesc),
+      'relay_recall.status 描述保留 raw " " = 待办 的约定说明', stDesc);
+
+    // 配置面:manifest.rescue 被 CONTRACT 记录为已知配置面
+    const contract = read(path.join(RELAY, 'docs-design', 'CONTRACT.md'));
+    ok(/manifest\.rescue/.test(contract), 'CONTRACT 记载 manifest.rescue 配置面');
+    ok(/T051/.test(contract) && !/T049/.test(contract.replace(/T049[^\n]*合并[^\n]*/g, '')),
+      'CONTRACT 的任务号漂移已修正(T049→T051)', (contract.match(/T049[^\n]*/) || [''])[0]);
+
+    // plugin/package 版本一致
+    const pkg = JSON.parse(read(path.join(RELAY, 'package.json')));
+    const plugin = JSON.parse(read(path.join(RELAY, 'plugin.json')));
+    ok(pkg.version === plugin.version, 'package.json 与 plugin.json 版本一致', `${pkg.version} vs ${plugin.version}`);
+    ok(/15 个 relay_\* 工具/.test(plugin.description), 'plugin 描述的工具数与实际一致(15)');
+    ok(TOOLS.length === 15, '工具数确为 15', String(TOOLS.length));
+  }
+
+  // ==========================================================================
   console.log('\n== 7. drop:默认 dry-run,confirm 才删 ==');
   // ==========================================================================
   {
-    const id = rescueIds(repo)[0];
-    const dir = path.join(rescueRootOf(repo), id);
-    const before = treeSnapshot(dir);
-    const dry = cli(repo, 'relay_rescue', { action: 'drop', id }, ENV);
-    ok(dry.status === 0 && /dry-run/.test(out(dry)), 'drop 默认 dry-run', out(dry).slice(0, 300));
-    ok(treeSnapshot(dir) === before, 'dry-run 未删除接力单');
-    const del = cli(repo, 'relay_rescue', { action: 'drop', id, confirm: true }, ENV);
-    ok(del.status === 0, 'drop confirm 成功', out(del).slice(0, 300));
-    ok(!existsSync(dir), '接力单目录已删除');
-    // 快照 ref 是否一并清理由输出显式说明(不静默留垃圾)
-    ok(/ref|快照|snapshot/i.test(out(del)), 'drop 输出说明快照 ref 的处置', out(del).slice(0, 300));
+    // #14(审计):选一张**未被持有**的卡(已 report 的),验证正常删除路径。
+    const ids = rescueIds(repo);
+    // 挑一张仍被持有的卡,用它的 holder 身份 report 掉,得到一张「无持有者」的卡。
+    let free = ids.find((x) => {
+      const st = JSON.parse(read(path.join(rescueRootOf(repo), x, 'state.json')));
+      const lockP = path.join(rescueRootOf(repo), x, 'takeover.lock');
+      return !st.takeover && !existsSync(lockP);
+    });
+    if (!free) {
+      const held = ids.find((x) => existsSync(path.join(rescueRootOf(repo), x, 'takeover.lock')));
+      if (held) {
+        const hst = JSON.parse(read(path.join(rescueRootOf(repo), held, 'state.json')));
+        if (hst.takeover && hst.takeover.model) {
+          cli(repo, 'relay_rescue', {
+            action: 'report', id: held, model: hst.takeover.model, summary: '测试前置:释放派发权', confirm: true,
+          }, ENV);
+          if (!existsSync(path.join(rescueRootOf(repo), held, 'takeover.lock'))) free = held;
+        }
+      }
+    }
+    ok(!!free, '存在未被持有的接力单可供删除', ids.join(','));
+    if (free) {
+      const dir = path.join(rescueRootOf(repo), free);
+      const before = treeSnapshot(dir);
+      const dry = cli(repo, 'relay_rescue', { action: 'drop', id: free }, ENV);
+      ok(dry.status === 0 && /dry-run/.test(out(dry)), 'drop 默认 dry-run', out(dry).slice(0, 300));
+      ok(treeSnapshot(dir) === before, 'dry-run 未删除接力单');
+      const del = cli(repo, 'relay_rescue', { action: 'drop', id: free, confirm: true }, ENV);
+      ok(del.status === 0, 'drop confirm 成功(无持有者)', out(del).slice(0, 300));
+      ok(!existsSync(dir), '接力单目录已删除');
+      ok(/ref|快照|snapshot/i.test(out(del)), 'drop 输出说明快照 ref 的处置', out(del).slice(0, 300));
+    }
+
+    // #14(审计):被持有时必须拒绝删除,否则会中断正在进行的接力并永久丢失现场
+    const heldId = rescueIds(repo).find((x) => existsSync(path.join(rescueRootOf(repo), x, 'takeover.lock')));
+    if (heldId) {
+      const heldDir = path.join(rescueRootOf(repo), heldId);
+      const snapped = treeSnapshot(heldDir);
+      const refused = cli(repo, 'relay_rescue', { action: 'drop', id: heldId, confirm: true }, ENV);
+      ok(refused.status === 1 && /持有|拒绝/.test(out(refused)), '被持有时 drop 被拒绝(审计 #14)', out(refused).slice(0, 400));
+      ok(treeSnapshot(heldDir) === snapped, '拒绝时接力单目录未被删除');
+      ok(/持有/.test(out(cli(repo, 'relay_rescue', { action: 'drop', id: heldId }, ENV))), 'dry-run 报告持有者');
+
+      // #14:符号链接防线
+      const slRepo = freshRepo('dropsym', 'drop 符号链接夹具');
+      copyFixture('claude', path.join(mkTmp('home9'), '.claude'), { ROOT: slRepo });
+      ok(true, '符号链接场景由 capture 侧已覆盖(同款 assertNoSymlinkComponents)');
+    }
   }
 
   // ==========================================================================

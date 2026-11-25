@@ -156,7 +156,7 @@ export const TOOLS = [
       properties: {
         root: { type: 'string', description: ROOT_DESC },
         confirm: { type: 'boolean', description: 'false/omitted = dry-run; true = execute.' },
-        ttl_hours: { type: 'number', description: 'Expiration override in hours (default 24).' },
+        ttl_hours: { type: 'number', description: 'Expiration override in hours (default: manifest worktree.ttlHours, else 24).' },
       },
     },
   },
@@ -208,7 +208,7 @@ export const TOOLS = [
       properties: {
         root: { type: 'string', description: ROOT_DESC },
         query: { type: 'string', description: 'Substring over id/title/summary/handoff (max 120).' },
-        status: { type: 'string', description: '完成 | 进行中 | 待办 (or x/~).' },
+        status: { type: 'string', description: '完成 | 进行中 | 待办 (or x/~; raw " " = 待办 per contract).' },
         model: { type: 'string', description: 'Model id substring.' },
         limit: { type: 'number', description: 'Max rows (20, cap 50).' },
       },
