@@ -16,10 +16,7 @@
 ## 待办
 - [ ] T051 抢救后自动拉起备用模型接力（不再依赖编排会话手动拉起）
   验收: test:scripts/smoke-rescue-autolaunch.mjs
-  备注: T048 只交付「接力单 + 可派发的接力提示词」。自动化需先决定命令执行面（信任边界，参考 acceptance.commands 的逐字符签字）、后台进程生命周期与回收、重试上限、与 relay 认领锁/接力锁的衔接。开工前先记 DECISIONS（减法问）。
-- [ ] T049 抢救后自动拉起备用模型接力（rescue 的 takeover 之后自动派发，不再依赖编排会话手动拉起）
-  验收: test:scripts/smoke-rescue-autolaunch.mjs
-  备注: T048 只交付「接力单 + 可派发的接力提示词」，由编排会话或人用 harness 原生手段换模型拉起。自动化需先决定命令执行面与后台进程生命周期；本任务为登记项，开工前须先记 DECISIONS。
+  备注: T048 只交付「接力单 + 可派发的接力提示词」,由编排会话或人用 harness 原生手段换模型拉起。自动化需先决定:命令执行面(信任边界,参考 acceptance.commands 的逐字符签字)、后台进程生命周期与回收、重试上限、以及与 relay 认领锁/接力锁的衔接。开工前先记 DECISIONS(减法问:能否复用 acceptance 白名单与 harness 原生 Agent 能力)。本条合并了原 T049 登记项(同一件事,勿重复成立)。
 - [ ] T050 ZCode 完整对话抢救（只读 ~/.zcode/cli/db/db.sqlite 的 message/part 行，默认关闭、manifest.rescue.sources 显式开启）
   验收: test:scripts/smoke-rescue-zcode-db.mjs
   备注: 实测 ZCode 失败子代理只留 metadata.json + 错误文本，持久对话在 SQLite（message/part 两表，data.error 带 code=model_rate_limited/statusCode=429）。读该库需人类授权；实现须只读打开（node:sqlite readOnly）并在不可用时降级。
