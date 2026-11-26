@@ -14,14 +14,17 @@
 (空——认领后由 relay_claim 移入;认领锁在 .relay/claims/,TTL 4 小时,崩溃会话的认领到期自动可接管)
 
 ## 待办
-- [ ] T064 推送 main + 打 tag v2.1.0 + 建 GitHub Release,并等三矩阵 CI 全绿
-  验收: git push origin main && git tag -a v2.1.0 -m 'v2.1.0' && git push origin v2.1.0
-  备注: CHANGELOG 已定版 [2.1.0] - 2026-11-26,package.json/plugin.json 均为 2.1.0。推送后需观察 Node 22/24/26 三矩阵 CI(.github/workflows/ci.yml),三绿后在 GitHub 建 v2.1.0 Release(正文引用 docs/04-test/10、11、12 三份审计报告与本轮 T061–T063 修复)。出隔断确认:本机只有 Node 26,三矩阵必须靠 CI。
+- [ ] T065 无待办 — 仓库已收拢至 v2.1.0,新工作需先与人类定义任务
+  验收: npm test && ./verify
+  备注: v2.1.0 已发布(远端 main 同步,三矩阵 CI 全绿,GitHub Release 已建)。worktree 与 relay 分支已全部清理,registry 为空。R12 已通过归档降到 96 行/8 条。仓库当前无待办;下一个会话可直接 relay_session_start 查看状态,若要开新工作先与人类定义任务。
 
 ## 已冻结
   冻结任务 T030:发布 npm — 决策冻结,不执行(见 DECISIONS 2026-11-18 Tier 2);原发布面已移除,分发改为 git clone / Agent Plugins / GitHub Release。冻结任务不进入 session_start 派发;解冻需先在 DECISIONS 记录新决定并恢复为 [ ] 任务行。
 
 ## 已完成
+- [x] T064 推送 main + 打 tag v2.1.0 + 建 GitHub Release,并等三矩阵 CI 全绿  (2026-11-27)
+  验收: git push origin main && git tag -a v2.1.0 -m 'v2.1.0' && git push origin v2.1.0
+  备注: CHANGELOG 已定版 [2.1.0] - 2026-11-26,package.json/plugin.json 均为 2.1.0。推送后需观察 Node 22/24/26 三矩阵 CI(.github/workflows/ci.yml),三绿后在 GitHub 建 v2.1.0 Release(正文引用 docs/04-test/10、11、12 三份审计报告与本轮 T061–T063 修复)。出隔断确认:本机只有 Node 26,三矩阵必须靠 CI。
 - [x] T060 发布 v2.1.0：三矩阵 CI 验证 + CHANGELOG 定版 + tag + GitHub Release  (2026-11-26)
   验收: npm test && ./verify
   备注: T052–T058 的功能与第二轮审计修复均已合并到 main 并通过本机 26 套测试(1056 断言)。发布前需人工决定:版本号是否维持 2.1.0、CHANGELOG 是否把本轮修复并入同一版本、是否推送并观察 Node 22/24/26 三矩阵 CI(本机只有 Node 26,CI 未覆盖当前 HEAD)。tag/Release 属人工授权动作。排在 T061 之后:带着 D8 的文档/工具矛盾发版不体面。

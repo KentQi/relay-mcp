@@ -1,5 +1,14 @@
 # 会话日志(最新在上)
 
+## 2026-11-27 00:12 | model=hungerg-free | task=T064 完成
+- 摘要: T064 收尾发布后的清理与状态收拢。(1) 核实 T064 验收四项已全部达成:未推送提交 0、tag v2.1.0 指向 HEAD(ae4af52)、GitHub Release 已发布(非 draft)、CI 三矩阵 22/24/26 全 success——该任务本是上一轮 next 字段自动生成的重复登记,据实关闭而非空跑。(2) worktree 清理:11 个任务 worktree 全部删除(先手工移除 T048/T061 里 relay_sync 遗留的 *.relay-bak-* 备份,它们是唯一让 cleanup 判定不干净的 ignored 内容),registry 清空为 worktrees:[],空的 .relay/worktrees/ 目录一并移除。(3) 分支清理:15 个 relay/* 分支逐个确认 ahead=0 后用 git branch -d 安全删除(T031–T034、T048、T050–T054、T058–T063);git worktree list 现只剩主工作树。(4) R12 的 LOG 边界超限(156 行 > 150)用 relay_archive_log 归档 7 条历史条目到 docs/archive/LOG-2026-09-11.md,活跃区降到 96 行/8 条,指针保留且归档只移动不删除。(5) 清理后 verify 全绿 PASS 10/WARN 0/ERROR 0,R10 正确识别「分支已合并删除」并给 PASS 带注记,npm test 26 套 1104 断言通过。仓库现已收拢到 v2.1.0 且无残留分支/worktree。
+- 事实(v2): mode=single | 文件 0 | ± +0/-0 | base=- | sha=- | branch=main || 验收: 通过 | verify: PASS 11·WARN 0·ERROR 0 | 耗时: 103s
+- 负结果: relay_session_end 的 next 字段会生成新任务行:发布完成后若把「推送+tag+Release」写进 next,下一轮会拿到一个已经做完的重复任务;外向动作完成后应收尾成「无待办」而不是留给下一棒
+- 负结果: worktree 清理会保留含 ignored 本地内容的目录:relay_sync 每次重投影入口都会生成 *.relay-bak-* 备份(已在 .gitignore 基线),它们会让 cleanup 判定「不干净」而保留;确认无价值后先手工删备份再重跑 cleanup
+- 负结果: git branch -d 是删除已合并分支的安全闸:全部 15 个 relay/* 分支 ahead=0 才批量删除,-d 会在未合并时拒绝而不是强删
+- 负结果: R10 能正确识别「分支已合并但已删除」:完成提交仍在当前分支历史时给 PASS 并带注记,不需要保留分支来维持事实对账
+- 留给下一个: v2.1.0 已发布(远端 main 同步,三矩阵 CI 全绿,GitHub Release 已建)。worktree 与 relay 分支已全部清理,registry 为空。R12 已通过归档降到 96 行/8 条。仓库当前无待办;下一个会话可直接 relay_session_start 查看状态,若要开新工作先与人类定义任务。
+
 ## 2026-11-26 22:55 | model=hungerg-free | task=T060 完成
 - 摘要: T060 完成发布前可做的全部代码面工作:CHANGELOG 从 [Unreleased] 定版为 [2.1.0] - 2026-11-26,并把本轮全部实质修复写进 Fixed(T061–T063) 段——重点是三条安全/正确性修复:验收门 NODE_TEST_CONTEXT 绕过(relay 跑在 node --test 里时嵌套 runner 跳过执行并 exit 0,失败/伪装测试文件反而变绿,整道 H-A 防线失效)、提交消息锚点被 80 字上限截断导致 R10 反查失败、以及 done_tasks[] 的三条 fail-open;另含旧接力单 harness 兼容回归、快照密钥扫描文件名旁路、dispatch 状态卡死、report 锁释放顺序。规模段同步为真实数字(smoke 124、rescue 174、sqlite 27、autolaunch 53、budget 37;npm test 26 套 1104 断言)。版本号三方一致(package.json 2.1.0、plugin.json 2.1.0、CHANGELOG [2.1.0] - 2026-11-26)。verify 双根全绿(R3 11 个 md 合规、R11 无密钥),npm test 26 套 1104 断言通过。未执行(需人工授权的外向动作):git push、打 tag v2.1.0、建 GitHub Release、观察 Node 22/24/26 三矩阵 CI。本机只有 Node 26,矩阵验证必须靠 CI。
 - 事实(v2): mode=managed | 文件 1 | ± +10/-3 | base=3fa1539eba7f23bfbecda963c9b6cdd95b6e1b75 | sha=af2c779db0e326579b64a7d53d729d8aa1058631 | branch=relay/T060 || 验收: 通过 | verify: PASS 15·WARN 0·ERROR 0 | 耗时: 92s
@@ -94,65 +103,5 @@
 - 负结果: manifest 只能存 JSON,函数无法序列化:自定义描述符必须支持**声明式纯数据**形态(kind + fieldMap),否则用户根本无法在自己的项目里注册新 harness。
 - 负结果: 测试夹具不应依赖环境变量(RELAY_RESCUE_HOME)注入来源:那会让核心保留一条绕过 manifest 的配置通道,违反「配置面只在 manifest」铁律。改用 manifest.rescue.sources 后,测试与真实用法一致。
 - 留给下一个: T048 只交付「接力单 + 可派发的接力提示词」。自动化需先决定:命令执行面(信任边界,参考 acceptance.commands 的逐字符签字)、后台进程生命周期与回收、重试上限、以及与 relay 认领锁/接力锁的衔接。开工前先记 DECISIONS(减法问)。注意 T058 已确立「核心不为任何具体 harness 开发」,该任务同样不得绑定特定 harness 的 CLI 或启动方式。对应任务 T051。ZCode SQLite 抢救为 T050(需人类授权,且应实现为**声明式描述符的一种**,而不是核心特例)。
-
-## 2026-11-26 01:03 | model=zcode-deepseek-t054 | task=T054 完成
-- 摘要: 本次会话在同一分支上完成 T054–T057 四个审计修复任务（同批文件，避免反复重置 worktree）。T054(#5 协议写入旁路)：takeover 写 TASKS.md 从裸 writeFileAtomic 改为 writeProtocolFile(内置 scanSecrets 密钥闸 + expectedHash 内容 CAS + fencing)，并加 RELAY_TEST_EXTERNAL_TASKS_WRITE 钩子验证并发手改不被覆盖；密钥型 agentId 进入标题时现在会被拒且 TASKS 逐字节不变。T055(#4 #8 #9 #13)：修正 manifest.rescue.sources/maxAgeDays 读取层级（此前恒 undefined，7 天窗口变 NaN 导致年龄过滤完全失效）；快照失败原因 snapshotNote 落盘并在 capture/show 区分「无改动」与「失败(原因)」；commit-tree 补 gitIdentityArgs 兜底；快照密钥防护改 fail-closed（status 失败即拒绝快照）+ 对暂存内容跑 scanSecrets（此前只看文件名）；快照根改用被救子代理的 cwd 而非调用者的 executionRoot。T056(#6 #7 #10 #14)：report 改用 takeover 时存下的真实 token 释放接力锁（此前空 token 必然 no-op 再按 holder 名手工 unlink，绕过 fencing）；takeover 的每条提前 return 与 state 写盘失败都释放接力锁（此前泄漏 240 分钟且卡片仍显示待接力）；拒收 `<你的模型标识>` 占位符（与 relay_claim 同口径，此前 sameHolder adopt 会让互斥失效）；drop 加持有者守卫 + 符号链接防线（此前可删掉正在接力的卡与唯一快照 ref）。T057(#15 + Notes)：修 ttl_hours 默认值事实错误（真实来源是 manifest.worktree.ttlHours）与 relay_recall 的 status " " 约定；CHANGELOG/CONTRACT 的 T049→T051 漂移；CONTRACT 配置面补 manifest.rescue；package.json/plugin.json 同步升 2.1.0（描述写 15 工具而版本仍是已发布的 2.0.0）。另修一个由测试暴露的真实缺陷：接续链 chainPrev 仅按毫秒级 createdAt 排序，同毫秒两卡会随机错指/为空，改为 (createdAt, id) 复合键。rescue 套件 126 断言全绿（连跑 8 次 + 全量 3 次稳定），npm test 24 套全绿，verify 双根全绿。
-- 事实(v2): mode=managed | 文件 7 | ± +312/-53 | base=bbea28c466e05031d2defe686acef6003d022355 | sha=0e7a544f1ae0ec1ccb6de47e1b8089a9c463e734 | branch=relay/T054 || 验收: 通过 | verify: PASS 15·WARN 0·ERROR 0 | 耗时: 51s
-- worktree: branch=relay/T054; sha=0e7a544f1ae0ec1ccb6de47e1b8089a9c463e734; 已验收,未合并(是否合并由人工决定)
-- 负结果: rescue 的 TASKS 写入必须走 writeProtocolFile,而不是「自己实现一个 fencing 回调」:fencing 只保证锁归属,不含密钥闸与内容 CAS。审计用「agentId 带 sk-ant」复现了密钥直入 git 历史。
-- 负结果: 快照的密钥防护不能只看文件名:仓库早就有内容级 scanSecrets(R11 在用),但快照路径从未调用。且 status 失败时把排除列表当空等于全放行——必须 fail-closed。
-- 负结果: 接力锁的释放必须用 takeover 时拿到的 token;空 token 调 releaseFileLock 是必然 no-op,此时再按 holder 名 unlink 就绕过了 fencing(同名 model 可删他人活锁)。
-- 负结果: 接续链排序不能只用毫秒级 createdAt:同毫秒两张卡会随机取错,必须用 (createdAt, id) 复合键。这个缺陷是测试偶发失败(1/3 概率)暴露的,单跑不易复现。
-- 负结果: worktree 的 baseSha 会被 registry 缓存:合并上一个任务后重新 claim 仍基于旧 main,必须手动 git reset --hard 到最新 main 才能拿到前序修复。
-- 负结果: 测试不要依赖前面测试段留下的锁状态:同签名告警改用独立仓库夹具后从偶发失败变为确定性通过。
-- 留给下一个: T048 只交付「接力单 + 可派发的接力提示词」。自动化需先决定:命令执行面(信任边界,参考 acceptance.commands 的逐字符签字)、后台进程生命周期与回收、重试上限、以及与 relay 认领锁/接力锁的衔接。开工前先记 DECISIONS(减法问)。对应任务 T051。ZCode 完整对话抢救为 T050(需人类授权只读 SQLite)。
-
-## 2026-11-26 00:38 | model=zcode-deepseek-t053 | task=T053 完成
-- 摘要: T053 修复审计 #3 的中断分类双向错判，先红后绿。(a) 旧实现只看「最后一条记录是否 assistant+tool_use」判悬空，导致子代理死在「tool_result 已落盘、下一轮 assistant 未开口」时被判 complete、不可抢救——恰是本工具的核心场景。改为在解析器里维护 pendingToolUse 集合（发 tool_use 时加入、收到 tool_result 时按 tool_use_id 删除），悬空判定 = 集合非空；evidence 报出未配对数量与末条记录类型。(b) 旧实现只要历史出现过一次 is_error 就判 error，把正常跑完的代理也列为可抢救并登记假接管任务。改为：只有「最后一条记录本身就是那个 is_error 的 tool_result、模型之后没再开口」才算停因（stoppedAfterToolError）；历史报错仅作为正常完成时的说明性证据，不改判类别。顺带修掉一个真实缺陷：新增参数漏进 classifyFailure 解构导致解析器抛 ReferenceError，而 catch 把它吞成 transcriptOk:false（所有卡片被误标「转录损坏」）——这正好证明了审计对「异常被静默吞掉」的担忧。新增 6c 测试段（5 条断言 + 4 份定向夹具：末条 assistant 悬空、末条 user-result 但有未配对、历史报错后正常收尾、正常完成）。rescue 套件 99/0，npm test 24 套全绿。
-- 事实(v2): mode=managed | 文件 2 | ± +275/-43 | base=e5229208534e9b334422843329b763e273f04eb5 | sha=4ef6c05a4571af01df4ee74d36277422afe40e11 | branch=relay/T053 || 验收: 通过 | verify: PASS 15·WARN 0·ERROR 0 | 耗时: 66s
-- worktree: branch=relay/T053; sha=4ef6c05a4571af01df4ee74d36277422afe40e11; 已验收,未合并(是否合并由人工决定)
-- 负结果: 解析器的 `catch { parsed = null }` 会把任何异常静默降级为 transcriptOk:false —— 新增字段漏进 classifyFailure 解构时,全部卡片被误标「转录损坏」而毫无报错。定位时必须临时把 catch 改成打印 stack。
-- 负结果: 「末尾相邻」不能只看 lastRecordKind === 'user-result'(tool_result 之后就会设成它);必须同时检查最后一条记录本身是否含 is_error 的 tool_result,否则正常收尾的 end_turn 也会被误判为停因。
-- 负结果: worktree 的 baseSha 会被 registry 缓存:合并了上一个任务后重新 claim,T053 仍基于旧 main(e522920),必须手动 git reset --hard 到最新 main 才能拿到 T052 的修复。后续任务合并后应同步清理 registry 记录或手动重置。
-- 留给下一个: 见报告 #5。rescue.mjs 的 takeover 用裸 writeFileAtomic 写 TASKS.md,违反 util.mjs「TASKS/LOG 只能经由 writeProtocolFile 落盘」。后果:(1) 无 scanSecrets 闸 → 密钥样式串可进 git 历史,且此后每次 relay_claim/session_end 都会被 ProtocolSecretError 锁死;(2) 无 expectedHash 内容 CAS → 读改写之间的人工改动被静默覆盖。改用 writeProtocolFile(controlRoot,'TASKS.md',text,{token:repoLock.token,lockLabel:'仓库写锁',expectedHash:sha256Hex(tasksRaw)})。补「密钥串被拒」「并发手改不被覆盖」用例。对应任务 T054。
-
-## 2026-11-26 00:29 | model=zcode-deepseek-t052 | task=T052 完成
-- 摘要: T052 修复审计确认的 4 条信任边界缺陷，全部先红后绿。#1 单一真相源：从 state.json 删除 prompt/lastNarrative/classification 三个可派生字段（它们绕过 sha256 校验、构成第二真相源），改为每次读取时从**已校验**的 transcript 重新派生；loadTranscript 的 `if (state.sha256 && …)` 改成空哈希 fail-closed。renderCard/actTakeover/actShow 全部改为接收 derived 参数，chainWarn 也从上一棒已校验 transcript 派生。#2 围栏逃逸：新增 neutralizeFence，把 payload 里的三反引号转义为 `\`\`\`，fence() 统一走它——不可信文本无法再自行闭合围栏把注入推到指令位。#11 命令脱敏：三处命令出口（卡片「跑过的命令」、view=commands、接力提示词）与 edits[].path 全部过 redactSecrets，此前它们是唯一未脱敏的 transcript 派生字段。#12 agentId 净化：写 TASKS 前对 agentId 做控制字符→空格 + 折叠空白 + 截断（与 session.mjs 对 model/task 的口径一致），换行不再能伪造任务行。顺带删掉审计点名的 3 处假绿断言（恒真的三元、对未创建 ref 的检查、被 if 包住永不执行的死分支）。新增 6b 信任边界测试段（16 条断言，含 ZCode metadata.json 的 agentId 注入夹具）。npm test 24 套全绿、verify 双根 12P+4P 全绿。
-- 事实(v2): mode=managed | 文件 2 | ± +164/-35 | base=de146a754eaf4c70ec90c02ec33179a45d52371a | sha=1a47ad43c46a9717b1bec87511fa9b6119d31cb8 | branch=relay/T052 || 验收: 通过 | verify: PASS 16·WARN 0·ERROR 0 | 耗时: 69s
-- worktree: branch=relay/T052; sha=1a47ad43c46a9717b1bec87511fa9b6119d31cb8; 已验收,未合并(是否合并由人工决定)
-- 负结果: state.json 里存的 prompt/classification 是「自指校验」：期望哈希就存在同一份未受保护的文件里，任何能写该目录的进程同时改 transcript 与 state.sha256 即可通过；而哈希为空时旧代码 `if (state.sha256 && …)` 会静默跳过整道检查。正确做法是不落盘可派生字段 + 空哈希 fail-closed。
-- 负结果: 围栏转义不能只做「标记成对」检查：转义前后三反引号计数都是偶数，必须逐行扫描「是否处于围栏内」再判断注入文本的位置。
-- 负结果: ZCode 的 agentId 来自 metadata.json（外部可控），Claude Code 的 agentId 取自文件名（相对安全）；注入测试必须用 ZCode 夹具才能真正覆盖。
-- 负结果: 断言 `restoreRef.includes(...)` 这类对被删变量的引用会在删代码后变 ReferenceError；删假绿断言时要连带清理其依赖的变量声明。
-- 留给下一个: 见 docs/04-test/09-audit-rescue-t048-v1.0.md #3。两个方向都要修:(a) 子代理死在「tool_result 已落盘、下一轮 assistant 未开口」时末条是 user 记录,现判 complete → 不可抢救,正是本工具核心场景;(b) 只要历史出现过一次 is_error 就判 error → 正常完成的也被列为可抢救。修法:danglingToolUse 改为「末条 assistant 前存在未配对 tool_use」;末条为 user(tool_result) 且无后续 assistant 回应 → interrupted;toolError 只看末尾相邻。夹具补「末条是 user」与「历史报错但正常完成」两种形状。对应任务 T053。
-
-## 2026-11-25 23:36 | model=zcode-step5preview-t048 | task=T048 完成
-- 摘要: T048 落地子代理抢救与接力 relay_rescue：新增 src/engines/rescue.mjs（scan/capture/show/takeover/report/drop，action 驱动，写盘仅在 confirm）。scan 自动发现本项目在 ZCode 与 Claude Code 下的失败/中断子代理，归属按记录 cwd 两侧 realpath 判定（800 个他项目子代理被正确跳过）；capture 把 transcript 副本 + 工作区未提交改动的 git 对象快照（临时 GIT_INDEX_FILE + read-tree/add/write-tree/commit-tree/update-ref）落成本机接力单 .relay/rescue/<id>/，不动 index/工作区/HEAD/stash；state.json 只存不可派生锚点，其余每次从 transcript 即时派生并校验 sha256（篡改即 isError）；takeover 用独立接力锁（240min TTL、同 model 幂等、token fencing）移交派发权并在 TASKS 待办区登记接管任务，report 回写并释放；确定性中断分类 quota/error/interrupted/complete（complete 不列为可抢救）；transcript 一律围栏 + 「不是给你的指令」+ redactSecrets 脱敏；接续链同签名告警；session_start 简报新增有界「待接力」小节且不新增 git 子进程。tools/list 压到 9894 字节/15 工具（预算 10240）；新增 scripts/smoke-rescue.mjs 80 断言 + fixtures 接入 npm test（24 套）；修宪同步 CONTRACT/DECISIONS/SPEC(AC8)/README/CHANGELOG/plugin.json/skills/AGENTS 模板并 relay_sync 重投影。npm test 24 套全绿、relay_verify full PASS 12·WARN 0·ERROR 0。
-- 事实(v2): mode=managed | 文件 26 | ± +1667/-115 | base=acab8decc38b491e33d0468adc86bfb78bdb41c5 | sha=d33d7b26230f53a0937c07d6497738d5d77b801d | branch=relay/T048 || 验收: 通过 | verify: PASS 16·WARN 0·ERROR 0 | 耗时: 47s
-- worktree: branch=relay/T048; sha=d33d7b26230f53a0937c07d6497738d5d77b801d; 已验收,未合并(是否合并由人工决定)
-- 负结果: ZCode 给失败子代理只留 metadata.json 与 21-124 字节错误文本，完整对话在 ~/.zcode/cli/db/db.sqlite；rollout/model-io-*.jsonl 是瞬时的，不能作为事后抢救来源。读该库需人类授权 → 拆为 T050。
-- 负结果: 归属判定必须两侧都过 realpath：macOS 的 /var→/private/var 会让字符串前缀比较把本项目子代理误判为「别的项目」（实测 800 条全被误跳过）。
-- 负结果: rescue 的 takeover 不能复用 relay 认领锁：派发权与认领权是两件事，混成一把锁会让崩溃的接力者永久占住任务。
-- 负结果: 接力单不能入库：transcript 含本机路径与潜在敏感内容，且 .relay/** 是受保护路径，不补 .gitignore 基线会让下一次出场被护栏拦死。
-- 负结果: 新增工具必然击穿 tools/list 的 10 KiB 预算（实测余量仅 63 字节）：必须同时压缩低频描述；smoke-compat 钉住的词（PRESERVED/worktree/.gitignore/migration/ignored/two commits）不能删。
-- 负结果: 不要用 git stash 保存现场：会改变工作区且 stash 是全局栈，并发会话互相干扰。正确做法是临时 index + commit-tree 到 refs/relay/rescue/<id>。
-- 留给下一个: T048 只交付「接力单 + 可派发的接力提示词」。自动化需先决定命令执行面（信任边界，参考 acceptance.commands 的逐字符签字）、后台进程生命周期与回收、重试上限、与 relay 认领锁/接力锁的衔接。开工前先记 DECISIONS（减法问）。
-
-## 2026-11-18 16:45 | model=claude-fable-release-20261118 | task=T037 完成
-- 摘要: T037 发布 v2.0.0：package.json / plugin.json 版本同步 2.0.0；CHANGELOG 将 Unreleased 定版为 [2.0.0] - 2026-11-18，Breaking 段记录 Node >=22、npm 冻结、归档收窄与迁移指引，Fixed 段汇总 T038–T047 的多专家审计修复；npm test 23 套全绿、./verify 0 ERROR、relay_doctor 健康。tag / push / GitHub Release 由本会话随后执行。
-- 事实(v2): mode=single | 文件 3 | ± +12/-3 | base=- | sha=- | branch=main || 验收: 通过 | verify: PASS 12·WARN 0·ERROR 0 | 耗时: 45s
-- 负结果: 发布 tag 必须打在 session_end 的完成提交上：先完成控制面提交，再在 main 上打 annotated tag 并推送，否则 Release 会指向旧提交。
-- 负结果: private:true 不等于打包边界；发布前必须用 npm pack --dry-run 复核 files 白名单，本次实测 51 文件/164KB 且无协议状态。
-
-## 2026-11-18 16:41 | model=claude-fable-fix-20261118 | task=T047 完成
-- 摘要: T047 让 T030 冻结态与 DECISIONS 一致：从待办区移除 `[ ] T030` 任务行，新增「已冻结」分区（缩进备注，不参与任务行解析与 session_start 派发），保留冻结决定与分发方式说明；解冻需先在 DECISIONS 记录新决定并恢复任务行。
-- 事实(v2): mode=single | 文件 0 | ± +0/-0 | base=- | sha=- | branch=main || 验收: 通过 | verify: PASS 12·WARN 0·ERROR 0 | 耗时: 47s
-- 负结果: 冻结任务不能继续以 [ ] 留在待办：session_start 只按任务行解析，会把冻结项当可执行任务派发；必须移出任务行（冻结分区用缩进备注），靠 DECISIONS 保留决定。
-
-## 2026-11-18 16:39 | model=claude-fable-fix-20261118 | task=T046 完成
-- 摘要: T046 处置事实行手工校正：在 DECISIONS 记录 T035（7→6）与 T040（10→9）两次校正的事实、依据与影响，根因收敛为 single 模式写入侧从 porcelain 状态行派生文件数、与提交侧 numstat 在归档/重命名场景差 1（T039 已修 rename/大小写，剩余「多计 1」需改为暂存区 numstat 派生），并明确「事实行不得手改」无法机检、只能靠 session_end 流程与记录约束。
-- 事实(v2): mode=single | 文件 1 | ± +9/-0 | base=- | sha=- | branch=main || 验收: 通过 | verify: PASS 12·WARN 0·ERROR 0 | 耗时: 47s
-- 负结果: 「事实行不得手改」无法机检：手改为正确值与引擎输出不可区分，R10 只能发现数值不一致；只能靠流程约束与 DECISIONS 记录。
-- 负结果: single 模式从 porcelain 状态行派生文件数会与提交侧 numstat 在归档/重命名场景差 1；根治需改为从暂存区 numstat 派生。
 
 <!-- relay:log-archive: docs/archive/LOG-2026-09-11.md -->
