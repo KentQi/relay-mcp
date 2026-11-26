@@ -17,14 +17,14 @@
 - [ ] T051 抢救后自动拉起备用模型接力（不再依赖编排会话手动拉起）
   验收: test:scripts/smoke-rescue-autolaunch.mjs
   备注: T048 只交付「接力单 + 可派发的接力提示词」,由编排会话或人用 harness 原生手段换模型拉起。自动化需先决定:命令执行面(信任边界,参考 acceptance.commands 的逐字符签字)、后台进程生命周期与回收、重试上限、以及与 relay 认领锁/接力锁的衔接。开工前先记 DECISIONS(减法问:能否复用 acceptance 白名单与 harness 原生 Agent 能力)。本条合并了原 T049 登记项(同一件事,勿重复成立)。
-- [ ] T050 ZCode 完整对话抢救（只读 ~/.zcode/cli/db/db.sqlite 的 message/part 行，默认关闭、manifest.rescue.sources 显式开启）
-  验收: test:scripts/smoke-rescue-zcode-db.mjs
-  备注: 实测 ZCode 失败子代理只留 metadata.json + 错误文本，持久对话在 SQLite（message/part 两表，data.error 带 code=model_rate_limited/statusCode=429）。读该库需人类授权；实现须只读打开（node:sqlite readOnly）并在不可用时降级。注意 data.error 是嵌套 JSON **字符串**，需二次 JSON.parse（json_extract 单层取不到 code/statusCode，实测 193 条全空）。
 
 ## 已冻结
   冻结任务 T030:发布 npm — 决策冻结,不执行(见 DECISIONS 2026-11-18 Tier 2);原发布面已移除,分发改为 git clone / Agent Plugins / GitHub Release。冻结任务不进入 session_start 派发;解冻需先在 DECISIONS 记录新决定并恢复为 [ ] 任务行。
 
 ## 已完成
+- [x] T050 ZCode 完整对话抢救（只读 ~/.zcode/cli/db/db.sqlite 的 message/part 行，默认关闭、manifest.rescue.sources 显式开启）  (2026-11-26)
+  验收: test:scripts/smoke-rescue-zcode-db.mjs
+  备注: 实测 ZCode 失败子代理只留 metadata.json + 错误文本，持久对话在 SQLite（message/part 两表，data.error 带 code=model_rate_limited/statusCode=429）。读该库需人类授权；实现须只读打开（node:sqlite readOnly）并在不可用时降级。注意 data.error 是嵌套 JSON **字符串**，需二次 JSON.parse（json_extract 单层取不到 code/statusCode，实测 193 条全空）。
 - [x] T058 抢救引擎通用化：抽出格式描述符层，核心零 harness 耦合（默认不扫任何目录，来源全显式）  (2026-11-26)
   验收: test:scripts/smoke-rescue.mjs
   备注: 现状 src/engines/rescue.mjs 有 31 处具体 harness 耦合（ZCode 的目录布局/字段、Claude Code 的 projects 编码/subagents 布局/记录格式解析），这会阻碍通用性。目标：核心只懂「格式描述符」（目录布局、文件命名、字段映射、记录类型），具体 harness 变成声明式描述（内置两个作为等价的参考描述，用户可加自己的）；引擎里不再出现任何 harness 专有名；默认不扫描任何 home 目录，来源一律显式（source 路径或 manifest.rescue.sources）。新增 harness = 加一份描述，不改核心代码。
