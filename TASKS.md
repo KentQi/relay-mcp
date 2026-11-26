@@ -25,6 +25,9 @@
   冻结任务 T030:发布 npm — 决策冻结,不执行(见 DECISIONS 2026-11-18 Tier 2);原发布面已移除,分发改为 git clone / Agent Plugins / GitHub Release。冻结任务不进入 session_start 派发;解冻需先在 DECISIONS 记录新决定并恢复为 [ ] 任务行。
 
 ## 已完成
+- [x] T058 抢救引擎通用化：抽出格式描述符层，核心零 harness 耦合（默认不扫任何目录，来源全显式）  (2026-11-26)
+  验收: test:scripts/smoke-rescue.mjs
+  备注: 现状 src/engines/rescue.mjs 有 31 处具体 harness 耦合（ZCode 的目录布局/字段、Claude Code 的 projects 编码/subagents 布局/记录格式解析），这会阻碍通用性。目标：核心只懂「格式描述符」（目录布局、文件命名、字段映射、记录类型），具体 harness 变成声明式描述（内置两个作为等价的参考描述，用户可加自己的）；引擎里不再出现任何 harness 专有名；默认不扫描任何 home 目录，来源一律显式（source 路径或 manifest.rescue.sources）。新增 harness = 加一份描述，不改核心代码。
 - [x] T057 审计修复·测试有效性与文档漂移（审计 #15 + Notes）  (2026-11-26)
   验收: test:scripts/smoke-rescue.mjs
   备注: 与 T054–T056 同一分支完成（0e7a544）。ttl_hours 默认值改为「manifest.worktree.ttlHours,else 24」；relay_recall status " " 约定恢复；CHANGELOG/CONTRACT 的 T049→T051；CONTRACT 配置面补 manifest.rescue；package.json/plugin.json 同步 2.1.0；新增 6e 契约一致性断言。
