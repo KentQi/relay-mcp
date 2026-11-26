@@ -108,6 +108,25 @@ const isFenced = (text, needles) => needles.every((n) => {
   return (before.match(/```/g) || []).length % 2 === 1;
 });
 
+
+// 把「来源根」声明进仓库的 manifest.rescue.sources(声明式来源),可选注册自定义描述符。
+// 这与生产用法一致:核心不扫描任何默认目录,来源一律显式声明。
+const setRescueSources = (root, sources, profiles = null) => {
+  const p = path.join(root, '.relay', 'manifest.json');
+  const mf = JSON.parse(readFileSync(p, 'utf8'));
+  mf.rescue = { ...(mf.rescue || {}), sources };
+  if (profiles) mf.rescue.profiles = profiles;
+  writeFileSync(p, JSON.stringify(mf, null, 2) + '\n');
+};
+
+// 声明式描述符(**纯 JSON**,与真实用户在 manifest.rescue.profiles 里写的一致)。
+// 目录形状:元数据型 = <root>/<parent>/<agent>/metadata.json;
+//           记录型   = <root>/.../agent-*.jsonl(深度不限)。
+const PROFILE_SPECS = [
+  { id: 'zc-ref', title: 'reference: layered metadata dirs', kind: 'json-metadata', metaFile: 'metadata.json' },
+  { id: 'cc-ref', title: 'reference: jsonl transcripts', kind: 'jsonl-message', filePattern: '^agent-(.+)\\.jsonl$' },
+];
+
 try {
   // ==========================================================================
   console.log('\n== 1. scan:dry-run 只读,不改任何文件 ==');
@@ -117,9 +136,13 @@ try {
   writeFileSync(path.join(repo, 'f.txt'), 'base\n');
   git(repo, 'add', '-A');
   git(repo, '-c', 'user.name=t', '-c', 'user.email=t@l', 'commit', '-qm', 'base work');
-  copyFixture('zcode', path.join(HOME, '.zcode', 'cli'), { ROOT: repo });
-  copyFixture('claude', path.join(HOME, '.claude'), { ROOT: repo });
-  const ENV = { RELAY_RESCUE_HOME: HOME };
+  copyFixture('zcode', path.join(HOME, 'zc'), { ROOT: repo });
+  copyFixture('claude', path.join(HOME, 'cc'), { ROOT: repo });
+  setRescueSources(repo, [
+    { profile: 'zc-ref', root: path.join(HOME, 'zc', 'agents') },
+    { profile: 'cc-ref', root: path.join(HOME, 'cc', 'projects') },
+  ], PROFILE_SPECS);
+  const ENV = {};
   {
     const before = treeSnapshot(repo);
     const r = cli(repo, 'relay_rescue', {}, ENV);
@@ -146,7 +169,7 @@ try {
   // ==========================================================================
   console.log('\n== 2. capture:快照可复原 + 接力单不进 git ==');
   // ==========================================================================
-  const transcriptSrc = path.join(HOME, '.claude', 'projects', '-repo', 'sess-fixture-b',
+  const transcriptSrc = path.join(HOME, 'cc', 'projects', '-repo', 'sess-fixture-b',
     'subagents', 'agent-claude-ok.jsonl');
   let capturedId = '';
   {
@@ -274,15 +297,15 @@ try {
   console.log('\n== 5. 接续链与同签名告警 ==');
   // ==========================================================================
   {
-    const first = rescueIds(repo)[0];
-    ok(rescueIds(repo).length >= 1, '第 5 段开始时已有接力单可作前棒', rescueIds(repo).join(','));
+    const beforeIds = rescueIds(repo);
+    ok(beforeIds.length >= 1, '第 5 段开始时已有接力单可作前棒', beforeIds.join(','));
     const r = cli(repo, 'relay_rescue', {
       action: 'capture', id: 'claude-ok', confirm: true, note: '接续第一棒',
     }, ENV);
     ok(r.status === 0, '再次 capture 生成新接力单(新一棒)', out(r).slice(0, 400));
-    const ids = rescueIds(repo);
-    const newest = ids.find((x) => x !== first) || '';
-    ok(!!newest, '第二条接力单存在', ids.join(','));
+    const afterIds = rescueIds(repo);
+    const newest = afterIds.find((x) => !beforeIds.includes(x)) || '';
+    ok(!!newest, '新接力单已生成(capture 前不存在)', afterIds.join(','));
     // 接续链落在 state.previousId 上。注意 capture 会取「最近创建的一张」作为前棒——
     // 所以断言的是「指向某张真实存在的其它卡」,而不是特指某一张。
     const newestState = JSON.parse(read(path.join(rescueRootOf(repo), newest, 'state.json')));
@@ -304,7 +327,8 @@ try {
         message: { role: 'assistant', model: 'm', stop_reason: 'error', content: [{ type: 'text', text: 'API Error: 429 rate_limit' }] } },
     ];
     writeFileSync(path.join(sub9, 'agent-cw1.jsonl'), mkQuota('cw1').map((r) => JSON.stringify(r)).join('\n') + '\n');
-    const e9 = { RELAY_RESCUE_HOME: H9 };
+    setRescueSources(chainRepo, [{ profile: 'cc-ref', root: path.join(H9, '.claude', 'projects') }], PROFILE_SPECS);
+    const e9 = {};
     ok(cli(chainRepo, 'relay_rescue', { action: 'capture', id: 'cw1', confirm: true }, e9).status === 0, '链夹具第 1 棒 capture', '');
     writeFileSync(path.join(sub9, 'agent-cw2.jsonl'), mkQuota('cw2').map((r) => JSON.stringify(r)).join('\n') + '\n');
     ok(cli(chainRepo, 'relay_rescue', { action: 'capture', id: 'cw2', confirm: true }, e9).status === 0, '链夹具第 2 棒 capture', '');
@@ -323,8 +347,9 @@ try {
   {
     const dir = freshRepo('tamper', '篡改夹具');
     const H2 = mkTmp('home2');
-    copyFixture('claude', path.join(H2, '.claude'), { ROOT: dir });
-    const e2 = { RELAY_RESCUE_HOME: H2 };
+    copyFixture('claude', path.join(H2, 'cc'), { ROOT: dir });
+    setRescueSources(dir, [{ profile: 'cc-ref', root: path.join(H2, 'cc', 'projects') }], PROFILE_SPECS);
+    const e2 = {};
     const c = cli(dir, 'relay_rescue', { action: 'capture', id: 'claude-ok', confirm: true }, e2);
     ok(c.status === 0, '篡改夹具 capture 成功', out(c).slice(0, 300));
     const id = rescueIds(dir)[0];
@@ -335,11 +360,18 @@ try {
 
     // 超大 transcript:超过上限 → 拒绝且不半写
     const H3 = mkTmp('home3');
-    copyFixture('claude', path.join(H3, '.claude'), { ROOT: dir });
-    const big = path.join(H3, '.claude', 'projects', '-repo', 'sess-fixture-b', 'subagents', 'agent-claude-ok.jsonl');
+    copyFixture('claude', path.join(H3, 'cc'), { ROOT: dir });
+    const big = path.join(H3, 'cc', 'projects', '-repo', 'sess-fixture-b', 'subagents', 'agent-claude-ok.jsonl');
     writeFileSync(big, `${read(big)}${'x'.repeat(200 * 1024)}\n`);
     const beforeIds = rescueIds(dir).length;
-    const bigR = cli(dir, 'relay_rescue', { action: 'capture', id: 'claude-ok', confirm: true }, { RELAY_RESCUE_HOME: H3, RELAY_RESCUE_MAX_BYTES: '1024' });
+    // 上限改由 manifest.rescue.maxBytes 控制(不再用环境变量)
+    {
+      const mp = path.join(dir, '.relay', 'manifest.json');
+      const mfPrev = JSON.parse(read(mp));
+      const mfSmall = { ...mfPrev, rescue: { ...(mfPrev.rescue || {}), maxBytes: 1024 } };
+      writeFileSync(mp, JSON.stringify(mfSmall, null, 2) + '\n');
+    }
+    const bigR = cli(dir, 'relay_rescue', { action: 'capture', id: 'claude-ok', confirm: true }, e2);
     ok(bigR.status === 1 && /过大|maxBytes|上限/.test(out(bigR)), '超过 maxBytes 的 transcript 被拒绝', out(bigR).slice(0, 400));
     ok(rescueIds(dir).length === beforeIds, '拒绝时没有半写接力单', rescueIds(dir).join(','));
 
@@ -349,8 +381,11 @@ try {
     const outside = mkTmp('outside');
     symlinkSync(outside, path.join(symRepo, '.relay'));
     const H4 = mkTmp('home4');
-    copyFixture('claude', path.join(H4, '.claude'), { ROOT: symRepo });
-    const symR = cli(symRepo, 'relay_rescue', { action: 'capture', id: 'claude-ok', confirm: true }, { RELAY_RESCUE_HOME: H4 });
+    copyFixture('claude', path.join(H4, 'cc'), { ROOT: symRepo });
+    // .relay 已是符号链接,manifest 不可写 → 用显式 source 走同一条写入路径
+    const e4 = {};
+    const symSrc = path.join(H4, 'cc', 'projects', '-repo', 'sess-fixture-b', 'subagents', 'agent-claude-ok.jsonl');
+    const symR = cli(symRepo, 'relay_rescue', { action: 'capture', id: 'claude-ok', source: symSrc, confirm: true }, e4);
     ok(symR.status === 1 && /符号链接/.test(out(symR)), '.relay 为符号链接时拒绝 capture', out(symR).slice(0, 400));
     ok(!existsSync(path.join(outside, 'rescue')), '未向符号链接目标写入任何东西');
 
@@ -386,7 +421,8 @@ try {
         message: { role: 'assistant', model: 'm', stop_reason: 'error', content: [{ type: 'text', text: 'API Error: 429 rate_limit' }] } },
     ];
     writeFileSync(path.join(sub, 'agent-edge-a.jsonl'), recs.map((r) => JSON.stringify(r)).join('\n') + '\n');
-    const e5 = { RELAY_RESCUE_HOME: H5 };
+    setRescueSources(edgeRepo, [{ profile: 'cc-ref', root: path.join(H5, '.claude', 'projects') }], PROFILE_SPECS);
+    const e5 = {};
 
     const cap = cli(edgeRepo, 'relay_rescue', { action: 'capture', id: 'edge-a', confirm: true }, e5);
     ok(cap.status === 0, '边界夹具 capture 成功', out(cap).slice(0, 400));
@@ -450,7 +486,11 @@ try {
       parentSessionId: 'sess-evil',
       profileId: 'general-purpose',
     }));
-    const e6 = { RELAY_RESCUE_HOME: H6 };
+    setRescueSources(edgeRepo, [
+      { profile: 'cc-ref', root: path.join(H5, '.claude', 'projects') },
+      { profile: 'zc-ref', root: path.join(H6, '.zcode', 'cli', 'agents') },
+    ], PROFILE_SPECS);
+    const e6 = {};
     const capEvil = cli(edgeRepo, 'relay_rescue', { action: 'capture', id: EVIL_ID, confirm: true }, e6);
     const ids6 = rescueIds(edgeRepo).filter((x) => x !== eid);
     ok(capEvil.status === 0 && ids6.length > 0, '含换行的 agentId 可被 capture(随后必须被净化)', out(capEvil).slice(0, 400));
@@ -476,7 +516,8 @@ try {
       writeFileSync(path.join(d, `agent-${agentId}.jsonl`), recs.map((r) => JSON.stringify(r)).join('\n') + '\n');
     };
     const clsRepo = freshRepo('classify', '分类夹具');
-    const e7 = { RELAY_RESCUE_HOME: H7 };
+    setRescueSources(clsRepo, [{ profile: 'cc-ref', root: path.join(H7, '.claude', 'projects') }], PROFILE_SPECS);
+    const e7 = {};
     const U = (sess, agent, content) => ({ type: 'user', uuid: 'u1', sessionId: sess, agentId: agent, isSidechain: true, cwd: clsRepo, timestamp: '2026-11-26T01:00:00.000Z', message: { role: 'user', content } });
     const A = (sess, agent, uuid, parentUuid, content, stopReason) => ({ type: 'assistant', uuid, parentUuid, sessionId: sess, agentId: agent, isSidechain: true, cwd: clsRepo, timestamp: '2026-11-26T01:00:10.000Z', message: { role: 'assistant', model: 'm', stop_reason: stopReason, content } });
     const RES = (sess, agent, parentUuid, toolUseId, isErr) => ({ type: 'user', uuid: 'r-' + toolUseId, parentUuid, sessionId: sess, agentId: agent, isSidechain: true, cwd: clsRepo, timestamp: '2026-11-26T01:00:05.000Z', message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: toolUseId, ...(isErr ? { is_error: true } : {}), content: 'ok' }] } });
@@ -544,7 +585,8 @@ try {
       createdAt: '2026-11-26T02:00:00.000Z', updatedAt: '2026-11-26T02:00:10.000Z',
       parentSessionId: 'sess-k', profileId: 'general-purpose',
     }));
-    const e8 = { RELAY_RESCUE_HOME: H8 };
+    setRescueSources(prRepo, [{ profile: 'zc-ref', root: path.join(H8, '.zcode', 'cli', 'agents') }], PROFILE_SPECS);
+    const e8 = {};
     const capK = cli(prRepo, 'relay_rescue', { action: 'capture', id: `leak-${KEYISH}`, confirm: true }, e8);
     ok(capK.status === 0, '密钥型 agentId 的卡片可 capture(此时尚未写 TASKS)', out(capK).slice(0, 300));
     const kid = rescueIds(prRepo)[0];
@@ -576,6 +618,50 @@ try {
     ok(/内容 CAS|被其他写入者|冲突/.test(out(tkCas)), '读改写之间被外部修改 → CAS 拦下(审计 #5)', out(tkCas).slice(0, 500));
     ok(/EXTERNAL-WRITE|外部写入/.test(afterCas), '外部改动被保留,没有被静默覆盖', afterCas.slice(0, 300));
     ok(afterCas !== beforeCas, '确认外部写入确实生效');
+  }
+
+  // ==========================================================================
+  console.log('\n== 6f. 架构:核心零 harness 耦合 ==');
+  // ==========================================================================
+  {
+    const { readFileSync: rf } = await import('node:fs');
+    const core = rf(path.join(RELAY, 'src', 'engines', 'rescue.mjs'), 'utf8');
+    // 核心引擎里不得出现任何具体 harness 的名字(注释也算)
+    const harnessNames = /zcode|claude|codex|gemini|cursor|windsurf|opencode|kimi|qwen|deepseek|glm/i;
+    const hits = core.split('\n')
+      .map((l, i) => ({ n: i + 1, l }))
+      .filter(({ l }) => harnessNames.test(l));
+    ok(hits.length === 0, '核心引擎零 harness 专有名(注释也算)', hits.slice(0, 3).map((h) => `${h.n}:${h.l.trim().slice(0, 60)}`).join(' | '));
+
+    // 核心不得硬编码 home 目录下的具体安装路径
+    ok(!/['"]\.(zcode|claude|codex|gemini)['"]/.test(core), '核心不硬编码任何 harness 的安装目录');
+
+    // 描述符层存在且导出注册表
+    const prof = rf(path.join(RELAY, 'src', 'engines', 'rescue-profiles.mjs'), 'utf8');
+    ok(/export const BUILTIN_PROFILES/.test(prof), '描述符层导出 BUILTIN_PROFILES 注册表');
+    ok(/export const profileFromSpec/.test(prof), '支持声明式描述符(manifest 纯 JSON)');
+    ok(/export const resolveAllProfiles/.test(prof), '内置 + 声明式 + 函数式描述符可合并');
+
+    // 默认不扫描:manifest 没有 rescue.sources 时,scan 不产生任何候选(不扫 home)
+    const noSrc = freshRepo('nosrc', '无来源声明');
+    const noSrcOut = out(cli(noSrc, 'relay_rescue', { action: 'scan' }, {}));
+    ok(/可抢救\(0\)/.test(noSrcOut), '未声明 sources 时默认不扫描任何目录', noSrcOut.slice(0, 400));
+
+    // 新 harness = 加一份描述(不碰核心代码)
+    const newH = mkTmp('new-harness');
+    const nhRoot = path.join(newH, 'agents');
+    const nhSub = path.join(nhRoot, 'p1', 'a1');
+    mkdirSync(nhSub, { recursive: true });
+    writeFileSync(path.join(nhSub, 'metadata.json'), JSON.stringify({
+      agentId: 'nh-1', cwd: noSrc, status: 'failed', error: 'quota exceeded (429)',
+      prompt: '新 harness 的任务', createdAt: '2026-11-26T04:00:00.000Z', updatedAt: '2026-11-26T04:00:10.000Z',
+    }));
+    setRescueSources(noSrc, [{ profile: 'brand-new', root: nhRoot }], [{
+      id: 'brand-new', title: 'a harness relay has never heard of', kind: 'json-metadata', metaFile: 'metadata.json',
+    }]);
+    const nhOut = out(cli(noSrc, 'relay_rescue', { action: 'scan' }, {}));
+    ok(/nh-1/.test(nhOut), '新 harness 仅靠一份描述即可被发现(不改核心代码)', nhOut.slice(0, 600));
+    ok(/额度\/限流|quota/i.test(nhOut), '新 harness 的停因被正确分类', nhOut.slice(0, 600));
   }
 
   // ==========================================================================

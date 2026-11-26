@@ -23,6 +23,7 @@ import {
 } from '../util.mjs';
 import { ensureGitignoreBaseline, readManifestConfig } from '../config.mjs';
 import { resolveRelayRoots } from './worktree.mjs';
+import { resolveAllProfiles } from './rescue-profiles.mjs';
 import { TASK_LINE_RE } from './verify.mjs';
 
 const RESCUE_REL = '.relay/rescue';
@@ -74,259 +75,166 @@ const ownedByRoots = async (roots, cwd) => {
   return false;
 };
 
-/* ---------------------------- 来源适配器 ---------------------------- */
+/* ---------------------------- 来源描述符驱动 ---------------------------- */
+// 核心不认识任何具体 harness:所有「在哪找、怎么读」都由 rescue-profiles.mjs 的描述符声明。
+// 新增 harness = 加一份描述符,不改本文件。
 
-// ZCode:~/.zcode/cli/agents/<父会话>/agent_<id>/metadata.json
-// 已取样确认的字段:cwd / workspaceRoot(归属)、prompt / description / profileId、
-// status(completed|failed|running|stopped)、error、createdAt / updatedAt / completedAt。
-const zcodeCandidates = async (home, cutoffMs) => {
-  const base = path.join(home, '.zcode', 'cli', 'agents');
-  const out = [];
-  let parents = [];
-  try { parents = await readdir(base, { withFileTypes: true }); } catch { return out; }
-  for (const p of parents) {
-    // 父会话目录名:真实 ZCode 用 sess_<uuid>;部分版本/harness 用 sess-<id>。两种都要认。
-    if (!p.isDirectory() || !/^sess[_-]/.test(p.name)) continue;
-    let agents = [];
-    try { agents = await readdir(path.join(base, p.name), { withFileTypes: true }); } catch { continue; }
-    for (const a of agents) {
-      if (!a.isDirectory() || !/^agent[_-]/.test(a.name)) continue;
-      const metaPath = path.join(base, p.name, a.name, 'metadata.json');
-      const raw = await readFileSafe(metaPath, null);
-      if (raw == null) continue;
-      let meta;
-      try { meta = JSON.parse(raw); } catch { continue; }
-      const updated = Date.parse(meta.completedAt || meta.updatedAt || meta.createdAt || '');
-      if (Number.isFinite(updated) && updated < cutoffMs) continue;
-      out.push({
-        harness: 'zcode',
-        sourcePath: metaPath,
-        agentId: meta.agentId || a.name.replace(/^agent[_-]/, ''),
-        parentSessionId: meta.parentSessionId || p.name,
-        cwd: meta.cwd || meta.workspaceRoot || '',
-        prompt: String(meta.prompt || ''),
-        description: String(meta.description || ''),
-        profile: String(meta.profileId || ''),
-        status: String(meta.status || ''),
-        error: String(meta.error || ''),
-        createdAt: meta.createdAt || '',
-        updatedAt: meta.updatedAt || meta.completedAt || '',
-        transcriptPath: '', // ZCode 的对话在 SQLite 里(T050),此处只有元数据
-        mtimeMs: Number.isFinite(updated) ? updated : 0,
-      });
-      if (out.length >= MAX_SCAN_CANDIDATES) return out;
-    }
+// 在给定 root 下用某描述符发现候选。归属由调用方在收集后统一判定。
+const discoverWithProfile = async (profile, root, { maxAgeMs }) => {
+  try {
+    return await profile.discover(root, { maxAgeMs });
+  } catch {
+    return [];
   }
-  return out;
 };
 
-// Claude Code:~/.claude/projects/<cwd 编码>/<会话>/subagents/agent-<id>.jsonl(完整对话)
-const claudeCandidates = async (home, cutoffMs) => {
-  const base = path.join(home, '.claude', 'projects');
-  const out = [];
-  let projects = [];
-  try { projects = await readdir(base, { withFileTypes: true }); } catch { return out; }
-  for (const proj of projects) {
-    if (!proj.isDirectory()) continue;
-    let sessions = [];
-    try { sessions = await readdir(path.join(base, proj.name), { withFileTypes: true }); } catch { continue; }
-    for (const sess of sessions) {
-      if (!sess.isDirectory()) continue;
-      const subDir = path.join(base, proj.name, sess.name, 'subagents');
-      let files = [];
-      try { files = await readdir(subDir); } catch { continue; }
-      for (const f of files) {
-        if (!/^agent-.*\.jsonl$/.test(f)) continue;
-        const p = path.join(subDir, f);
-        let st;
-        try { st = await fsStat(p); } catch { continue; }
-        if (st.mtimeMs < cutoffMs) continue;
-        out.push({ harness: 'claude', sourcePath: p, agentId: f.replace(/^agent-/, '').replace(/\.jsonl$/, ''), parentSessionId: sess.name, transcriptPath: p, mtimeMs: st.mtimeMs });
-        if (out.length >= MAX_SCAN_CANDIDATES) return out;
+// 显式 source(agent 目录 / transcript 文件 / metadata 文件)→ 统一候选。
+// 这里只用**结构特征**判断(有没有 metadata 文件、有没有 *.jsonl),不猜 harness。
+const resolveExplicitSource = async (abs, cfg) => {
+  const st = await fsStat(abs).catch(() => null);
+  if (!st) return { candidates: [], skipped: [], notes: [`来源路径不存在:${abs}`] };
+  const notes = ['来源由调用方显式指定(不校验归属,自行确认它属于本项目)'];
+
+  // (a) 文件:按扩展名交给「第一个能解析它」的描述符
+  if (st.isFile()) {
+    const base = path.basename(abs);
+    for (const profile of cfg.profiles) {
+      if (profile.transcriptless) continue;
+      if (base === (profile.metaFile || 'metadata.json')) continue;
+      // 只要不是元数据文件,就当成该描述符的 transcript 试解析
+      if (/\.(jsonl|json|ndjson|txt)$/i.test(base)) {
+        return {
+          candidates: [{
+            profile: profile.id,
+            sourcePath: abs,
+            transcriptPath: abs,
+            agentId: base.replace(/^agent[_-]/, '').replace(/\.[^.]+$/, ''),
+            parentSessionId: path.basename(path.dirname(path.dirname(abs))),
+          }],
+          skipped: [], notes,
+        };
       }
     }
+    return { candidates: [], skipped: [], notes: [`无法识别的来源文件类型:${base}`] };
   }
-  return out;
+
+  if (!st.isDirectory()) return { candidates: [], skipped: [], notes: [`来源不是文件也不是目录:${abs}`] };
+
+  // (b) 目录:优先找元数据描述符,其次找 transcript 描述符
+  for (const profile of cfg.profiles) {
+    if (!profile.transcriptless) continue;
+    const metaFile = profile.metaFile || 'metadata.json';
+    const raw = await readFileSafe(path.join(abs, metaFile), null);
+    if (raw == null) continue;
+    let meta;
+    try { meta = JSON.parse(raw); } catch { continue; }
+    const pick = (obj, spec) => {
+      const keys = Array.isArray(spec) ? spec : [spec];
+      for (const k of keys) if (typeof (obj || {})[k] === 'string' && obj[k]) return obj[k];
+      return '';
+    };
+    const cwd = pick(meta, ['cwd', 'workspaceRoot', 'dir', 'root']);
+    return {
+      candidates: [{
+        profile: profile.id,
+        sourcePath: path.join(abs, metaFile),
+        transcriptPath: '',
+        agentId: pick(meta, ['agentId', 'id']) || path.basename(abs),
+        parentSessionId: pick(meta, ['parentSessionId', 'parentId']) || path.basename(path.dirname(abs)),
+        cwd,
+        status: pick(meta, ['status', 'state']),
+        error: pick(meta, ['error', 'lastError']),
+        prompt: pick(meta, ['prompt', 'task', 'input']),
+        description: pick(meta, ['description', 'title']),
+        profile: pick(meta, ['profileId', 'agentType', 'kind']),
+        createdAt: pick(meta, ['createdAt', 'created']),
+        updatedAt: pick(meta, ['updatedAt', 'completedAt', 'updated']),
+      }],
+      skipped: [], notes,
+    };
+  }
+  // (c) 目录里散落的 transcript 文件
+  const files = (await readdir(abs).catch(() => [])).filter((f) => /\.(jsonl|ndjson)$/i.test(f));
+  if (files.length) {
+    const profile = cfg.profiles.find((x) => !x.transcriptless) || cfg.profiles[0];
+    return {
+      candidates: files.map((f) => ({
+        profile: profile.id,
+        sourcePath: path.join(abs, f),
+        transcriptPath: path.join(abs, f),
+        agentId: f.replace(/^agent[_-]/, '').replace(/\.[^.]+$/, ''),
+        parentSessionId: path.basename(path.dirname(abs)),
+      })),
+      skipped: [], notes,
+    };
+  }
+  return { candidates: [], skipped: [], notes: [`目录里没有元数据文件也没有 transcript:${abs}`] };
 };
 
-// 解析一份 Claude Code transcript → 结构化摘要(全部即时派生,不落盘)
-const parseClaudeTranscript = (text) => {
-  const lines = String(text ?? '').replace(/\r\n/g, '\n').split('\n').filter((l) => l.trim());
-  const records = [];
-  for (const line of lines) {
-    try { records.push(JSON.parse(line)); } catch { records.push(null); }
-  }
-  const good = records.filter((r) => r && typeof r === 'object');
-  const first = good[0] || {};
-  let prompt = '';
-  const edits = [];
-  const commands = [];
-  const todos = [];
-  let lastText = '';
-  let apiError = null;
-  let toolError = false;
-  // #3(审计):旧实现只看「最后一条记录是否 assistant+tool_use」判悬空,导致子代理死在
-  // 「tool_result 已落盘、下一轮 assistant 未开口」时被判 complete(不可抢救)——恰是本工具的核心场景。
-  // 改为显式跟踪:已发出但未收到 tool_result 的 tool_use id 集合,以及「末尾相邻」的工具错误。
-  const pendingToolUse = new Set();
-  let lastRecordKind = '';   // 'assistant' | 'user-result' | 'user-prompt' | 'api-error'
-  let trailingToolError = false;
-  for (const r of good) {
-    const msg = r.message && typeof r.message === 'object' ? r.message : null;
-    if (!msg) continue;
-    const content = msg.content;
-    if (r.type === 'user' && !prompt) {
-      if (typeof content === 'string') prompt = content;
-      else if (Array.isArray(content)) {
-        const t = content.find((c) => c && c.type === 'text');
-        if (t) prompt = String(t.text || '');
-      }
-    }
-    if (r.type === 'assistant' && Array.isArray(content)) {
-      lastRecordKind = 'assistant';
-      for (const c of content) {
-        if (!c || typeof c !== 'object') continue;
-        if (c.type === 'text' && c.text) {
-          lastText = String(c.text);
-          const tm = lastText.match(/计划[:：]([\s\S]*)$/);
-          if (tm) todos.push(tm[1].trim().slice(0, 300));
-        }
-        if (c.type === 'tool_use') {
-          const name = String(c.name || '');
-          const input = c.input && typeof c.input === 'object' ? c.input : {};
-          if (['Write', 'Edit', 'MultiEdit', 'NotebookEdit'].includes(name) && input.file_path) {
-            edits.push({ tool: name, path: String(input.file_path) });
-          }
-          if (name === 'Bash' && input.command) commands.push(String(input.command).slice(0, 400));
-          if (c.id) pendingToolUse.add(String(c.id));
-          if (name === 'TodoWrite' && Array.isArray(input.todos)) {
-            for (const t of input.todos) if (t && t.content) todos.push(String(t.content).slice(0, 200));
-          }
-        }
-      }
-    }
-    if (r.type === 'user' && Array.isArray(content)) {
-      let sawResult = false;
-      for (const c of content) {
-        if (!c || c.type !== 'tool_result') continue;
-        sawResult = true;
-        if (c.tool_use_id) pendingToolUse.delete(String(c.tool_use_id));
-        if (c.is_error === true) toolError = true; // 历史出现过错误(仅作证据,不改判类别)
-      }
-      if (sawResult) lastRecordKind = 'user-result';
-    }
-    if (r.isApiErrorMessage === true) {
-      lastRecordKind = 'api-error';
-      apiError = {
-        status: Number.isFinite(r.apiErrorStatus) ? r.apiErrorStatus : null,
-        code: String(r.error || (msg.error && msg.error) || ''),
-        text: typeof content === 'string' ? content : (Array.isArray(content) ? String((content[0] || {}).text || '') : ''),
-      };
-    }
-  }
-  const last = good[good.length - 1] || {};
-  const lastMsg = last.message && typeof last.message === 'object' ? last.message : {};
-  // #3(审计):悬空判定改为「存在已发出但未收到 tool_result 的 tool_use」。
-  // 这同时覆盖两种形态:(a) 末条就是 assistant(tool_use);(b) 末条是 user(tool_result) 但
-  // 仍有别的 tool_use 没被回应——旧实现只看末条记录,形态 (b) 会被误判 complete。
-  const danglingToolUse = pendingToolUse.size > 0
-    || (last.type === 'assistant'
-      && Array.isArray(lastMsg.content)
-      && lastMsg.content.some((c) => c && c.type === 'tool_use'));
-  // #3(审计):toolError 只有「末尾相邻」才算停因——即最后一条记录就是那个 is_error 的 tool_result、
-  // 模型之后没再开口。历史报错(之后有 assistant 继续)只是重试过程,不算失败。
-  const lastResultWasError = lastRecordKind === 'user-result'
-    && last.type === 'user'
-    && Array.isArray(lastMsg.content)
-    && lastMsg.content.some((c) => c && c.type === 'tool_result' && c.is_error === true);
-  const stoppedAfterToolError = toolError && lastResultWasError;
-  const classification = classifyFailure({
-    apiError, danglingToolUse, toolError, stoppedAfterToolError,
-    lastRecordKind, pendingToolUseCount: pendingToolUse.size,
-    apiErrorStatus: apiError && apiError.status,
-  });
-  return {
-    prompt,
-    cwd: first.cwd || '',
-    gitBranch: first.gitBranch || '',
-    sessionId: first.sessionId || '',
-    agentId: first.agentId || '',
-    edits,
-    commands,
-    todos: [...new Set(todos)].slice(0, SEQ_CAP),
-    narrative: lastText,
-    classification,
-    recordCount: good.length,
-  };
-};
-
-// 确定性中断分类(零 LLM):只看可机的标记,类别永远附证据。
+// 确定性分类(零 LLM)。**只接受描述符归一后的信号**,不含任何 harness 语义:
+//   signals = { pendingToolUse:Set, lastRecordKind, trailingToolError, anyToolError, apiError }
+//   或者纯元数据: { metaStatus, metaError }
+// 输出 { kind: quota|error|interrupted|complete, label, evidence[] }
 const QUOTA_HINTS = /rate.?limit|429|quota|usage limit|额度|上限|1302|1308|2056|2067|insufficient/i;
-const classifyFailure = ({ apiError, danglingToolUse, toolError, stoppedAfterToolError, lastRecordKind, pendingToolUseCount, apiErrorStatus, metaStatus, metaError, transcriptOk }) => {
+const classifyFromSignals = ({ signals, metaStatus, metaError, transcriptOk, hasTranscript } = {}) => {
   const evidence = [];
-  const status = Number.isFinite(apiErrorStatus) ? apiErrorStatus : null;
+  const apiError = signals && signals.apiError ? signals.apiError : null;
+  const status = apiError && Number.isFinite(apiError.status) ? apiError.status : null;
+
+  // 1) 额度/限流:最高优先级(它是最常见也最可操作的中断原因)
   if (apiError && QUOTA_HINTS.test(`${apiError.code} ${apiError.text}`)) {
-    return { kind: 'quota', label: '额度/限流', evidence: [`API 错误 429/rate_limit:${apiError.text.slice(0, 200)}`] };
+    return { kind: 'quota', label: '额度/限流', evidence: [`API 错误:${String(apiError.text).slice(0, 200)}`] };
   }
   if (status === 429) return { kind: 'quota', label: '额度/限流', evidence: ['HTTP 429'] };
+
+  // 2) 其他 API 错误
   if (apiError) {
-    return { kind: 'error', label: 'API 错误', evidence: [`${apiError.status || '?'} ${apiError.code || ''} ${apiError.text.slice(0, 200)}`] };
+    return { kind: 'error', label: 'API 错误', evidence: [`${apiError.status || '?'} ${apiError.code || ''} ${String(apiError.text).slice(0, 200)}`] };
   }
-  if (metaStatus) {
-    if (/^(failed|stopped)$/i.test(metaStatus)) {
-      if (QUOTA_HINTS.test(metaError || '')) {
-        return { kind: 'quota', label: '额度/限流', evidence: [`status=${metaStatus} error=${String(metaError).slice(0, 200)}`] };
+
+  // 3) 纯元数据来源(无 transcript 可判):按元数据状态
+  if (!hasTranscript || !signals) {
+    if (metaStatus) {
+      if (/^(failed|stopped)$/i.test(metaStatus)) {
+        if (QUOTA_HINTS.test(metaError || '')) {
+          return { kind: 'quota', label: '额度/限流', evidence: [`status=${metaStatus} error=${String(metaError).slice(0, 200)}`] };
+        }
+        return { kind: 'error', label: metaError ? '任务失败' : '任务失败(原因未细化)', evidence: [`status=${metaStatus}${metaError ? ` error=${String(metaError).slice(0, 200)}` : ''}`] };
       }
-      return {
-        kind: 'error',
-        label: metaError ? '任务失败' : '任务失败(原因未细化)',
-        evidence: [`status=${metaStatus}${metaError ? ` error=${String(metaError).slice(0, 200)}` : ''}`],
-      };
+      if (/^running$/i.test(metaStatus)) {
+        return { kind: 'interrupted', label: '疑似被杀(元数据仍为 running)', evidence: [`status=${metaStatus}`] };
+      }
     }
-    if (/^running$/i.test(metaStatus)) return { kind: 'interrupted', label: '疑似被杀(元数据仍为 running)', evidence: [`status=${metaStatus}`] };
+    return { kind: 'error', label: '状态未知(无 transcript 可判)', evidence: metaStatus ? [`status=${metaStatus}`] : [] };
   }
-  if (danglingToolUse) {
+
+  // 4) transcript 信号:悬空工具调用 = 半途被杀(含「tool_result 已落盘但下一轮未开口」)
+  if (signals.pendingToolUse && signals.pendingToolUse.size > 0) {
     return {
       kind: 'interrupted',
       label: '半途被杀(存在未配对的工具调用)',
-      evidence: [pendingToolUseCount > 0
-        ? `有 ${pendingToolUseCount} 个 tool_use 未收到 tool_result(末条记录类型 ${lastRecordKind || '未知'})`
-        : '末条 assistant 记录含未配对的 tool_use'],
+      evidence: [`有 ${signals.pendingToolUse.size} 个 tool_use 未收到 tool_result(末条记录类型 ${signals.lastRecordKind || '未知'})`],
     };
   }
-  if (transcriptOk === false) return { kind: 'error', label: '转录损坏', evidence };
-  // #3(审计):只有「末尾相邻」的工具报错才判停因;历史报错是正常重试的一部分,不算失败。
-  if (stoppedAfterToolError) return { kind: 'error', label: '工具报错后停止', evidence: ['末条 tool_result 是 is_error'] };
+  if (transcriptOk === false) return { kind: 'error', label: 'transcript 无法解析', evidence };
+
+  // 5) 末尾相邻的工具报错才是停因;历史报错只是重试过程
+  if (signals.trailingToolError && signals.lastRecordKind === 'user-result') {
+    return { kind: 'error', label: '工具报错后停止', evidence: ['末条 tool_result 是 is_error'] };
+  }
   return {
     kind: 'complete',
     label: '正常完成',
-    evidence: [toolError
+    evidence: [signals.anyToolError
       ? '末条 assistant 正常收尾(历史工具报错已被后续重试覆盖,不算停因)'
       : '末条 assistant 无悬空工具调用'],
   };
 };
 
-const parseZcodeMeta = (raw) => {
-  let meta = {};
-  try { meta = JSON.parse(raw) || {}; } catch { /* 损坏的元数据按空处理,分类会退化为未知 */ }
-  return {
-    prompt: String(meta.prompt || ''),
-    cwd: String(meta.cwd || meta.workspaceRoot || ''),
-    description: String(meta.description || ''),
-    profile: String(meta.profileId || ''),
-    agentId: String(meta.agentId || ''),
-    parentSessionId: String(meta.parentSessionId || ''),
-    status: String(meta.status || ''),
-    error: String(meta.error || ''),
-    createdAt: String(meta.createdAt || ''),
-    updatedAt: String(meta.updatedAt || meta.completedAt || ''),
-  };
-};
-
 // 把候选统一成「来源描述」:transcript 路径(可空)、摘要字段、分类、归属。
-const describeCandidate = async (cand, { controlRoot, maxBytes }) => {
+const describeCandidate = async (cand, { controlRoot, maxBytes, cfgProfiles }) => {
   const base = {
-    harness: cand.harness,
+    profile: String(cand.profile || ''),
     agentId: cand.agentId,
     parentSessionId: cand.parentSessionId,
     sourcePath: cand.sourcePath,
@@ -345,34 +253,39 @@ const describeCandidate = async (cand, { controlRoot, maxBytes }) => {
     parsed: null,
     notes: [],
   };
-  if (cand.harness === 'zcode') {
-    base.classification = classifyFailure({ metaStatus: cand.status, metaError: cand.error });
+  // 无 transcript 的描述符(纯元数据格式):直接按元数据判类,不伪造"转录损坏"。
+  if (!String(cand.transcriptPath || '')) {
+    base.classification = classifyFromSignals({ metaStatus: cand.status, metaError: cand.error, hasTranscript: false });
     base.prompt = String(cand.prompt || '');
-    if (!String(cand.transcriptPath || '')) base.notes.push('ZCode 的完整对话在 SQLite 内(T050),本次只抢救元数据 + 工作区现场');
+    base.notes.push('该来源只提供元数据(无可复制的对话),本次只抢救元数据 + 工作区现场');
+    return base;
+  }
+  let st;
+  try { st = await fsStat(cand.transcriptPath); } catch { st = null; }
+  if (!st) { base.notes.push('transcript 已不在磁盘上'); return base; }
+  if (st.size > maxBytes) {
+    base.notes.push(`transcript ${st.size} 字节超过上限 ${maxBytes}`);
+    base.oversize = true;
+    return base;
+  }
+  const buf = readFileSync(cand.transcriptPath);
+  base.bytes = buf.length;
+  base.sha256 = sha256Hex(buf.toString('utf8'));
+  base.transcriptPath = path.relative(controlRoot, cand.transcriptPath);
+  // 用**该候选的描述符**解析;描述符缺失或抛错才降级为 transcriptOk:false。
+  const profile = cfgProfiles.find((x) => x.id === (cand.profile || '')) || cfgProfiles.find((x) => !x.transcriptless);
+  let parsed = null;
+  try {
+    parsed = profile ? profile.parse(buf.toString('utf8')) : null;
+  } catch { parsed = null; }
+  base.parsed = parsed;
+  if (parsed) {
+    base.prompt = parsed.prompt;
+    base.cwd = base.cwd || parsed.cwd;
+    base.classification = classifyFromSignals({ signals: parsed.toolSignals, hasTranscript: true });
+    if (parsed.gitBranch) base.gitBranch = parsed.gitBranch;
   } else {
-    let st;
-    try { st = await fsStat(cand.transcriptPath); } catch { st = null; }
-    if (!st) { base.notes.push('transcript 已不在磁盘上'); return base; }
-    if (st.size > maxBytes) {
-      base.notes.push(`transcript ${st.size} 字节超过上限 ${maxBytes}`);
-      base.oversize = true;
-      return base;
-    }
-    const buf = readFileSync(cand.transcriptPath);
-    base.bytes = buf.length;
-    base.sha256 = sha256Hex(buf.toString('utf8'));
-    base.transcriptPath = path.relative(controlRoot, cand.transcriptPath);
-    let parsed = null;
-    try { parsed = parseClaudeTranscript(buf.toString('utf8')); } catch { parsed = null; }
-    base.parsed = parsed;
-    if (parsed) {
-      base.prompt = parsed.prompt;
-      base.cwd = base.cwd || parsed.cwd;
-      base.classification = parsed.classification;
-      if (parsed.gitBranch) base.gitBranch = parsed.gitBranch;
-    } else {
-      base.classification = classifyFailure({ transcriptOk: false });
-    }
+    base.classification = classifyFromSignals({ transcriptOk: false, hasTranscript: true });
   }
   return base;
 };
@@ -465,7 +378,7 @@ const listStates = async (controlRoot) => {
   return out;
 };
 // 读回 transcript 并复核 sha256:副本被改过就拒绝接力(fail-closed)。
-const loadTranscript = async (controlRoot, state) => {
+const loadTranscript = async (controlRoot, state, profiles) => {
   if (!state.transcriptFile) return { ok: true, parsed: null, raw: '' };
   const p = path.join(rescueDir(controlRoot, state.id), TRANSCRIPT_NAME);
   const raw = await readFileSafe(p, null);
@@ -480,8 +393,12 @@ const loadTranscript = async (controlRoot, state) => {
     return { ok: false, why: `transcript 副本与 state.json 记录的 sha256 不一致(期望 ${String(state.sha256).slice(0, 12)}… 实际 ${actual.slice(0, 12)}…)——接力单可能被改动过,拒绝基于它接力` };
   }
   let parsed = null;
-  if (state.harness === 'claude' || state.harness === 'explicit') {
-    try { parsed = parseClaudeTranscript(raw); } catch { parsed = null; }
+  const profile = profiles.find((x) => x.id === state.profile);
+  if (profile && typeof profile.parse === 'function') {
+    try { parsed = profile.parse(raw); } catch { parsed = null; }
+  } else if (state.profile) {
+    // 描述符未注册(自定义描述符被移除)→ 明确报告,不静默当成"无 transcript"
+    return { ok: false, why: `接力单记录的来源格式描述符 \`${state.profile}\` 未注册;请提供该描述符或在 manifest.rescue.profiles 中登记后重试` };
   }
   return { ok: true, parsed, raw };
 };
@@ -494,76 +411,75 @@ const stateSummaryLine = (st, cls = null) => {
 
 /* ---------------------------- 扫描(只读) ---------------------------- */
 
-const scanSources = async (controlRoot, executionRoot, cfg, { sourcePath = '', home } = {}) => {
-  // #4(审计):readManifestConfig 把这两个键放在 cfg.rescue.* 下;旧代码读顶层恒为 undefined,
-  // 导致 7 天窗口变成 NaN(cutoff=NaN,年龄过滤恒 false)且 sources 永不生效。
+const scanSources = async (controlRoot, executionRoot, cfg, { sourcePath = '' } = {}) => {
+  // #4(审计):配置键在 cfg.rescue.* 下(顶层读取会恒为 undefined → 7 天窗口变 NaN)。
   const maxAgeMs = cfg.rescue.maxAgeDays * 86400000;
-  const cutoff = Date.now() - maxAgeMs;
   const roots = [controlRoot, executionRoot].filter(Boolean);
   const ownedBy = (cwd) => ownedByRoots(roots, cwd);
+  const profiles = cfg.profiles;
 
+  // 显式 source:单个 agent 目录 / transcript 文件 / metadata 文件
   if (sourcePath) {
     const abs = path.resolve(sourcePath);
-    const st = await fsStat(abs).catch(() => null);
-    if (!st) return { candidates: [], skipped: [], notes: [`来源路径不存在:${abs}`] };
-    if (st.isDirectory()) {
-      // agent 目录:ZCode 的 metadata.json 或 Claude Code 的 *.jsonl
-      const meta = await readFileSafe(path.join(abs, 'metadata.json'), null);
-      if (meta != null) {
-        const m = parseZcodeMeta(meta);
-        const cand = {
-          harness: 'zcode', sourcePath: path.join(abs, 'metadata.json'), agentId: m.agentId, parentSessionId: m.parentSessionId,
-          cwd: m.cwd, prompt: m.prompt, description: m.description, profile: m.profile, status: m.status, error: m.error,
-          createdAt: m.createdAt, updatedAt: m.updatedAt,
-        };
-        const owned = await ownedBy(m.cwd);
-        return { candidates: owned ? [cand] : [], skipped: owned ? [] : [{ cand, why: `cwd 不在本项目:${m.cwd}` }], notes: [] };
-      }
-      const files = (await readdir(abs).catch(() => [])).filter((f) => /^agent-.*\.jsonl$/.test(f));
-      const cands = files.map((f) => ({ harness: 'claude', sourcePath: path.join(abs, f), transcriptPath: path.join(abs, f), agentId: f.replace(/^agent-/, '').replace(/\.jsonl$/, ''), parentSessionId: path.basename(path.dirname(path.dirname(abs))) }));
-      return { candidates: cands, skipped: [], notes: [] };
-    }
-    const harness = /metadata\.json$/.test(abs) ? 'zcode' : 'claude';
-    const cand = harness === 'zcode'
-      ? (() => {
-        const m = parseZcodeMeta(readFileSync(abs, 'utf8'));
-        return { harness, sourcePath: abs, agentId: m.agentId, parentSessionId: m.parentSessionId, cwd: m.cwd, prompt: m.prompt, description: m.description, profile: m.profile, status: m.status, error: m.error, createdAt: m.createdAt, updatedAt: m.updatedAt };
-      })()
-      : { harness, sourcePath: abs, transcriptPath: abs, agentId: path.basename(abs).replace(/^agent-/, '').replace(/\.jsonl$/, ''), parentSessionId: path.basename(path.dirname(path.dirname(abs))) };
-    return { candidates: [cand], skipped: [], notes: ['来源由调用方显式指定(不校验归属,自行确认它属于本项目)'] };
+    const res = await resolveExplicitSource(abs, cfg);
+    return res;
   }
 
+  // 声明式来源:manifest.rescue.sources 每条是 { profile?, root } 或裸路径字符串。
+  // **不做任何默认扫描**——核心不认识任何 harness 的安装位置。
   const configured = cfg.rescue.sources || [];
-  const zc = configured.length ? [] : await zcodeCandidates(home, cutoff);
-  const cc = configured.length ? [] : await claudeCandidates(home, cutoff);
-  let explicit = [];
-  for (const sp of configured) {
-    const r = await scanSources(controlRoot, executionRoot, cfg, { sourcePath: sp, home });
-    explicit = explicit.concat(r.candidates);
+  const all = [];
+  const notes = [];
+  for (const entry of configured) {
+    const spec = typeof entry === 'string' ? { root: entry } : (entry && typeof entry === 'object' ? entry : null);
+    if (!spec || !spec.root) continue;
+    const rootAbs = path.resolve(String(spec.root).replace(/^~(?=$|\/)/, process.env.HOME || process.env.USERPROFILE || '~'));
+    const candidates = spec.profile
+      ? (() => {
+        const p = profiles.find((x) => x.id === spec.profile);
+        return p ? [p] : [];
+      })()
+      : profiles;
+    let found = 0;
+    for (const profile of candidates) {
+      if (!profile || typeof profile.discover !== 'function') continue;
+      const got = await discoverWithProfile(profile, rootAbs, { maxAgeMs });
+      for (const c of got) { c.profile = c.profile || profile.id; all.push(c); found += 1; }
+      if (spec.profile) break; // 显式指定了描述符,不再用其它描述符试
+    }
+    if (!found) notes.push(`来源 ${rootAbs} 下未发现候选`);
   }
-  const all = [...zc, ...cc, ...explicit];
+
   const candidates = [];
   const skipped = [];
   for (const c of all) {
     const cwd = c.cwd || '';
     if (cwd && !(await ownedBy(cwd))) { skipped.push({ cand: c, why: `cwd 不在本项目:${cwd}` }); continue; }
-    if (!cwd && c.harness === 'zcode') { skipped.push({ cand: c, why: '元数据缺 cwd,无法判定归属' }); continue; }
     candidates.push(c);
   }
-  // Claude Code 候选的归属读自 transcript 首行(路径编码不可靠,以记录内 cwd 为准)
+  // 元数据里没有 cwd 的:从 transcript 首条记录补(记录内 cwd 才是权威)
   const kept = [];
   for (const c of candidates) {
-    if (c.harness === 'claude' && !c.cwd) {
-      const raw = await readFileSafe(c.transcriptPath, null);
-      let first = null;
-      try { first = raw ? JSON.parse(raw.split('\n')[0]) : null; } catch { first = null; }
-      const cwd = first && first.cwd ? String(first.cwd) : '';
+    if (!c.cwd && c.transcriptPath) {
+      const profile = profiles.find((x) => x.id === c.profile);
+      let cwd = '';
+      if (profile && typeof profile.parse === 'function') {
+        try {
+          const parsed = profile.parse(await readFileSafe(c.transcriptPath, '') || '');
+          cwd = parsed && parsed.cwd ? String(parsed.cwd) : '';
+        } catch { cwd = ''; }
+      }
       if (cwd && !(await ownedBy(cwd))) { skipped.push({ cand: c, why: `cwd 不在本项目:${cwd}` }); continue; }
       c.cwd = cwd;
     }
+    // 归属闸 fail-closed:既没有 cwd 也没有可解析的 transcript → 无法证明归属,跳过
+    if (!c.cwd) {
+      skipped.push({ cand: c, why: '缺 cwd 且无 transcript 可佐证归属' });
+      continue;
+    }
     kept.push(c);
   }
-  return { candidates: kept, skipped, notes: [] };
+  return { candidates: kept, skipped, notes };
 };
 
 /* ---------------------------- 命令与输出组装 ---------------------------- */
@@ -580,7 +496,7 @@ const renderScan = (controlRoot, described, states, notes, skipped) => {
   ];
   if (!rescuable.length) lines.push('- 无:来源目录下没有属于本项目的失败/中断子代理。');
   for (const d of rescuable) {
-    lines.push(`- \`${d.agentId}\` | ${d.harness} | ${d.classification.label} | ${d.profile || '-'} | ${d.bytes ? `${d.bytes}B` : '仅元数据'} | ${d.updatedAt || ''}`);
+    lines.push(`- \`${d.agentId}\` | ${d.profile || '-'} | ${d.classification.label} | ${d.profile || '-'} | ${d.bytes ? `${d.bytes}B` : '仅元数据'} | ${d.updatedAt || ''}`);
     const why = codePointClip(redactSecrets(d.description || d.prompt || '(无任务描述)').text, 160);
     if (why) lines.push(`  - 任务:${why}`);
     for (const e of d.classification.evidence.slice(0, 1)) {
@@ -590,7 +506,7 @@ const renderScan = (controlRoot, described, states, notes, skipped) => {
   }
   if (done.length) {
     lines.push('', `## 已正常完成(${done.length},不列为可抢救)`);
-    for (const d of done.slice(0, 5)) lines.push(`- \`${d.agentId}\` | ${d.harness} | ${d.updatedAt || ''}`);
+    for (const d of done.slice(0, 5)) lines.push(`- \`${d.agentId}\` | ${d.profile || '-'} | ${d.updatedAt || ''}`);
   }
   if (skipped.length) {
     lines.push('', `## 已跳过(${skipped.length})`);
@@ -621,7 +537,7 @@ const renderCard = (controlRoot, state, parsed, view, derived = {}) => {
     '',
     DATA_BANNER,
     '',
-    `- 来源:${state.harness}${state.agentId ? ` / \`${state.agentId}\`` : ''}`,
+    `- 来源:${state.profile}${state.agentId ? ` / \`${state.agentId}\`` : ''}`,
     `- 中断:${c.label || c.kind || '未知'}${c.kind ? `(${c.kind})` : ''}`,
     `- 捕获于:${state.createdAt || ''}${state.updatedAt ? ` / 更新于 ${state.updatedAt}` : ''}`,
     `- 工作区:${state.executionRoot || controlRoot}`,
@@ -647,8 +563,8 @@ const renderCard = (controlRoot, state, parsed, view, derived = {}) => {
     if (parsed.todos.length) {
       lines.push('', '它自己写的待办:', ...parsed.todos.map((t) => `- ${codePointClip(redactSecrets(t).text, 200)}`));
     }
-  } else if (state.harness === 'zcode') {
-    lines.push('- 该来源只有元数据:原始任务见下,对话过程在 ZCode 的 SQLite 内(见 T050)。');
+  } else if (state.transcriptFile === '') {
+    lines.push(`- 该来源只提供元数据(格式 \`${state.profile || '未知'}\`),没有可复制的对话;原始任务见下。`);
   } else {
     lines.push('- transcript 未解析或不可用。');
   }
@@ -709,17 +625,17 @@ const insertTodo = (tasksText, title, acceptance, notes) => {
 
 /* ---------------------------- 动作实现 ---------------------------- */
 
-const actScan = async ({ controlRoot, executionRoot, cfg, args, home }) => {
-  const { candidates, skipped, notes } = await scanSources(controlRoot, executionRoot, cfg, { home });
+const actScan = async ({ controlRoot, executionRoot, cfg }) => {
+  const { candidates, skipped, notes } = await scanSources(controlRoot, executionRoot, cfg, {});
   const described = [];
   for (const c of candidates) {
-    described.push(await describeCandidate(c, { controlRoot, maxBytes: cfg.rescue.maxBytes }));
+    described.push(await describeCandidate(c, { controlRoot, maxBytes: cfg.rescue.maxBytes, cfgProfiles: cfg.profiles }));
   }
   const states = await listStates(controlRoot);
   return textResult(renderScan(controlRoot, described, states, notes, skipped));
 };
 
-const actCapture = async ({ controlRoot, executionRoot, cfg, args, home }) => {
+const actCapture = async ({ controlRoot, executionRoot, cfg, args }) => {
   const wanted = String(args.id ?? '').trim();
   if (!wanted) {
     return fail('relay rescue — capture', 'capture 需要 `id`(scan 输出里的 agentId)。', ['', '修复:先跑 `relay_rescue`(scan)找到目标子代理,再按输出里的 id capture。']);
@@ -731,7 +647,7 @@ const actCapture = async ({ controlRoot, executionRoot, cfg, args, home }) => {
       `修复:确认目标无误后重跑并带 confirm:《{"root":"${controlRoot}","action":"capture","id":"${wanted}","confirm":true}》`,
     ]);
   }
-  const scanned = await scanSources(controlRoot, executionRoot, cfg, { sourcePath: args.source || '', home });
+  const scanned = await scanSources(controlRoot, executionRoot, cfg, { sourcePath: args.source || '' });
   const target = scanned.candidates.find((c) => c.agentId === wanted || c.sourcePath === wanted);
   if (!target) {
     const known = scanned.candidates.map((c) => c.agentId).filter(Boolean);
@@ -741,17 +657,17 @@ const actCapture = async ({ controlRoot, executionRoot, cfg, args, home }) => {
       '修复:先跑 scan 确认 id;若来源不在默认目录,传 `source`(agent 目录或 transcript 路径)。',
     ]);
   }
-  const described = await describeCandidate(target, { controlRoot, maxBytes: cfg.rescue.maxBytes });
+  const described = await describeCandidate(target, { controlRoot, maxBytes: cfg.rescue.maxBytes, cfgProfiles: cfg.profiles });
   if (described.oversize) {
     return fail('relay rescue — capture', `transcript 过大,拒绝抢救:${described.notes.join(';')}`, [
       '',
-      `修复:提高上限后再试(manifest.rescue.maxBytes 或环境变量 RELAY_RESCUE_MAX_BYTES,当前 ${cfg.rescue.maxBytes});或手工挑需要的片段。`,
+      `修复:提高 manifest.rescue.maxBytes 后重试(当前 ${cfg.rescue.maxBytes});或手工挑需要的片段。`,
     ]);
   }
   if (described.classification.kind === 'complete') {
     return fail('relay rescue — capture', '该子代理已正常完成,没有需要抢救的现场。', ['', '修复:若仍要保留它的结论,直接在会话里读取;或传 source 显式指向别的 transcript。']);
   }
-  // 只有元数据(如 ZCode)也允许抢救:transcript 副本缺省,接力单仍带原始任务 + 工作区现场。
+  // 只有元数据的来源也允许抢救:transcript 副本缺省,接力单仍带原始任务 + 工作区现场。
   // 这不是降级猜测——state.json 会显式记录 transcriptFile:'' ,卡片上写明「该来源只有元数据」。
 
   // 落盘前:目录链安全 + .gitignore 基线(.relay/rescue/ 必须被忽略,否则撞 .relay/** 护栏)
@@ -789,7 +705,7 @@ const actCapture = async ({ controlRoot, executionRoot, cfg, args, home }) => {
     id,
     createdAt: nowIso(),
     updatedAt: nowIso(),
-    harness: described.harness,
+    profile: described.profile,
     agentId: described.agentId,
     parentSessionId: described.parentSessionId,
     sourcePath: target.sourcePath,
@@ -823,7 +739,7 @@ const actCapture = async ({ controlRoot, executionRoot, cfg, args, home }) => {
   const lines = [
     `# 接力单已生成 — \`${id}\``,
     '',
-    `- 来源:${state.harness} / \`${state.agentId}\``,
+    `- 来源:${state.profile} / \`${state.agentId}\``,
     `- 中断:${described.classification.label}(${described.classification.kind})`,
     state.transcriptFile
       ? `- transcript:${state.bytes} 字节,sha256 ${state.sha256.slice(0, 12)}…`
@@ -847,25 +763,27 @@ const actCapture = async ({ controlRoot, executionRoot, cfg, args, home }) => {
   return textResult(lines.join('\n'));
 };
 
-const actShow = async ({ controlRoot, args }) => {
+const actShow = async ({ controlRoot, args, ctxProfiles }) => {
   const id = String(args.id ?? '').trim();
   if (!isSafeId(id)) return fail('relay rescue — show', `非法接力单 id:${JSON.stringify(id)}`, ['', '修复:用 scan 输出里的 `\`rs-...\`` 编号。']);
   const state = await readState(controlRoot, id);
   if (!state) return fail('relay rescue — show', `接力单 \`${id}\` 不存在。`, ['', '修复:先跑 scan 列出已落盘接力单。']);
-  const t = await loadTranscript(controlRoot, state);
+  const t = await loadTranscript(controlRoot, state, ctxProfiles);
   if (!t.ok) return fail('relay rescue — show', t.why, ['', '修复:重新 capture 一份干净副本;不要基于被改过的接力单继续。']);
   const view = String(args.view || 'card').toLowerCase();
   const derived = {
-    classification: t.parsed ? t.parsed.classification : (state.sourceStatus || state.sourceError
-      ? classifyFailure({ metaStatus: state.sourceStatus, metaError: state.sourceError })
-      : {}),
+    classification: t.parsed
+      ? classifyFromSignals({ signals: t.parsed.toolSignals, hasTranscript: true })
+      : (state.sourceStatus || state.sourceError
+        ? classifyFromSignals({ metaStatus: state.sourceStatus, metaError: state.sourceError, hasTranscript: false })
+        : {}),
     narrative: t.parsed ? t.parsed.narrative : '',
     prompt: t.parsed ? t.parsed.prompt : '',
   };
   return textResult(renderCard(controlRoot, state, t.parsed, view, derived));
 };
 
-const actTakeover = async ({ controlRoot, args }) => {
+const actTakeover = async ({ controlRoot, args, ctxProfiles }) => {
   const id = String(args.id ?? '').trim();
   const model = String(args.model ?? '').trim();
   if (!isSafeId(id)) return fail('relay rescue — takeover', `非法接力单 id:${JSON.stringify(id)}`);
@@ -875,7 +793,7 @@ const actTakeover = async ({ controlRoot, args }) => {
   // 且 second 会话因 sameHolder adopt 拿到 ok:true → 派发权互斥失效。与 relay_claim 同口径拒收。
   if (/[<>]/.test(model) || /你的模型|your model/i.test(model)) {
     return fail('relay rescue — takeover', `model="${model}" 是示例占位符,不能直接使用。`, [
-      '', '修复:把 model 替换为你的真实模型标识(如 "claude-a"、"glm-4.7")再 takeover。',
+      '', '修复:把 model 替换为你的真实模型标识(如 "agent-a"、"model-x")再 takeover。',
     ]);
   }
   if (args.confirm !== true) {
@@ -883,7 +801,7 @@ const actTakeover = async ({ controlRoot, args }) => {
   }
   const state = await readState(controlRoot, id);
   if (!state) return fail('relay rescue — takeover', `接力单 \`${id}\` 不存在。`);
-  const t = await loadTranscript(controlRoot, state);
+  const t = await loadTranscript(controlRoot, state, ctxProfiles);
   if (!t.ok) return fail('relay rescue — takeover', t.why, ['', '修复:重新 capture;不要基于被改过的接力单接力。']);
 
   // 接力锁:沿用认领锁协议(O_EXCL + 同 model 幂等 + 240min TTL 不心跳 + token fencing)
@@ -911,8 +829,8 @@ const actTakeover = async ({ controlRoot, args }) => {
 
   // #1(审计):分类从**已校验**的 transcript 重新派生(纯元数据卡退化为按 sourceStatus/Error 判)。
   const derivedClass = t.parsed
-    ? t.parsed.classification
-    : classifyFailure({ metaStatus: state.sourceStatus, metaError: state.sourceError });
+    ? classifyFromSignals({ signals: t.parsed.toolSignals, hasTranscript: true })
+    : classifyFromSignals({ metaStatus: state.sourceStatus, metaError: state.sourceError, hasTranscript: false });
 
   // 写 TASKS(仓库写锁 + CAS):重建一条可认领的任务,派发权与 relay 认领权解耦。
   let newTask = state.task || '';
@@ -983,10 +901,10 @@ const actTakeover = async ({ controlRoot, args }) => {
   const chainWarn = [];
   if (state.previousId) {
     const prevState = await readState(controlRoot, state.previousId);
-    const prevT = prevState ? await loadTranscript(controlRoot, prevState) : null;
+    const prevT = prevState ? await loadTranscript(controlRoot, prevState, ctxProfiles) : null;
     const prevClass = prevT && prevT.parsed
-      ? prevT.parsed.classification
-      : (prevState ? classifyFailure({ metaStatus: prevState.sourceStatus, metaError: prevState.sourceError }) : null);
+      ? classifyFromSignals({ signals: prevT.parsed.toolSignals, hasTranscript: true })
+      : (prevState ? classifyFromSignals({ metaStatus: prevState.sourceStatus, metaError: prevState.sourceError, hasTranscript: false }) : null);
     if (prevClass && prevClass.kind === derivedClass.kind) {
       chainWarn.push(`⚠ 同一失败签名第 2 棒:上一棒 \`${prevState.id}\` 也以「${prevClass.label}」结束——换额度池 / 降并发 / 拆小任务,不要原样重跑。`);
     }
@@ -1131,7 +1049,6 @@ const actDrop = async ({ controlRoot, args }) => {
 
 export const relayRescue = async (args = {}) => {
   const inputRoot = String(args.root || process.cwd());
-  const home = process.env.RELAY_RESCUE_HOME || process.env.HOME || process.env.USERPROFILE || '';
   const action = String(args.action || (args.id ? 'show' : 'scan')).toLowerCase();
   const allowed = ['scan', 'capture', 'show', 'takeover', 'report', 'drop'];
   if (!allowed.includes(action)) {
@@ -1148,14 +1065,18 @@ export const relayRescue = async (args = {}) => {
   const controlRoot = roots.controlRoot;
   const executionRoot = roots.executionRoot;
   const cfg = await readManifestConfig(controlRoot);
-  const envMax = Number(process.env.RELAY_RESCUE_MAX_BYTES);
-  if (Number.isFinite(envMax) && envMax > 0) cfg.rescue.maxBytes = Math.floor(envMax);
+  // 来源格式描述符:内置参考描述 + 项目/用户自定义描述符(manifest.rescue.profiles)。
+  // 核心不认识任何具体 harness;未声明 sources 时**不扫描任何目录**。
+  cfg.profiles = resolveAllProfiles({
+    specs: (cfg.rescue && cfg.rescue.profiles) || [],
+    fns: Array.isArray(args._profiles) ? args._profiles : [],
+  });
   if (start == null && action === 'scan') {
     return fail('relay rescue', `未找到 START.md,该目录尚未接入接力协议:${controlRoot}`, [
       '', '修复:0→1 用 `relay_init`;存量项目用 `relay_onboard`。',
     ]);
   }
-  const ctx = { controlRoot, executionRoot, cfg: { ...cfg, rescue: { ...cfg.rescue } }, args, home };
+  const ctx = { controlRoot, executionRoot, cfg: { ...cfg, rescue: { ...cfg.rescue }, profiles: cfg.profiles }, args, ctxProfiles: cfg.profiles };
   switch (action) {
     case 'scan': return actScan(ctx);
     case 'capture': return actCapture(ctx);

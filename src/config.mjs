@@ -41,7 +41,7 @@ export const KNOWN_NESTED_KEYS = Object.freeze({
   logBoundary: ['strict'],
   structure: ['strict'],
   acceptance: ['commands'],
-  rescue: ['sources', 'maxAgeDays', 'maxBytes'],
+  rescue: ['sources', 'maxAgeDays', 'maxBytes', 'profiles'],
 });
 
 // 收集 manifest 里的未知键(顶层 + 四个已知对象内)。纯函数,不做 I/O。
@@ -184,7 +184,14 @@ export const readManifestConfig = async (root, { manifest: preloaded } = {}) => 
     // 抢救(T048):来源适配器的目录、扫描窗口与单份 transcript 上限。
     // 缺省 = 内置 ZCode / Claude Code 适配器 + 7 天 + 8 MiB;显式 sources 时只扫这些目录。
     rescue: {
-      sources: strArr(m && m.rescue && m.rescue.sources),
+      // sources 每条可以是裸路径字符串,或 { profile?, root } 对象(声明式来源,默认空 = 不扫描)。
+      sources: Array.isArray(m && m.rescue && m.rescue.sources)
+        ? m.rescue.sources.filter((x) => typeof x === 'string' || (x && typeof x === 'object'))
+        : [],
+      // 自定义格式描述符(声明式;核心只依赖描述符接口,见 rescue-profiles.mjs)。
+      profiles: Array.isArray(m && m.rescue && m.rescue.profiles)
+        ? m.rescue.profiles.filter((x) => x && typeof x === 'object')
+        : [],
       maxAgeDays: m && m.rescue && Number.isFinite(m.rescue.maxAgeDays) && m.rescue.maxAgeDays > 0
         ? Math.floor(m.rescue.maxAgeDays) : DEFAULT_RESCUE_MAX_AGE_DAYS,
       maxBytes: m && m.rescue && Number.isFinite(m.rescue.maxBytes) && m.rescue.maxBytes > 0
