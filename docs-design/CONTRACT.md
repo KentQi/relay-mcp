@@ -116,7 +116,7 @@ export const startServer = async ({ onInit, onMethod }) => {
 | `relay_onboard` | `{root:string}` | 老项目接入:扫描→非破坏合并(备份不删除)→装核心件+verify+入口(W3) |
 | `relay_sync` | `{root:string}` | 重生成入口文件,报告漂移(W3) |
 | `relay_session_start` | `{root:string}` | 入场简报:读五件+对账 git+verify 快检+建议首个动作(W4) |
-| `relay_session_end` | `{root, model:string, summary:string, done_task:string?(如T003), blocked:string?, next:{title, acceptance:string, notes:string?}?, negative_results:string[]?}` | 出场:绿闸→更新 TASKS/LOG→git 提交(W4) |
+| `relay_session_end` | `{root, model:string, summary:string, done_task:string?(如T003), done_tasks:string[]?, blocked:string?, next:{title, acceptance:string, notes:string?}?, negative_results:string[]?}` | 出场:绿闸→更新 TASKS/LOG→git 提交(W4) |
 | `relay_verify` | `{root, full:bool?}` | 运行全部检查,返回逐条 pass/fail+修复指令(W4) |
 | `relay_restructure` | `{root, confirm:bool?}` | 老项目目录标准化:干跑出方案→confirm 执行(git mv+白名单修宪+DECISIONS/LOG/TASKS 记录)(restructure.mjs) |
 | `relay_claim` | `{root, task:string, model:string}` | 并行模式:认领任务,标注 model+时间(W4) |
@@ -457,3 +457,14 @@ export const startServer = async ({ onInit, onMethod }) => {
 - **SQLite 资源与配对**:`maxRows` 下推到 SQL `LIMIT maxRows+1`;tool_result 按终态(completed/error/failed)生成并对任意 output 类型安全序列化。
 - **扫描资源边界**:归属推断先 `stat`、再用有界前缀读 cwd;超大 transcript 不会在 `maxBytes` 检查前被整份读入内存(超限候选保留并给出明确失败)。
 - **兼容与清理**:旧接力单缺 `profile` 时按 `harness` 映射到内置描述符;显式 `source` 指向 `metadata.json` 按所在目录处理;`drop`/`edits` 统一用 `state.snapshotRoot`;`drop` 识别过期锁并真实覆盖符号链接防线。
+
+## 2026-11-26 T061 补充契约(多任务出场 + 自动拉起 prompt 脱敏)
+
+- **`done_tasks[]`**:`relay_session_end` 新增可选 `done_tasks: string[]`,用于「一个会话交付多个任务」。语义:
+  - 每个任务都会得到自己的 TASKS `[x]` 行、自己的认领锁释放、以及**独立的 LOG 完成条目**(标题 `task=T### 完成`)。
+  - 必须如此的原因:D8/R9 的取证只读 LOG **标题行**的 `task=` 字段(`DONE_TASK_RE = /^T\d+\s*完成$/`,`verify.mjs:305`),摘要正文里提到别的任务号**不构成证据**。这正是 T055–T057 缺口的根因。
+  - 每个额外任务都要各自通过它自己的 `验收:` 行——不能借主任务的测试蒙混。
+  - **仅单根模式**:受管 worktree 的成对证据是「一个任务 = 一条任务分支 + 一条 registry 记录」,多个任务无法在同一次出场里各自凑齐,因此 `managed` 下传 `done_tasks[]` 直接 isError 并说明原因。
+  - 非法输入(非数组、非 `T\d+` 形态)在任何写入之前拒收。
+- **autoLaunch prompt 脱敏**:注入 argv 的每个占位符变量(含 transcript 派生的 `prompt`)在替换前统一过 `redactSecrets`;argv 会出现在 `ps`/进程审计里,比 `.relay/rescue/` 更难清理。脱敏发生了几处会在 takeover 输出里显式报告(不静默改写注入内容)。
+- **机检**:`scripts/smoke.mjs` D5 段(9 断言)覆盖双任务出场、两个 `[x]`、两条独立完成条目、非法入参不写盘;`scripts/smoke-rescue-autolaunch.mjs` 第 9 段(9 断言)覆盖「prompt 含密钥时 argv / dispatch.json / dispatch.log 均无原文、非密钥部分保留」。

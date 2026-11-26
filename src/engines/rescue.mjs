@@ -74,14 +74,28 @@ const validateAutoLaunch = async (cfg, controlRoot, vars = {}) => {
   if (!cwdReal || !isInside(rootReal, cwdReal)) {
     return { ok: false, error: `rescue.autoLaunch.cwd 不存在或逃出仓库:${cwd}` };
   }
-  const allVars = { prompt: '', root: controlRoot, task: '', rescueId: '', model: '', ...vars };
-  const command = a.command.map((arg) => String(arg).replace(/\{\{(\w+)\}\}/g, (_, k) => allVars[k] ?? ''));
+  // argv 会出现在 ps / 进程审计里(比 .relay/rescue 更难清理),所以注入前的每个变量都必须脱敏:
+  // prompt 来自 transcript(不可信),密钥样式串绝不能原样进 argv。回到终端的是 [REDACTED:...]。
+  let redacted = 0;
+  const cleanVars = {};
+  for (const [k, v] of Object.entries({ prompt: '', root: controlRoot, task: '', rescueId: '', model: '', ...vars })) {
+    const r = redactSecrets(String(v ?? ''));
+    redacted += r.hits.length;
+    cleanVars[k] = r.text;
+  }
+  const command = a.command.map((arg) => String(arg).replace(/\{\{(\w+)\}\}/g, (_, k) => cleanVars[k] ?? ''));
+  for (const arg of command) {
+    // 替换后的值仍可能是不可信来源:含 NUL 会让 spawn 直接抛错,提前 fail-closed 并说清原因。
+    if (arg.includes('\u0000')) {
+      return { ok: false, error: '自动拉起参数替换后含 NUL 字符(来源数据不可信),已拒绝启动' };
+    }
+  }
   const bytes = command.reduce((sum, arg) => sum + Buffer.byteLength(arg, 'utf8') + 1, 0);
   if (bytes > MAX_ARG_BYTES) {
     return { ok: false, error: `自动拉起 argv 共 ${bytes} 字节,超过单参数安全上限 ${MAX_ARG_BYTES};请缩短 prompt 或改用文件输入` };
   }
   return {
-    ok: true, enabled: true, command, cwd,
+    ok: true, enabled: true, command, cwd, redacted,
     timeoutMs: a.timeoutMs, maxOutputBytes: a.maxOutputBytes,
   };
 };
@@ -1178,6 +1192,10 @@ const actTakeover = async ({ controlRoot, args, ctxProfiles, cfg }) => {
         ]);
       }
       dispatchNote = `- 自动拉起:已启动后台 worker(pid ${started.pid});状态 \`.relay/rescue/${id}/dispatch.json\``;
+      if (launch.redacted > 0) {
+        // 脱敏必须可见:argv 在 ps 里可见,悄悄改写注入内容会让接手方以为拿到的是原文。
+        dispatchNote += `\n- 注入 argv 前已脱敏 ${launch.redacted} 处疑似密钥(transcript 派生的 prompt 不可信)`;
+      }
     } else if (existingDispatch) {
       dispatchNote = `- 自动拉起:已有任务(${existingDispatch.status}),不重复启动`;
     }

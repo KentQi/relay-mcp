@@ -15,8 +15,8 @@ export const TOOLS = [
     name: 'relay_init',
     description:
       'Bootstrap a new project into the relay protocol (0→1): relay files from templates + a code skeleton from ' +
-      'preset (node | minimal | none) + git init and the first commit. Refuses when START.md exists unless ' +
-      'force=true (then prefer relay_onboard). Next: relay_session_start.',
+      'preset (node | minimal | none) + git init and first commit. Refuses when START.md exists unless force=true ' +
+      '(then prefer relay_onboard). Next: relay_session_start.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -32,7 +32,7 @@ export const TOOLS = [
     description:
       'Adopt the relay protocol on an existing project, non-destructively: backs up touched files, unions ' +
       'allowedTopLevel, installs core files + verify.sh + entry files + .gitignore baseline. Existing manifest ' +
-      'config (worktree, autoCommit, acceptance, ...) is PRESERVED. Prefer over relay_init when the directory is not empty.',
+      'config (worktree, autoCommit, acceptance, ...) is PRESERVED. Prefer over relay_init for non-empty dirs.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -80,6 +80,7 @@ export const TOOLS = [
         model: { type: 'string', description: 'Unique model/agent id; duplicates cannot prove claim ownership.' },
         summary: { type: 'string', description: 'What this session actually did.' },
         done_task: { type: 'string', description: 'Completed task id, e.g. "T003".' },
+        done_tasks: { type: 'array', items: { type: 'string' }, description: 'Extra completed tasks (single-root).' },
         blocked: { type: 'string', description: 'Blocker needing human arbitration.' },
         next: {
           type: 'object',
@@ -180,11 +181,10 @@ export const TOOLS = [
     description:
       'Rescue a subagent killed mid-flight by a token-plan quota / 429 / idle kill: capture its transcript + a git ' +
       'snapshot of uncommitted work into a local rescue card (.relay/rescue/, never committed), then hand it to ' +
-      'another model. Harness-agnostic: sources are declared by format descriptors (manifest.rescue.sources + ' +
-      'profiles); nothing is scanned by default. scan (default, read-only) lists rescuable agents; capture needs ' +
-      'confirm; takeover (confirm+model) grants handing rights and registers the rebuilt task; report writes the ' +
-      'result back; drop removes it (dry-run by default). With manifest.rescue.autoLaunch enabled, takeover also ' +
-      'starts a detached worker for a declared argv command (no shell, no harness assumptions).',
+      'another model. Harness-agnostic: sources come from format descriptors (manifest.rescue.*); nothing is ' +
+      'scanned by default. scan (default, read-only) lists rescuable agents; capture needs confirm; takeover ' +
+      '(confirm+model) grants handing rights and registers the rebuilt task; report writes the result back; drop ' +
+      'removes it (dry-run by default). autoLaunch (manifest, off by default) also starts a detached argv worker.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -284,7 +284,11 @@ The tools enforce the loop; you cannot skip the gates.
    task checkout (code rules), so R5/R6 commit evidence comes from both the control-plane
    commit and the task-branch commit. Never hand off a red repo.
 6. **Exit(出场)** — Call \`relay_session_end\` LAST with model, summary, done_task,
-   negative_results and a concrete \`next\` handoff (title + acceptance). In a managed
+   negative_results and a concrete \`next\` handoff (title + acceptance).
+   Delivered several tasks in one session? Pass \`done_tasks: ["T055","T056"]\` in the
+   single-root case: each gets its own LOG completion entry and TASKS \`[x]\`, which is what
+   D8/R9 read (a task id mentioned only in the summary body is NOT evidence). Managed
+   worktrees reject \`done_tasks\` (one task = one branch + one registry record). In a managed
    worktree the green gate makes TWO commits: code on executionRoot branch \`relay/T###\`,
    then controlRoot with ONLY TASKS.md/LOG.md updated; both SHAs are reported. In a managed
    worktree, done_task MUST match the task registered for the executionRoot you call from;

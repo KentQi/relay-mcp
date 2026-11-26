@@ -232,7 +232,7 @@ worktree 清理默认 dry-run：只删除已登记、已过期、非活跃、干
 | `relay_onboard` | 非破坏接入存量项目 |
 | `relay_restructure` | 用 `git mv` 标准化目录 |
 | `relay_session_start` | 进场简报（五件 + git 状态 + verify 快检） |
-| `relay_session_end` | 出场绿闸与双提交 |
+| `relay_session_end` | 出场绿闸与双提交；一次交付多个任务用 `done_tasks: ["T0xx","T0yy"]`（仅单根），每个任务各得独立 LOG 完成条目与 `[x]` |
 | `relay_claim` | 认领任务，返回双根与任务分支 |
 | `relay_worktree_cleanup` | 预览或清理过期任务工作树 |
 | `relay_archive_log` | 归档 LOG 旧条目到 `docs/archive/`（默认 dry-run，只从尾部搬、留可验证指针） |

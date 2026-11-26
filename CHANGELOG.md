@@ -35,9 +35,17 @@
 - `drop`/`edits` 统一用 `state.snapshotRoot` 清理与展示快照,嵌套仓库不再留下孤儿 ref;`drop` 识别过期锁,并真正覆盖符号链接防线。
 - 描述符契约注释与 README/CHANGELOG 对齐实际行为(默认零扫描、26 套测试)。
 
+### Added(多任务出场 T061)
+
+- **`relay_session_end` 新增 `done_tasks: string[]`**(仅单根):一次交付多个任务时,每个任务各得一条**独立 LOG 完成条目**(标题 `task=T### 完成`)、自己的 `[x]`、自己的认领锁释放与各自验收门。此前只接受单个 `done_task`,「一个会话做四个任务」只能写在摘要正文里,而 D8/R9 只读标题行的 `task=` 字段——这正是 T055–T057 证据缺口的根因。
+
+### Fixed(T061)
+
+- **autoLaunch prompt 脱敏**:注入 argv 的每个占位符变量(含 transcript 派生的 `prompt`)在替换前统一过 `redactSecrets`。argv 会出现在 `ps`/进程审计里,比 `.relay/rescue/` 更难清理;脱敏处数会在 takeover 输出中显式报告,不静默改写注入内容。
+
 ### 规模
 
-- `tools/list` 15 个工具,预算 10,240 字节(实测 10,219);`scripts/smoke-rescue.mjs` 172 断言、`scripts/smoke-rescue-zcode-db.mjs` 27 断言、`scripts/smoke-rescue-autolaunch.mjs` 40 断言;`npm test` **26 套**。
+- `tools/list` 15 个工具,预算 10,240 字节(实测 10,218);`scripts/smoke-rescue.mjs` 172 断言、`scripts/smoke-rescue-zcode-db.mjs` 27 断言、`scripts/smoke-rescue-autolaunch.mjs` 49 断言、`scripts/smoke.mjs` 108 断言;`npm test` **26 套**。
 
 ## [2.0.0] - 2026-11-18
 
