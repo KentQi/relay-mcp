@@ -1,5 +1,15 @@
 # 会话日志(最新在上)
 
+## 2026-11-27 01:28 | model=hungerg-free | task=T066 完成
+- 摘要: T066 收尾 harness 注册面切换并补可执行验收。切换本身在上一轮已执行完毕(逐个备份 .relay-bak-20261127-004651 后纯文本替换,JSON 校验合法),本任务补齐审计指出的两个缺口:(1) T065 完成态标题曾声称「已切换全部 harness」,已在 TASKS 收窄为实际交付并加注说明切换顺延至 T066(历史提交不改写);(2) T066 原验收 git push origin main 不可判定——远端已同步时 Everything up-to-date 退出 0,零交付即绿。改为新增 scripts/smoke-harness-paths.mjs(39 断言,本机专用验收,不接入 npm test 以免 CI 因缺 home 配置而红):14 个注册面逐个断言指向 scripts/relay-mcp-autoupdate.mjs、无 ~/.relay-mcp 旧路径残留、12 个 JSON 配置解析合法。实测 39/0。同时澄清 LOG 历史 T065 条目的 PASS 10(手写快检口径)与 PASS 16(出场全量机检口径)差异。出场前 npm test 27 套 1122 断言全绿、verify PASS 10/WARN 0/ERROR 0。
+- 事实(v2): mode=single | 文件 0 | ± +0/-0 | base=- | sha=- | branch=main || 验收: 通过 | verify: PASS 11·WARN 0·ERROR 0 | 耗时: 66s
+- 负结果: 外向动作完成后把「推送+tag」写进 next 会生成已完成的重复任务;已完成的工作应据实关闭而非空跑
+- 负结果: 验收行写 git push origin main 不可判定:远端已同步时 Everything up-to-date 退出 0,零交付即绿;交付物是外部配置时验收必须写成可执行检查(本任务改为 test:scripts/smoke-harness-paths.mjs,39 断言钉住 14 个注册面指向仓库内启动器且无旧路径残留、JSON 仍合法)
+- 负结果: 任务完成态标题不得声称超出实际交付的内容:T065 曾在切换未做时盖 [x] 声称已切换,下一会话会据此跳过真正的后续任务;事后只能收窄表述并加注,历史提交不改写
+- 负结果: 批量替换外部配置文件必须逐个先备份(.relay-bak-时间戳)再替换,JSON 替换后立即校验合法性;纯文本路径替换能保留原格式,JSON.stringify 全量重写会搅动无关字段
+- 负结果: 旧路径残留检查要区分活跃配置与备份文件:备份(.relay-bak-*)含旧路径是预期,只证明备份做过
+- 留给下一个: T066 已闭环:14 个 harness 注册面全部指向 scripts/relay-mcp-autoupdate.mjs(启动器已随 T067 加固并入库),无旧路径残留,JSON 全部合法,备份在各配置旁(.relay-bak-20261127-004651)。~/.relay-mcp/ 旧启动器已无引用,目录保留。注意事项:LOG 历史 T065 条目摘要的「PASS 10」是手写快检口径,事实行「PASS 16」是出场全量机检口径,以事实行为准。仓库当前无待办,远端已同步;新工作需先与人类定义任务。
+
 ## 2026-11-27 01:25 | model=hungerg-free | task=T067 完成
 - 摘要: T067 修复自更新启动器 max 级审计的全部 4 major 与可修 minor,并把冒烟重写为隔离夹具行为断言。Major:(1) 分支/worktree 守卫——此前 ff-only 会移动「当前分支」引用,任何落后且无独有提交的任务分支/release 分支/detached HEAD(bisect 现场)都会被静默快进;现在要求 symbolic-ref 必须是 main、git-dir 与 git-common-dir 相同(非 linked worktree)才更新,否则跳过。(2) rev-list 失败曾折算成 0 并 finish(ok) 写 6 小时成功静默;现在「无法判定」一律 fail 并冷却。(3) merge 超时曾 SIGKILL 直杀,残留 index.lock 与半更新工作树后仍启动 MCP;改为 SIGTERM→SIGKILL 并等 close 结算,失败后 postMergeCheck 复核 HEAD ∈ {更新前,origin/main} 且无 index.lock,可疑的树直接拒绝启动 MCP 并给人工恢复命令。(4) TASKS.md T065 完成态夸大(标题声称已切换 14 个 harness,当时实际未做)——标题收窄为实际交付,加注说明切换顺延至 T066 且已于本轮完成。Minor 一并修:git stdout/stderr 分流(porcelain 判定不再被 warning 污染)、状态原子写(临时文件+rename)、预算 NaN/越界夹取([1s,60s])、信号转发后 process.exit 替代自递归重投递(修复 wrapper 永不退出)、merge 后入口存在性+node --check 健康复核(坏上游拒绝启动并给人工恢复命令)、fallback 状态按仓库指纹分目录(worktree 不再共用节流)、stderr 同步写防截断、超时只杀直接 git 子进程的边界写入注释、DECISIONS 补「自动 ff-merge 授权边界」条目(main 自身 vs 任务分支的区分与四重守卫)。冒烟重写为隔离夹具行为断言(18 断言):bare origin+clone+最小 MCP 应答器,覆盖干净落后真快进、本地独有提交不动、预算耗尽不动、非 main 分支不动、无效 REPO exit 2、无参数自推导、合并调用点精确 --ff-only(不再是源码 grep 假绿);probe 超时杀整组并立即结算。另新增 scripts/smoke-harness-paths.mjs(39 断言,本机验收)钉住 14 个注册面指向仓库内启动器,作为 T066 的可执行验收(原「git push origin main」不可判定)。过程中修掉自己三处错误:夹具把启动器提交在 work 侧导致分叉、ff 场景测不到;ESM 套件误用 require;probe 的 scriptPath 需显式参数以测无效 REPO。最终 npm test 27 套 1122 断言全绿(autoupdate 18),verify 双根全绿。
 - 事实(v2): mode=managed | 文件 5 | ± +395/-109 | base=73c53671148192b8b6ea492419aacf1ac87f2290 | sha=18d032a7e1353c2ab1c3815560ea63f4332059d1 | branch=relay/T067 || 验收: 通过 | verify: PASS 15·WARN 0·ERROR 0 | 耗时: 64s

@@ -14,17 +14,20 @@
 (空——认领后由 relay_claim 移入;认领锁在 .relay/claims/,TTL 4 小时,崩溃会话的认领到期自动可接管)
 
 ## 待办
+- [ ] T069 无待办 — harness 注册面切换已验收入库,新工作需先与人类定义任务
+  验收: npm test && ./verify
+  备注: T066 已闭环:14 个 harness 注册面全部指向 scripts/relay-mcp-autoupdate.mjs(启动器已随 T067 加固并入库),无旧路径残留,JSON 全部合法,备份在各配置旁(.relay-bak-20261127-004651)。~/.relay-mcp/ 旧启动器已无引用,目录保留。注意事项:LOG 历史 T065 条目摘要的「PASS 10」是手写快检口径,事实行「PASS 16」是出场全量机检口径,以事实行为准。仓库当前无待办,远端已同步;新工作需先与人类定义任务。
 - [ ] T068 无待办 — 自更新通道已加固并入版本控制,新工作需先与人类定义任务
   验收: npm test && ./verify
   备注: T067 已闭环(max 审计 4 major + 全部可修 minor)。T066(切抰 14 个 harness 注册面)已在上一轮完成,正在本轮一并出账:其验收已改为可执行的 test:scripts/smoke-harness-paths.mjs(39 断言,本机专用,不接入 npm test)。注意 LOG 历史条目 T065 摘要写「verify 双根 PASS 10/WARN 0」而事实行写 PASS 16:前者是 summary 手写口径,后者是出场全量机检口径,以此为准;下不为例。~/.relay-mcp/ 旧启动器已无任何配置引用,目录保留(含历史备份与回滚脚本)。
-- [ ] T066 切换 14 个 harness 注册面到仓库内启动器路径并推送
-  验收: test:scripts/smoke-harness-paths.mjs
-  备注: 启动器已纳入仓库(scripts/relay-mcp-autoupdate.mjs)并已出验收入库。剩余步骤:合并 relay/T065 到 main 后,把 14 个 harness 注册面(~/.claude.json、~/.zcode/cli/config.json、~/.gemini/settings.json、~/.minimax/mcp.json x2、~/.kimi/mcp.json、~/.kimi-code/mcp.json、~/.mavis/mcp.json、~/Library/Application Support/Code/User/mcp.json、Claude/Claude-3p 的 claude_desktop_config.json、~/.codex/config.toml、~/.dsh/profiles/{desktop,web}/plugins/dsh-mcp-relay-mcp/cordis.patch.yml)里 relay 条目的脚本路径从 ~/.relay-mcp/relay-mcp-autoupdate.mjs 改为 <repo>/scripts/relay-mcp-autoupdate.mjs;逐个先备份 .relay-bak-时间戳再改,改完 grep 确认无残留旧路径并实测 MCP initialize 返回 2.1.0。~/.relay-mcp/ 目录保留(含历史备份与回滚脚本),旧启动器文件不再被引用。
 
 ## 已冻结
   冻结任务 T030:发布 npm — 决策冻结,不执行(见 DECISIONS 2026-11-18 Tier 2);原发布面已移除,分发改为 git clone / Agent Plugins / GitHub Release。冻结任务不进入 session_start 派发;解冻需先在 DECISIONS 记录新决定并恢复为 [ ] 任务行。
 
 ## 已完成
+- [x] T066 切换 14 个 harness 注册面到仓库内启动器路径并推送  (2026-11-27)
+  验收: test:scripts/smoke-harness-paths.mjs
+  备注: 启动器已纳入仓库(scripts/relay-mcp-autoupdate.mjs)并已出验收入库。剩余步骤:合并 relay/T065 到 main 后,把 14 个 harness 注册面(~/.claude.json、~/.zcode/cli/config.json、~/.gemini/settings.json、~/.minimax/mcp.json x2、~/.kimi/mcp.json、~/.kimi-code/mcp.json、~/.mavis/mcp.json、~/Library/Application Support/Code/User/mcp.json、Claude/Claude-3p 的 claude_desktop_config.json、~/.codex/config.toml、~/.dsh/profiles/{desktop,web}/plugins/dsh-mcp-relay-mcp/cordis.patch.yml)里 relay 条目的脚本路径从 ~/.relay-mcp/relay-mcp-autoupdate.mjs 改为 <repo>/scripts/relay-mcp-autoupdate.mjs;逐个先备份 .relay-bak-时间戳再改,改完 grep 确认无残留旧路径并实测 MCP initialize 返回 2.1.0。~/.relay-mcp/ 目录保留(含历史备份与回滚脚本),旧启动器文件不再被引用。
 - [x] T067 修复自更新启动器 max 审计 4 major+minor(分支守卫/rev-list fail-closed/merge 安全终止/流分离等)  (2026-11-27)
   验收: test:scripts/smoke-autoupdate.mjs
   备注: 见 docs/04-test/13-audit-autoupdate-v1.0.md(如未落盘则以审查会话 446b3766 报告为准)。major:超时 SIGKILL 可截断 merge 留 index.lock;rev-list 失败折算 0 → 假「已是最新」+6h 静默;ff-merge 不校验当前分支/游离 HEAD/linked worktree;另需 DECISIONS 补自动 ff-merge 的授权边界。minor 一并修:stdout/stderr 混流致脏树误判、状态非原子写、预算 NaN 不校验、信号自递归不退出、merge 后无健康检查、冒烟非隔离且 probe 孙进程可致挂起、ff-only 断言为源码 grep 假绿。
