@@ -12,12 +12,15 @@
 //     roots:   (home) => string[]   该格式在哪些根目录下找候选(空数组 = 需要显式 source)
 //     discover(root, ctx) => Promise<Candidate[]>   在单个 root 下枚举候选
 //     parse(text) => Parsed|null                    把 transcript 文本解析成结构化摘要
+//     loadTranscript?(candidate) => Promise<Buffer|string>  可选:来源不是文件时用它读取字节
 //     transcriptless?: boolean  true = 该格式不提供可复制的 transcript(只有元数据)
 //   }
 //
 //   Candidate 统一字段(引擎只读这些,不读 harness 私有字段):
-//     { sourcePath, agentId, parentSessionId, transcriptPath?, cwd?, status?, error?,
+//     { sourcePath, agentId, parentSessionId, transcriptPath?, source?, cwd?, status?, error?,
 //       prompt?, description?, profile?, createdAt?, updatedAt?, mtimeMs? }
+//   非文件来源可以用 `source` 传给 loadTranscript(如 sqlite 的 session id),
+//   同时保留 transcriptPath(通常为空)。
 //
 //   Parsed 统一字段:
 //     { prompt, cwd, gitBranch, sessionId, agentId, edits[], commands[], todos[],
@@ -120,10 +123,12 @@ const parseWithFieldMap = (text, map = {}) => {
     lastRecordKind: '',
     trailingToolError: false,
     anyToolError: false,
+    explicitCompletion: false,
     apiError: null,
   };
   const edits = [];
   const commands = [];
+  const toolCalls = [];
   const todos = [];
   let prompt = '';
   let narrative = '';
@@ -160,6 +165,8 @@ const parseWithFieldMap = (text, map = {}) => {
     if (isAssistant) {
       sig.lastRecordKind = 'assistant';
       lastRole = 'assistant';
+      const stopReason = String(msg.stop_reason ?? msg.stopReason ?? rec.stop_reason ?? '');
+      if (stopReason === 'end_turn' || stopReason === 'completed' || stopReason === 'stop') sig.explicitCompletion = true;
       for (const b of asBlocks(content)) {
         if (m.textTypes.includes(b.type) && b.text) {
           narrative = String(b.text);
@@ -171,6 +178,7 @@ const parseWithFieldMap = (text, map = {}) => {
           const input = b[m.toolInputPath] && typeof b[m.toolInputPath] === 'object' ? b[m.toolInputPath] : {};
           const id = b[m.toolIdPath];
           if (id) sig.pendingToolUse.add(String(id));
+          toolCalls.push({ name: name || '(unknown)', input });
           if (m.writeTools.includes(name)) {
             const fp = m.filePathKeys.map((k) => input[k]).find((v) => typeof v === 'string' && v);
             if (fp) edits.push({ tool: name, path: String(fp) });
@@ -181,6 +189,8 @@ const parseWithFieldMap = (text, map = {}) => {
           if (Array.isArray(input.todos)) {
             for (const t of input.todos) if (t && t.content) todos.push(clip(t.content, 200));
           }
+        } else if (b.type === 'step_finish' && ['stop', 'completed', 'end_turn'].includes(String(b.reason))) {
+          sig.explicitCompletion = true;
         }
       }
     } else if (isUser) {
@@ -213,6 +223,7 @@ const parseWithFieldMap = (text, map = {}) => {
     agentId: String(first[m.agentField] || ''),
     edits,
     commands,
+    toolCalls,
     todos: [...new Set(todos)],
     narrative,
     recordCount: records.length,
@@ -379,6 +390,11 @@ export const profileFromSpec = (spec) => {
       roots, metaFile: spec.metaFile || 'metadata.json', fieldMap: spec.fieldMap || {},
     });
   }
+  if (kind === 'sqlite-conversation') {
+    // 懒加载:没有配置 SQLite 来源的项目不需要为它付出 import/可用性检查成本。
+    // 这里用同步 createRequire 不合适(ESM),改为动态 import 在 resolveAllProfiles 里完成。
+    return { ...spec, __lazySqlite: true };
+  }
   // 未知 kind:保留为不可发现的占位,但明确标注(不静默当成可用)
   return {
     id: spec.id, title: spec.title || spec.id, roots: () => roots,
@@ -388,14 +404,23 @@ export const profileFromSpec = (spec) => {
 };
 
 // 合并:内置 + 声明式(manifest)+ 函数式(宿主注入)。
-export const resolveAllProfiles = ({ builtin = BUILTIN_PROFILES, specs = [], fns = [] } = {}) => {
+// 异步是为了懒加载可选的 SQLite 描述符;未配置该 kind 的项目不会 import 它。
+export const resolveAllProfiles = async ({ builtin = BUILTIN_PROFILES, specs = [], fns = [] } = {}) => {
   const list = [...builtin];
   const upsert = (p) => {
     if (!p || !p.id) return;
     const i = list.findIndex((x) => x.id === p.id);
     if (i >= 0) list[i] = { ...list[i], ...p }; else list.push(p);
   };
-  for (const spec of Array.isArray(specs) ? specs : []) upsert(profileFromSpec(spec));
+  for (const spec of Array.isArray(specs) ? specs : []) {
+    const p = profileFromSpec(spec);
+    if (p && p.__lazySqlite) {
+      const mod = await import('./rescue-sqlite-profile.mjs');
+      upsert(mod.sqliteConversationProfile(spec));
+    } else {
+      upsert(p);
+    }
+  }
   for (const fn of Array.isArray(fns) ? fns : []) upsert(fn);
   return list;
 };

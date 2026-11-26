@@ -164,7 +164,7 @@ worktree 清理默认 dry-run：只删除已登记、已过期、非活跃、干
 **混合云/本地 harness 一律通用**：relay 的核心引擎不认识任何具体 harness——所有「在哪找、怎么读」都由**格式描述符**声明。加一个新 harness = 加一份描述（如上），不改核心代码。
 
 - `sources` 每条是 `{ profile?, root }` 或裸路径；**为空时不扫描任何目录**（不读 home、不猜安装位置）。
-- `profiles` 支持两种 `kind`：`json-metadata`（一层目录一份元数据）与 `jsonl-message`（一行一条 JSON 的 transcript）。
+- `profiles` 支持三种 `kind`：`json-metadata`、`jsonl-message`，以及 `sqlite-conversation`（只读 SQLite 会话库，表名/列名全部声明）。
 - `maxAgeDays` / `maxBytes` 非法时回退默认。
 
 ### 质量门预设（可选）
@@ -260,7 +260,7 @@ node src/cli.mjs --version     # 版本
 
 ### 自举
 
-本仓库使用自身协议开发：`START.md` 是入口，`TASKS.md` 是 backlog，`LOG.md` 记录会话。`npm test` 覆盖 24 套端到端冒烟（协议、补丁、worktree、升级兼容、密钥闸、事实底账、简报、doctor、检索、评审回归、性能计数、LOG 边界、会话性能、并发、归档、安全、Agent Plugins 插件包、崩溃点矩阵、上下文预算、测试框架元负控、协议结构机检、漂移备份闸、D8 归档证据面、子代理抢救），CI 覆盖 Node 22/24/26。
+本仓库使用自身协议开发：`START.md` 是入口，`TASKS.md` 是 backlog，`LOG.md` 记录会话。`npm test` 覆盖 25 套端到端冒烟（协议、补丁、worktree、升级兼容、密钥闸、事实底账、简报、doctor、检索、评审回归、性能计数、LOG 边界、会话性能、并发、归档、安全、Agent Plugins 插件包、崩溃点矩阵、上下文预算、测试框架元负控、协议结构机检、漂移备份闸、D8 归档证据面、子代理抢救、通用 SQLite 会话来源），CI 覆盖 Node 22/24/26。
 
 一次真实的多模型交接实测记录（含假绿事故的完整证据链）见 [docs/04-test/08-handoff-case-study-v1.0.md](docs/04-test/08-handoff-case-study-v1.0.md)。
 
