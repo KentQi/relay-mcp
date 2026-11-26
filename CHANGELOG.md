@@ -3,6 +3,12 @@
 本项目遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 格式;
 版本号遵循 [SemVer](https://semver.org/lang/zh-CN/)。
 
+## [Unreleased]
+
+### Added(自更新启动器纳入仓库 T065)
+
+- **`scripts/relay-mcp-autoupdate.mjs`**:此前承担全部 harness 更新通道的启动器只存在于 `~/.relay-mcp/`(手工文件,不在版本控制里)。现纳入仓库——它自己会随 ff-only 更新一起升级。新增:仓库路径缺省按脚本自身位置推导,显式传参向后兼容。新增 `scripts/smoke-autoupdate.mjs`(11 断言)接入 `npm test`(27 套),覆盖脚本在位、经包装器 initialize 应答、无效 REPO exit 2、无参数自推导。
+
 ## [2.1.0] - 2026-11-26
 
 ### Added(子代理抢救 T048)
