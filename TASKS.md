@@ -14,14 +14,17 @@
 (空——认领后由 relay_claim 移入;认领锁在 .relay/claims/,TTL 4 小时,崩溃会话的认领到期自动可接管)
 
 ## 待办
-- [ ] T065 无待办 — 仓库已收拢至 v2.1.0,新工作需先与人类定义任务
-  验收: npm test && ./verify
-  备注: v2.1.0 已发布(远端 main 同步,三矩阵 CI 全绿,GitHub Release 已建)。worktree 与 relay 分支已全部清理,registry 为空。R12 已通过归档降到 96 行/8 条。仓库当前无待办;下一个会话可直接 relay_session_start 查看状态,若要开新工作先与人类定义任务。
+- [ ] T066 切换 14 个 harness 注册面到仓库内启动器路径并推送
+  验收: git push origin main
+  备注: 启动器已纳入仓库(scripts/relay-mcp-autoupdate.mjs)并已出验收入库。剩余步骤:合并 relay/T065 到 main 后,把 14 个 harness 注册面(~/.claude.json、~/.zcode/cli/config.json、~/.gemini/settings.json、~/.minimax/mcp.json x2、~/.kimi/mcp.json、~/.kimi-code/mcp.json、~/.mavis/mcp.json、~/Library/Application Support/Code/User/mcp.json、Claude/Claude-3p 的 claude_desktop_config.json、~/.codex/config.toml、~/.dsh/profiles/{desktop,web}/plugins/dsh-mcp-relay-mcp/cordis.patch.yml)里 relay 条目的脚本路径从 ~/.relay-mcp/relay-mcp-autoupdate.mjs 改为 <repo>/scripts/relay-mcp-autoupdate.mjs;逐个先备份 .relay-bak-时间戳再改,改完 grep 确认无残留旧路径并实测 MCP initialize 返回 2.1.0。~/.relay-mcp/ 目录保留(含历史备份与回滚脚本),旧启动器文件不再被引用。
 
 ## 已冻结
   冻结任务 T030:发布 npm — 决策冻结,不执行(见 DECISIONS 2026-11-18 Tier 2);原发布面已移除,分发改为 git clone / Agent Plugins / GitHub Release。冻结任务不进入 session_start 派发;解冻需先在 DECISIONS 记录新决定并恢复为 [ ] 任务行。
 
 ## 已完成
+- [x] T065 将 relay-mcp 自更新启动器纳入仓库,并把全部 harness 的 relay MCP 条目切换到仓库内路径  (2026-11-27)
+  验收: npm test && ./verify
+  备注: 现状:14 个 harness 注册面(Claude Code/Desktop/3p、Codex、DeepSeek desktop+web、Gemini、Kimi/Kimi Code、Mavis、MiniMax x2、VS Code、ZCode)都指向 ~/.relay-mcp/relay-mcp-autoupdate.mjs——该启动器承担全部更新通道却不在版本控制里,换机无法迁移、改动无法 review,且硬编码仓库路径。步骤:(1) 把 ~/.relay-mcp/relay-mcp-autoupdate.mjs 复制为 scripts/relay-mcp-autoupdate.mjs,argv[2] 缺席时从 import.meta.url 自推导仓库路径(向后兼容 argv);(2) 新增 scripts/smoke-autoupdate.mjs 接入 npm test(27 套),断言脚本在位、经包装器 initialize 返回 relay-mcp 2.1.0、非法 REPO 退出码 2;同步 SPEC/README 套数计数;(3) 逐个备份(.relay-bak-时间戳)并替换 14 处 args 路径,JSON 保持原格式;(4) 验证全部指向新路径、MCP 实测启动返回 2.1.0。~/.relay-mcp/ 目录保留不删(含历史备份与回滚脚本)。
 - [x] T064 推送 main + 打 tag v2.1.0 + 建 GitHub Release,并等三矩阵 CI 全绿  (2026-11-27)
   验收: git push origin main && git tag -a v2.1.0 -m 'v2.1.0' && git push origin v2.1.0
   备注: CHANGELOG 已定版 [2.1.0] - 2026-11-26,package.json/plugin.json 均为 2.1.0。推送后需观察 Node 22/24/26 三矩阵 CI(.github/workflows/ci.yml),三绿后在 GitHub 建 v2.1.0 Release(正文引用 docs/04-test/10、11、12 三份审计报告与本轮 T061–T063 修复)。出隔断确认:本机只有 Node 26,三矩阵必须靠 CI。

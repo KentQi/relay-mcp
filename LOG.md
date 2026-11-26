@@ -1,5 +1,16 @@
 # 会话日志(最新在上)
 
+## 2026-11-27 00:46 | model=hungerg-free | task=T065 完成
+- 摘要: T065 把承担全部 harness 更新通道的自更新启动器纳入 relay-mcp 仓库版本控制。背景:14 个 harness 注册面(Claude Code/Desktop/3p、Codex、DeepSeek desktop+web、Gemini、Kimi/Kimi Code、Mavis、MiniMax x2、VS Code、ZCode)的 relay MCP 条目都指向 ~/.relay-mcp/relay-mcp-autoupdate.mjs——一个手工文件,不在版本控制里,换机无法迁移、改动无法 review,且硬编码仓库路径。改动:(1) 复制为 scripts/relay-mcp-autoupdate.mjs,新增「argv[2] 缺席时按 import.meta.url 自推导仓库路径(scripts/../)」,显式传参向后兼容;(2) 新增 scripts/smoke-autoupdate.mjs 11 断言接入 npm test(第 27 套):启动器在位、含 ff-only 逻辑与预算环境变量、可自推导路径、经包装器 initialize 应答 relay-mcp + 语义化版本、无效 REPO exit 2 且报错明确、无参数自推导可启动;SPEC/README 套数同步 26→27,CHANGELOG 新增 [Unreleased] 段。测试要点:冒烟用 RELAY_AUTOUPDATE_BUDGET_MS=1 强制自检快速失败,保证 npm test 期间不会真的 ff-merge origin/main;并清掉 NODE_TEST_CONTEXT(T063 同款教训)。最终 npm test 27 套 1115 断言全绿(新增 11),verify 双根 PASS 10/WARN 0/ERROR 0。剩余(下一步,非本任务):把 14 处 harness 配置的脚本路径切到仓库内新路径——纯配置变更,须逐个备份后替换并实测。
+- 事实(v2): mode=managed | 文件 6 | ± +316/-3 | base=fb21ac6498839e0ed002697b7953a7aa10af91c8 | sha=edd5a08e39a2eb531f1ed8deb9ab93185206bbd5 | branch=relay/T065 || 验收: 通过 | verify: PASS 16·WARN 0·ERROR 0 | 耗时: 107s
+- worktree: branch=relay/T065; sha=edd5a08e39a2eb531f1ed8deb9ab93185206bbd5; 已验收,未合并(是否合并由人工决定)
+- 负结果: 承担全部 harness 更新通道的启动器必须进版本控制:它在 ~/.relay-mcp/ 里时换机无法迁移、改动无法 review、git log 查不到为什么改
+- 负结果: 启动器必须能从 import.meta.url 自推导仓库路径:否则仓库移动或 worktree 场景下,harness 配置里的第二个参数就变成第二处要同步维护的硬编码
+- 负结果: ESM 套件里不能用 require:第一版 smoke-autoupdate 在 ESM 中调 require 读取脚本内容,抛 ReferenceError 被 try 吞成空串,第 1 段 4 条断言全假红;用顶层 import 读取才正确
+- 负结果: 冒烟测自更新必须用 RELAY_AUTOUPDATE_BUDGET_MS=1 强制快速失败:否则 npm test 期间会真的 ff-merge origin/main,同一进程树里后面的套件可能跑在新版文件上
+- 负结果: 外层 node --test 的 NODE_TEST_CONTEXT 必须在冒烟里清掉:T063 的教训在自更新套件同样适用,子进程退出码语义会被污染
+- 留给下一个: 启动器已纳入仓库(scripts/relay-mcp-autoupdate.mjs)并已出验收入库。剩余步骤:合并 relay/T065 到 main 后,把 14 个 harness 注册面(~/.claude.json、~/.zcode/cli/config.json、~/.gemini/settings.json、~/.minimax/mcp.json x2、~/.kimi/mcp.json、~/.kimi-code/mcp.json、~/.mavis/mcp.json、~/Library/Application Support/Code/User/mcp.json、Claude/Claude-3p 的 claude_desktop_config.json、~/.codex/config.toml、~/.dsh/profiles/{desktop,web}/plugins/dsh-mcp-relay-mcp/cordis.patch.yml)里 relay 条目的脚本路径从 ~/.relay-mcp/relay-mcp-autoupdate.mjs 改为 <repo>/scripts/relay-mcp-autoupdate.mjs;逐个先备份 .relay-bak-时间戳再改,改完 grep 确认无残留旧路径并实测 MCP initialize 返回 2.1.0。~/.relay-mcp/ 目录保留(含历史备份与回滚脚本),旧启动器文件不再被引用。
+
 ## 2026-11-27 00:12 | model=hungerg-free | task=T064 完成
 - 摘要: T064 收尾发布后的清理与状态收拢。(1) 核实 T064 验收四项已全部达成:未推送提交 0、tag v2.1.0 指向 HEAD(ae4af52)、GitHub Release 已发布(非 draft)、CI 三矩阵 22/24/26 全 success——该任务本是上一轮 next 字段自动生成的重复登记,据实关闭而非空跑。(2) worktree 清理:11 个任务 worktree 全部删除(先手工移除 T048/T061 里 relay_sync 遗留的 *.relay-bak-* 备份,它们是唯一让 cleanup 判定不干净的 ignored 内容),registry 清空为 worktrees:[],空的 .relay/worktrees/ 目录一并移除。(3) 分支清理:15 个 relay/* 分支逐个确认 ahead=0 后用 git branch -d 安全删除(T031–T034、T048、T050–T054、T058–T063);git worktree list 现只剩主工作树。(4) R12 的 LOG 边界超限(156 行 > 150)用 relay_archive_log 归档 7 条历史条目到 docs/archive/LOG-2026-09-11.md,活跃区降到 96 行/8 条,指针保留且归档只移动不删除。(5) 清理后 verify 全绿 PASS 10/WARN 0/ERROR 0,R10 正确识别「分支已合并删除」并给 PASS 带注记,npm test 26 套 1104 断言通过。仓库现已收拢到 v2.1.0 且无残留分支/worktree。
 - 事实(v2): mode=single | 文件 0 | ± +0/-0 | base=- | sha=- | branch=main || 验收: 通过 | verify: PASS 11·WARN 0·ERROR 0 | 耗时: 103s
