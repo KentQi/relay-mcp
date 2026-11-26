@@ -1,5 +1,21 @@
 # 会话日志(最新在上)
 
+## 2026-11-27 01:25 | model=hungerg-free | task=T067 完成
+- 摘要: T067 修复自更新启动器 max 级审计的全部 4 major 与可修 minor,并把冒烟重写为隔离夹具行为断言。Major:(1) 分支/worktree 守卫——此前 ff-only 会移动「当前分支」引用,任何落后且无独有提交的任务分支/release 分支/detached HEAD(bisect 现场)都会被静默快进;现在要求 symbolic-ref 必须是 main、git-dir 与 git-common-dir 相同(非 linked worktree)才更新,否则跳过。(2) rev-list 失败曾折算成 0 并 finish(ok) 写 6 小时成功静默;现在「无法判定」一律 fail 并冷却。(3) merge 超时曾 SIGKILL 直杀,残留 index.lock 与半更新工作树后仍启动 MCP;改为 SIGTERM→SIGKILL 并等 close 结算,失败后 postMergeCheck 复核 HEAD ∈ {更新前,origin/main} 且无 index.lock,可疑的树直接拒绝启动 MCP 并给人工恢复命令。(4) TASKS.md T065 完成态夸大(标题声称已切换 14 个 harness,当时实际未做)——标题收窄为实际交付,加注说明切换顺延至 T066 且已于本轮完成。Minor 一并修:git stdout/stderr 分流(porcelain 判定不再被 warning 污染)、状态原子写(临时文件+rename)、预算 NaN/越界夹取([1s,60s])、信号转发后 process.exit 替代自递归重投递(修复 wrapper 永不退出)、merge 后入口存在性+node --check 健康复核(坏上游拒绝启动并给人工恢复命令)、fallback 状态按仓库指纹分目录(worktree 不再共用节流)、stderr 同步写防截断、超时只杀直接 git 子进程的边界写入注释、DECISIONS 补「自动 ff-merge 授权边界」条目(main 自身 vs 任务分支的区分与四重守卫)。冒烟重写为隔离夹具行为断言(18 断言):bare origin+clone+最小 MCP 应答器,覆盖干净落后真快进、本地独有提交不动、预算耗尽不动、非 main 分支不动、无效 REPO exit 2、无参数自推导、合并调用点精确 --ff-only(不再是源码 grep 假绿);probe 超时杀整组并立即结算。另新增 scripts/smoke-harness-paths.mjs(39 断言,本机验收)钉住 14 个注册面指向仓库内启动器,作为 T066 的可执行验收(原「git push origin main」不可判定)。过程中修掉自己三处错误:夹具把启动器提交在 work 侧导致分叉、ff 场景测不到;ESM 套件误用 require;probe 的 scriptPath 需显式参数以测无效 REPO。最终 npm test 27 套 1122 断言全绿(autoupdate 18),verify 双根全绿。
+- 事实(v2): mode=managed | 文件 5 | ± +395/-109 | base=73c53671148192b8b6ea492419aacf1ac87f2290 | sha=18d032a7e1353c2ab1c3815560ea63f4332059d1 | branch=relay/T067 || 验收: 通过 | verify: PASS 15·WARN 0·ERROR 0 | 耗时: 64s
+- worktree: branch=relay/T067; sha=18d032a7e1353c2ab1c3815560ea63f4332059d1; 已验收,未合并(是否合并由人工决定)
+- 负结果: 「无法判定」必须 fail-closed:rev-list 失败/预算耗尽曾把 behind 折算成 0 并 finish(ok),写 6 小时成功静默,更新通道静默失效;对照 fetch 失败路径的正确写法可见这是遗漏
+- 负结果: ff-only 会移动『当前分支』的引用:不校验当前分支是否 main,任何落后且无独有提交的分支(任务分支/release 分支/detached HEAD 的 bisect 现场)都会被静默快进,用户检出现场被换掉;linked worktree 的任务分支尤其不能自动指到 origin/main(验收通过 ≠ 已合并)
+- 负结果: merge 超时不能直接 SIGKILL:git 被杀无法捕获信号,.git/index.lock 残留+工作树新旧混合,后续 session_end 全部失败;必须 SIGTERM 留宽限、等 close 结算,并在失败后复核 HEAD ∈ {更新前, origin/main} 且无 index.lock,可疑的树拒绝启动 MCP
+- 负结果: git 的 stdout/stderr 必须分流域收集:混进一条 warning 就会把干净工作树判成 dirty,启动器从此每 10 分钟重试永不更新;计数解析也可能变 NaN
+- 负结果: 状态文件必须原子写(临时文件+rename):截断写被并发/被杀打断会丢全部节流;fallback 状态要以仓库路径指纹分目录,否则多个 worktree 共用一份节流互相干扰
+- 负结果: 信号转发后不能 process.kill(process.pid, sig) 重投递:它会再次进入自己注册的 handler,wrapper 永不退出,留下孤儿 node 进程;转发后直接 process.exit(按信号定退出码)
+- 负结果: 自更新启动器合并后的树不可信:启动 MCP 前必须复核入口存在性 + node --check;坏上游提交不自动 reset(不自动改写用户仓库),给出人工恢复命令并拒绝启动
+- 负结果: 冒烟测自更新必须用隔离夹具(bare origin + clone + 最小 MCP 应答器)做行为断言:源码 grep /ff-only/ 是假绿(注释里就有这个词);且启动器提交必须放在 origin 侧再 clone,留在 work 侧会让 work 分叉、wrapper 正确拒绝合并,ff 场景永远测不到(实测踩过)
+- 负结果: probe 超时要杀整组并立即结算:wrapper 以 inherit stdio 拉起 MCP 孙进程,只杀 wrapper 时孙进程持有管道,close 永不触发,套件无限挂起
+- 负结果: 预算环境变量必须夹取:RELAY_AUTOUPDATE_BUDGET_MS=NaN 会让 setTimeout 退化 ~1ms,每条 git 被立即杀,自动更新静默失效
+- 留给下一个: T067 已闭环(max 审计 4 major + 全部可修 minor)。T066(切抰 14 个 harness 注册面)已在上一轮完成,正在本轮一并出账:其验收已改为可执行的 test:scripts/smoke-harness-paths.mjs(39 断言,本机专用,不接入 npm test)。注意 LOG 历史条目 T065 摘要写「verify 双根 PASS 10/WARN 0」而事实行写 PASS 16:前者是 summary 手写口径,后者是出场全量机检口径,以此为准;下不为例。~/.relay-mcp/ 旧启动器已无任何配置引用,目录保留(含历史备份与回滚脚本)。
+
 ## 2026-11-27 00:46 | model=hungerg-free | task=T065 完成
 - 摘要: T065 把承担全部 harness 更新通道的自更新启动器纳入 relay-mcp 仓库版本控制。背景:14 个 harness 注册面(Claude Code/Desktop/3p、Codex、DeepSeek desktop+web、Gemini、Kimi/Kimi Code、Mavis、MiniMax x2、VS Code、ZCode)的 relay MCP 条目都指向 ~/.relay-mcp/relay-mcp-autoupdate.mjs——一个手工文件,不在版本控制里,换机无法迁移、改动无法 review,且硬编码仓库路径。改动:(1) 复制为 scripts/relay-mcp-autoupdate.mjs,新增「argv[2] 缺席时按 import.meta.url 自推导仓库路径(scripts/../)」,显式传参向后兼容;(2) 新增 scripts/smoke-autoupdate.mjs 11 断言接入 npm test(第 27 套):启动器在位、含 ff-only 逻辑与预算环境变量、可自推导路径、经包装器 initialize 应答 relay-mcp + 语义化版本、无效 REPO exit 2 且报错明确、无参数自推导可启动;SPEC/README 套数同步 26→27,CHANGELOG 新增 [Unreleased] 段。测试要点:冒烟用 RELAY_AUTOUPDATE_BUDGET_MS=1 强制自检快速失败,保证 npm test 期间不会真的 ff-merge origin/main;并清掉 NODE_TEST_CONTEXT(T063 同款教训)。最终 npm test 27 套 1115 断言全绿(新增 11),verify 双根 PASS 10/WARN 0/ERROR 0。剩余(下一步,非本任务):把 14 处 harness 配置的脚本路径切到仓库内新路径——纯配置变更,须逐个备份后替换并实测。
 - 事实(v2): mode=managed | 文件 6 | ± +316/-3 | base=fb21ac6498839e0ed002697b7953a7aa10af91c8 | sha=edd5a08e39a2eb531f1ed8deb9ab93185206bbd5 | branch=relay/T065 || 验收: 通过 | verify: PASS 16·WARN 0·ERROR 0 | 耗时: 107s
