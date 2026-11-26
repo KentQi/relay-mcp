@@ -14,14 +14,17 @@
 (空——认领后由 relay_claim 移入;认领锁在 .relay/claims/,TTL 4 小时,崩溃会话的认领到期自动可接管)
 
 ## 待办
-- [ ] T059 复核并发布 relay-mcp 下一版本（包含 T048–T058 的抢救/通用化/SQLite/自动拉起）
+- [ ] T060 发布 v2.1.0：三矩阵 CI 验证 + CHANGELOG 定版 + tag + GitHub Release
   验收: npm test && ./verify
-  备注: 所有功能与审计修复已合并 main。发布版本/tag/GitHub Release 属人工授权动作;当前 package.json/plugin.json 为 2.1.0,发布前需人工确认版本策略与 CHANGELOG 定版。
+  备注: T052–T058 的功能与第二轮审计修复均已合并到 main 并通过本机 26 套测试(1056 断言)。发布前需人工决定:版本号是否维持 2.1.0、CHANGELOG 是否把本轮修复并入同一版本、是否推送并观察 Node 22/24/26 三矩阵 CI(本机只有 Node 26,CI 未覆盖当前 HEAD)。tag/Release 属人工授权动作。
 
 ## 已冻结
   冻结任务 T030:发布 npm — 决策冻结,不执行(见 DECISIONS 2026-11-18 Tier 2);原发布面已移除,分发改为 git clone / Agent Plugins / GitHub Release。冻结任务不进入 session_start 派发;解冻需先在 DECISIONS 记录新决定并恢复为 [ ] 任务行。
 
 ## 已完成
+- [x] T059 复核并发布 relay-mcp 下一版本（包含 T048–T058 的抢救/通用化/SQLite/自动拉起）  (2026-11-26)
+  验收: npm test && ./verify
+  备注: 所有功能与审计修复已合并 main。发布版本/tag/GitHub Release 属人工授权动作;当前 package.json/plugin.json 为 2.1.0,发布前需人工确认版本策略与 CHANGELOG 定版。
 - [x] T051 抢救后自动拉起备用模型接力（不再依赖编排会话手动拉起）  (2026-11-26)
   验收: test:scripts/smoke-rescue-autolaunch.mjs
   备注: T048 只交付「接力单 + 可派发的接力提示词」,由编排会话或人用 harness 原生手段换模型拉起。自动化需先决定:命令执行面(信任边界,参考 acceptance.commands 的逐字符签字)、后台进程生命周期与回收、重试上限、以及与 relay 认领锁/接力锁的衔接。开工前先记 DECISIONS(减法问:能否复用 acceptance 白名单与 harness 原生 Agent 能力)。本条合并了原 T049 登记项(同一件事,勿重复成立)。

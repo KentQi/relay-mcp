@@ -1,5 +1,21 @@
 # 会话日志(最新在上)
 
+## 2026-11-26 12:58 | model=hungerg-free | task=T059 完成
+- 摘要: T059 复核并修复第二轮审计的全部确认缺陷(原 15 条 + 7 条附录 + 复审新发现 2 条)。核心修复:(1) 快照密钥扫描前移到 git add/write-tree 之前,拒绝时对象库不残留 blob;扫描面超过 500 文件改为整体拒绝而非截断。(2) 接力锁 token 持久化进 state.json,report 用真实 token fencing 释放,释放失败即 isError 且保留 takeover;takeover 锁生命周期收敛到统一 finally。(3) dispatch.json 改临时文件+rename 原子发布,损坏态按 invalid→busy,takeover/report/drop 全部 fail-closed;父进程不再回写 state。(4) worker 用 detached 进程组 + kill(-pid) 终止整棵树,并加「超时+8s」有界结算兜底。(5) 分类器只依据最后一个有效轮次:早期 completion 作废、恢复后的 429 不再判 quota、工具报错后的分析文本不再洗成完成;新增 parseIssues 让行级损坏降级为 error。(6) SQLite 的 maxRows 下推 SQL LIMIT,jsonParse 返回 {value,ok},tool_result 按终态生成并安全序列化对象输出。(7) scan 归属推断改为先 stat 再有界前缀读 cwd。(8) 旧卡 harness→profile 映射、显式 metadata.json source、drop/edits 用 snapshotRoot、drop 识别过期锁。(9) autoLaunch 配置校验前移到任何 TASKS/state 写入之前。(10) fieldMap 的 roleMap/嵌套路径/对象型 apiErrorMarker 全部接通。文档:README 默认零扫描口径、CHANGELOG 补齐 T050/T051/T058 与本轮修复、CONTRACT 新增 T059 契约段、审计报告加附录 B 复核校正与闭环矩阵。验证:npm test 26 套 1056 断言全绿(抢救 172+27+40),relay_verify full PASS 11 WARN 0 ERROR 0, tools/list 10219/10240。
+- 事实(v2): mode=managed | 文件 12 | ± +1163/-274 | base=4f1bdda730dbc99f9315976ce5920dd4d87a6970 | sha=19836a7d5d0b7d01d11de86a485a7304bcc5f175 | branch=relay/T059 || 验收: 通过 | verify: PASS 15·WARN 0·ERROR 0 | 耗时: 55s
+- worktree: branch=relay/T059; sha=19836a7d5d0b7d01d11de86a485a7304bcc5f175; 已验收,未合并(是否合并由人工决定)
+- 负结果: 快照密钥不能只靠「文件名规则 + 事后 diff 扫描」:扫描必须在 git add/write-tree 之前,否则拒绝时 blob 已进对象库
+- 负结果: 按前 N 个文件截断扫描不会降低风险:未扫描的文件照样会被 git add -A 暂存,只能整体拒绝
+- 负结果: 接力锁 token 必须随 takeover 一起持久化进 state.json:没有 token 的释放必然失败,而『报成功但留着锁』比直接报错更糟
+- 负结果: dispatch.json 不能用 writeFileSync 截断覆盖:半写会被读成『没有任务』,必须临时文件+rename,损坏态一律按 busy fail-closed
+- 负结果: worker 超时只 kill 直接子进程不够:孙进程继承管道会让 close 永不触发,必须 detached 进程组 + 有界结算兜底
+- 负结果: 分类器的 explicitCompletion/apiError 不能是『一旦置位就永远为真』:只认最后一个有效轮次,否则早期 end_turn/429 会掩盖真正的中断
+- 负结果: 工具报错后只输出分析文本不算恢复:trailingToolError 必须保持到成功结果或明确收尾
+- 负结果: SQLite 行内 JSON 损坏不能当空对象继续分类:必须变成显式 parseIssue 并降级为 error
+- 负结果: SQLite 的 maxRows 必须下推到 SQL LIMIT:先 .all() 再比较等于上限形同虚设
+- 负结果: scan 归属推断不能先整份读 transcript:先 stat 再有界前缀读 cwd,否则大文件在 maxBytes 检查前就 OOM
+- 留给下一个: T052–T058 的功能与第二轮审计修复均已合并到 main 并通过本机 26 套测试(1056 断言)。发布前需人工决定:版本号是否维持 2.1.0、CHANGELOG 是否把本轮修复并入同一版本、是否推送并观察 Node 22/24/26 三矩阵 CI(本机只有 Node 26,CI 未覆盖当前 HEAD)。tag/Release 属人工授权动作。
+
 ## 2026-11-26 09:26 | model=hungerg-t051 | task=T051 完成
 - 摘要: T051 完成 manifest 声明的通用自动拉起，保持核心不为任何具体 harness 开发。新增 src/engines/rescue-launch-worker.mjs 独立 detached worker：takeover 后按 manifest.rescue.autoLaunch 的 argv 数组启动子进程(shell:false)，worker 负责 stdout/stderr→dispatch.log、生命周期→dispatch.json(running/completed/failed/timed_out)、超时 SIGTERM→2s 后 SIGKILL、输出字节上限。autoLaunch 默认关闭；command 必须是非空非 NUL 字符串数组；cwd realpath 必须在 controlRoot 内；支持 {{prompt}}/{{root}}/{{task}}/{{rescueId}}/{{model}} 占位符，原样替换不经 shell,prompt 里的 ; touch 等元字符不会被执行。配置非法在启动前 fail-closed，撤销移交、释放接力锁、不写 dispatch。dispatch running 时 report/drop 被拒；同一卡已有 dispatch 不重复启动；show 展示 dispatch 状态。顺带修复一个通用数据建模缺陷：metadata candidate 的 profileId(agent 类型)占用了 profile 字段，覆盖格式描述符 id，导致 metadata 卡 fallback 到 jsonl-agent、running/failed 被误判 complete；改为 agentType 独立字段，格式描述符 id 由 scanSources 强制设置。纯元数据来源现在物化最小 JSONL(user prompt + status/error)，原始任务可哈希校验、可供 {{prompt}} 使用，同时保留 transcriptless 标记让状态分类仍以 metadata 为权威。新增 scripts/smoke-rescue-autolaunch.mjs 26 断言并接入 npm test(26 套)，覆盖默认关闭、argv 原样传递、shell 元字符不执行、状态/日志、幂等、运行中 report/drop 拒绝、超时、非法 command/cwd、核心零 harness 名。npm test 26 套全绿，auto-launch 26/0、rescue 133/0、SQLite 22/0，verify 双根全绿，tools/list 10219/10240。
 - 事实(v2): mode=managed | 文件 11 | ± +533/-26 | base=96ed65dbe8011fc085fe9c9c77b2fd1ac0aedc28 | sha=6fe04b16e9e695c043f10a590571b4a27d208017 | branch=relay/T051 || 验收: 通过 | verify: PASS 15·WARN 0·ERROR 0 | 耗时: 58s
