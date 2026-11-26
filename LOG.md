@@ -1,5 +1,15 @@
 # 会话日志(最新在上)
 
+## 2026-11-26 22:55 | model=hungerg-free | task=T060 完成
+- 摘要: T060 完成发布前可做的全部代码面工作:CHANGELOG 从 [Unreleased] 定版为 [2.1.0] - 2026-11-26,并把本轮全部实质修复写进 Fixed(T061–T063) 段——重点是三条安全/正确性修复:验收门 NODE_TEST_CONTEXT 绕过(relay 跑在 node --test 里时嵌套 runner 跳过执行并 exit 0,失败/伪装测试文件反而变绿,整道 H-A 防线失效)、提交消息锚点被 80 字上限截断导致 R10 反查失败、以及 done_tasks[] 的三条 fail-open;另含旧接力单 harness 兼容回归、快照密钥扫描文件名旁路、dispatch 状态卡死、report 锁释放顺序。规模段同步为真实数字(smoke 124、rescue 174、sqlite 27、autolaunch 53、budget 37;npm test 26 套 1104 断言)。版本号三方一致(package.json 2.1.0、plugin.json 2.1.0、CHANGELOG [2.1.0] - 2026-11-26)。verify 双根全绿(R3 11 个 md 合规、R11 无密钥),npm test 26 套 1104 断言通过。未执行(需人工授权的外向动作):git push、打 tag v2.1.0、建 GitHub Release、观察 Node 22/24/26 三矩阵 CI。本机只有 Node 26,矩阵验证必须靠 CI。
+- 事实(v2): mode=managed | 文件 1 | ± +10/-3 | base=3fa1539eba7f23bfbecda963c9b6cdd95b6e1b75 | sha=af2c779db0e326579b64a7d53d729d8aa1058631 | branch=relay/T060 || 验收: 通过 | verify: PASS 15·WARN 0·ERROR 0 | 耗时: 92s
+- worktree: branch=relay/T060; sha=af2c779db0e326579b64a7d53d729d8aa1058631; 已验收,未合并(是否合并由人工决定)
+- 负结果: 发布链分两步:CHANGELOG 定版与版本号同步属于代码面(可以走任务分支),推送/tag/GitHub Release 是外向动作,必须单独获授权后执行
+- 负结果: CHANGELOG 必须把「验收门 NODE_TEST_CONTEXT 绕过」写进 Fixed 段:它是 2.1.0 里唯一的安全级修复,漏写会让升级方无从判断是否需要立即跟进
+- 负结果: 版本号同步要核对三个面:package.json、plugin.json、CHANGELOG 的 [x.y.z] - 日期段;三者不一致会让发布 tag 与制品声明脱节
+- 负结果: 发布前不得只依赖本机 Node 26:CI 矩阵 22/24/26 是唯一能证明跨版本行为的证据,node --test 这类行为差异正是版本矩阵该捕获的
+- 留给下一个: CHANGELOG 已定版 [2.1.0] - 2026-11-26,package.json/plugin.json 均为 2.1.0。推送后需观察 Node 22/24/26 三矩阵 CI(.github/workflows/ci.yml),三绿后在 GitHub 建 v2.1.0 Release(正文引用 docs/04-test/10、11、12 三份审计报告与本轮 T061–T063 修复)。出隔断确认:本机只有 Node 26,三矩阵必须靠 CI。
+
 ## 2026-11-26 20:12 | model=hungerg-free | task=T063 完成
 - 摘要: T063 收口 T062 复验三条残留,并修掉一个真实验收门绕过。D1(LOG 摘要原地手改):按 T046 口径在 controlRoot DECISIONS 记明校正与依据(保留而非回退的理由、原文、约束);smoke 加间接约束——DECISIONS 必须含「引擎写的协议行不得原地改写」与「校正与依据」,LOG 每条「- 注:」须写明依据并可关联任务号,并有无依据说明会被判负的反向对照;明确声明摘要行是否被改过本身无法机检。协议面检查改为显式读 controlRoot(RELAY_CONTROL_ROOT 或从 .relay/worktrees/T### 回溯),避开 worktree 里的过期副本。D2(多任务提交消息截断):renderCommitMessage 把 {{task}}/{{taskId}} 视为不可截断锚点,只裁 summary 其次 evidence;新增 N=2/6/7/8/12、summary 超长仍保留全部任务号、单任务逐字符不变等断言。D3(T048 历史值):核实只有 zcode/claude 真实写入过,explicit 仅出现在比较分支、从无赋值点;注释与 controlRoot LOG 表述同步更正。额外发现并修复:验收门执行 node --test 未剥 NODE_TEST_CONTEXT,外层 node --test 注入它后嵌套 runner 跳过执行并 exit 0,失败/伪装测试文件反而变绿,整道 H-A 防线失效;已在 runCmd 剥离该变量并加断言(原生 spawnSync 注入,撤销修复实测变红)。过程中修掉自己四处错误:renderCommitMessage 初版把 evidence 也算不可裁锚点;NODE_TEST_CONTEXT 断言因 spawnSync2 只收两参而静默未注入 env;把 LOG/DECISIONS 改在 worktree 里被 session_end 以协议文件改动拒绝;D1 断言读 worktree 过期 LOG 而假红。最终 npm test 26 套 1104 断言全绿,node --test scripts/smoke.mjs 真绿(124 断言,此前 120/2),verify 全绿。
 - 事实(v2): mode=managed | 文件 4 | ± +149/-11 | base=5518a447a594733145e7c08a07f14d987c69f56b | sha=93842d7f76f9e165bd8961ebca9cdcc1a35fc0f8 | branch=relay/T063 || 验收: 通过 | verify: PASS 16·WARN 0·ERROR 0 | 耗时: 67s
