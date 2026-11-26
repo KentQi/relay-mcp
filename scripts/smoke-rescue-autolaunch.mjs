@@ -234,13 +234,43 @@ try {
     cli(repo, 'relay_rescue', { action: 'capture', id: 'launch-agent', confirm: true });
     const id = idsOf(repo)[0];
     ok(!!id, '损坏状态夹具已 capture', id || '');
+    // 先 takeover 取得派发权——否则 report 会在「不持有派发权」处就返回,
+    // 根本走不到 dispatchBusy 守卫(那是假绿)。自动拉起先关闭,确保卡上无 dispatch。
+    const tkPre = cli(repo, 'relay_rescue', { action: 'takeover', id, model: 'corrupt-taker', confirm: true });
+    ok(tkPre.status === 0, '损坏状态夹具已 takeover(取得派发权)', out(tkPre).slice(0, 300));
     writeFileSync(path.join(cardDir(repo, id), 'dispatch.json'), '{"status":"run');
-    const repCorrupt = cli(repo, 'relay_rescue', { action: 'report', id, model: 'x', summary: 'y', confirm: true });
-    ok(repCorrupt.status === 1, 'dispatch.json 半写时 report 被拒(审计 #6 回归)', out(repCorrupt).slice(0, 300));
-    const dropCorrupt = cli(repo, 'relay_rescue', { action: 'drop', id, confirm: true });
-    ok(dropCorrupt.status === 1, 'dispatch.json 半写时 drop 被拒(审计 #6 回归)', out(dropCorrupt).slice(0, 300));
+    const repCorrupt = cli(repo, 'relay_rescue', { action: 'report', id, model: 'corrupt-taker', summary: 'y', confirm: true });
+    ok(repCorrupt.status === 1 && /运行|running|损坏/.test(out(repCorrupt)),
+      'dispatch.json 半写时 report 被拒(审计 #6 回归)', out(repCorrupt).slice(0, 300));
+    const dropCorrupt = cli(repo, 'relay_rescue', { action: 'drop', id, model: 'corrupt-taker', confirm: true });
+    ok(dropCorrupt.status === 1 && /运行|running|损坏/.test(out(dropCorrupt)),
+      'dispatch.json 半写时 drop 被拒(审计 #6 回归)', out(dropCorrupt).slice(0, 300));
     const tkCorrupt = cli(repo, 'relay_rescue', { action: 'takeover', id, model: 'corrupt-taker', confirm: true });
     ok(tkCorrupt.status === 1, 'dispatch.json 半写时不重复启动(审计 #6 回归)', out(tkCorrupt).slice(0, 300));
+    // 无法识别的 status(如 {})也必须 fail-closed,不能被当成「没有任务」
+    writeFileSync(path.join(cardDir(repo, id), 'dispatch.json'), '{}');
+    const repUnknown = cli(repo, 'relay_rescue', { action: 'report', id, model: 'corrupt-taker', summary: 'y', confirm: true });
+    ok(repUnknown.status === 1, '无法识别的 dispatch status 也 fail-closed', out(repUnknown).slice(0, 300));
+  }
+  {
+    // (a2) 无 pid 的 running 占位超过宽限期后不得永久锁死
+    const repo = fresh('stalepid');
+    const src = mkTmp('src');
+    makeSource(repo, src);
+    cli(repo, 'relay_rescue', { action: 'capture', id: 'launch-agent', confirm: true });
+    const id = idsOf(repo)[0];
+    const tk = cli(repo, 'relay_rescue', { action: 'takeover', id, model: 'stale-taker', confirm: true });
+    ok(tk.status === 0, '占位夹具 takeover 成功', out(tk).slice(0, 300));
+    const dp = path.join(cardDir(repo, id), 'dispatch.json');
+    writeFileSync(dp, JSON.stringify({
+      status: 'running', pid: null, cwd: repo, startedAt: new Date().toISOString(),
+      finishedAt: '', exitCode: null, signal: null, error: '', outputBytes: 0,
+    }, null, 2));
+    const { utimesSync } = await import('node:fs');
+    const old = new Date(Date.now() - 10 * 60000);
+    utimesSync(dp, old, old);
+    const repStale = cli(repo, 'relay_rescue', { action: 'report', id, model: 'stale-taker', summary: '占位已失效', confirm: true });
+    ok(repStale.status === 0, '无 pid 的 running 占位超龄后不再永久阻塞 report(T061 复审)', out(repStale).slice(0, 400));
   }
   {
     // (b) 极快退出的命令:终态不得被父进程的 running 占位覆盖

@@ -1086,6 +1086,35 @@ export const relaySessionEnd = async (args = {}) => {
   }
   // 多任务出场要求每个任务都有「可执行验收」的背书;这里是唯一的实现路径:逐任务跑各自的验收行。
   // (下面的 acceptanceGate 仍按主任务跑,额外任务在 TASKS 盖戳前统一校验。)
+  // D8/R9 只读**标题行**的 task= 字段(DONE_TASK_RE = ^T\d+\s*完成$),所以 done_tasks[] 必须
+  // 落成多条独立完成条目,否则「摘要正文提到别的任务号」不构成证据。主任务排最前。
+  // 在参数校验后立即定型:后面 TASKS 盖戳、LOG 条目、提交消息、锁释放都要用同一份清单。
+  const doneTaskIds = doneTask ? [doneTask, ...extraTasks] : [...extraTasks];
+  // done_tasks[] 非空而 done_task 缺席 → 拒收。否则 TASKS 不盖戳、LOG 只写 task=无、认领锁不释放,
+  // 工具却照样报「绿闸:通过」——那是把 done_tasks[] 要消灭的证据缺口换条路径复现。
+  if (extraTasks.length && !doneTask) {
+    out.push('## 参数校验失败 — 未提交', '',
+      '提供了 `done_tasks[]` 但缺少主任务 `done_task`。', '',
+      '修复:把其中一个任务作为 `done_task` 传入(`done_tasks` 只放**额外**任务),或改用单任务出场。');
+    return { content: [{ type: 'text', text: out.join('\n') }], isError: true };
+  }
+  // 任务号必须真实存在于 TASKS:否则会写出一条「task=T### 完成」的幽灵完成条目,
+  // 而 R9 只比对最新条目的任务号、看不见它,R7 反而把它计成一次完成。
+  if (extraTasks.length) {
+    const tLinesNow = await readFileSafe(join(root, 'TASKS.md'), null);
+    const known = new Set(
+      String(tLinesNow ?? '').split('\n')
+        .map((l) => (l.match(TASK_LINE_RE) || [])[2])
+        .filter(Boolean),
+    );
+    const ghost = extraTasks.filter((t) => !known.has(t));
+    if (ghost.length) {
+      out.push('## 参数校验失败 — 未提交', '',
+        `\`done_tasks\` 含 TASKS.md 中不存在的任务号:${ghost.join(', ')}。`, '',
+        '修复:只在 `done_tasks` 里放 TASKS.md 真实存在的任务号;拼错会导致伪造的完成条目进入 LOG。');
+      return { content: [{ type: 'text', text: out.join('\n') }], isError: true };
+    }
+  }
   const blocked = String(args.blocked ?? '').replace(/[\u0000-\u001f\u007f]+/g, ' ').trim();
   const next = args.next && typeof args.next === 'object' ? args.next : null;
   if (next) {
@@ -1480,10 +1509,9 @@ export const relaySessionEnd = async (args = {}) => {
     insertIntoSection(tLines, '已完成', doneLines);
     changes.push(`TASKS.md: ${taskId} → \`[x]\` (${date}),挪入「已完成」区${blocked ? '〔附阻塞说明〕' : ''}`);
   };
-  if (doneTask) {
-    markTaskDone(doneTask);
-    // done_tasks[]:逐个盖戳(每个任务都要有自己的 [x] 行,D8/R9 才认)。
-    for (const t of extraTasks) markTaskDone(t);
+  if (doneTaskIds.length) {
+    // 主任务 + done_tasks[] 统一遍历:主任务缺席时额外任务也必须盖戳(不能只走 doneTask 分支)。
+    for (const t of doneTaskIds) markTaskDone(t);
   } else if (blocked) {
     changes.push('警告: 提供了 blocked 但无 done_task,阻塞说明改写入 LOG(留给下一个)');
   }
@@ -1547,9 +1575,6 @@ export const relaySessionEnd = async (args = {}) => {
   // 维护会话(onboard/开源化/引擎迁移等基础设施工作)不对应 TASKS 任务:
   // task=维护 且不计入 R7 发散窗口(否则探测类会话挂 task=无 会被误判为停滞)
   const maintenance = args.maintenance === true;
-  // D8/R9 只读**标题行**的 task= 字段(DONE_TASK_RE = ^T\d+\s*完成$),所以 done_tasks[] 必须
-  // 落成多条独立完成条目,否则「摘要正文提到别的任务号」不构成证据。主任务排最前。
-  const doneTaskIds = doneTask ? [doneTask, ...extraTasks] : [];
   const taskField = doneTask ? `${doneTask} 完成` : (maintenance ? '维护' : '无');
   const summaryFlat = summary.split('\n').map((s) => s.trim()).filter(Boolean).join('; ');
   // 事实底账(T013/R10):由引擎确定性派生并写入,模型不得手写/改写。
@@ -1584,8 +1609,8 @@ export const relaySessionEnd = async (args = {}) => {
     if (blocked && !doneTask) e.push(`- 留给下一个: 当前受阻:${blocked}`);
     return e;
   };
-  const fields = doneTask
-    ? [taskField, ...extraTasks.map((t) => `${t} 完成`)]
+  const fields = doneTaskIds.length
+    ? doneTaskIds.map((t) => `${t} 完成`)
     : [taskField];
   fields.forEach((f, i) => entries.push(buildEntry(f, i === 0)));
   const entry = entries[0];
@@ -1628,14 +1653,21 @@ export const relaySessionEnd = async (args = {}) => {
   // 崩溃点矩阵(测试钩子):两个协议文件已写、提交尚未发生 —— 验证重跑能补交且不重复记账
   if (process.env.RELAY_CRASH_BEFORE_COMMIT === '1') process.exit(137);
   // 5/6. 提交分支:护栏 → 不提交;否则 add -A + commit;失败 → 降级
-  // 提交消息携带「T### 完成」token:TASKS 完成行不记 sha(自指无解),考古靠 git log --grep
+  // 提交消息携带「T### 完成」token:TASKS 完成行不记 sha(自指无解),考古靠 git log --grep。
+  // 多任务出场时每个任务号都必须出现在消息里,否则额外任务的完成条目无法被 R10 反查到提交
+  // (R10 用 `git log --grep "<task> 完成"` 定位;只写主任务号会让额外任务条目退化成 WARN)。
   const firstLine = summary.split('\n')[0].trim();
-  const head = doneTask ? `${doneTask} 完成 · ` : '';
-  // P6 模板变量:{{task}} = 任务前缀(含「 · 」分隔符,与补丁前 head 逐字符一致),
-  // {{taskId}} = 纯任务号(供 [[{{taskId}}] {{summary}}] 这类干净模板使用),{{summary}} = 摘要首行,
+  const head = doneTaskIds.length ? `${doneTaskIds.map((t) => `${t} 完成`).join(' · ')} · ` : '';
+  // P6 模板变量:{{task}} = 任务前缀(含「 · 」分隔符,单任务时与补丁前 head 逐字符一致),
+  // {{taskId}} = 纯任务号(多任务时逗号分隔),{{summary}} = 摘要首行,
   // {{evidence}} = verify 三态计数 + 验收执行数(v1.7.0;只有显式使用时才放宽到 240 字符)。
   const tpl = (cfg && cfg.commitMessageTemplate) || DEFAULT_COMMIT_TEMPLATE;
-  const tplVars = { task: head, taskId: doneTask, summary: firstLine, evidence: evidenceLine };
+  const tplVars = {
+    task: head,
+    taskId: doneTaskIds.length ? doneTaskIds.join(',') : doneTask,
+    summary: firstLine,
+    evidence: evidenceLine,
+  };
   const commitMaxLen = tpl.includes('{{evidence}}') ? 240 : 80;
   const commitMsg = renderCommitMessage(tpl, tplVars, { maxLen: commitMaxLen });
   // 人工建议命令串专用:码点安全截断 + POSIX 双引号内元字符转义(防 summary 自由文本注入);
@@ -1824,7 +1856,7 @@ export const relaySessionEnd = async (args = {}) => {
         registryWarnings.push(`注册表完成状态更新失败(完成提交已落账,需人工修复注册表):${e?.message || String(e)}`);
       }
     }
-    const claimTokens = doneTaskIds.length ? doneTaskIds : [doneTask];
+    const claimTokens = doneTaskIds.length ? doneTaskIds : [];
     const releasedNotes = [];
     for (const t of claimTokens) {
       const claimToken = await ownedClaimToken(root, t, model);

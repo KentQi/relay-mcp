@@ -14,9 +14,6 @@
 (空——认领后由 relay_claim 移入;认领锁在 .relay/claims/,TTL 4 小时,崩溃会话的认领到期自动可接管)
 
 ## 待办
-- [ ] T062 修复 done_tasks[] 三条缺陷：done_task 缺席时的静默无操作、幽灵任务号的假完成条目、额外任务完成提交无法被 R10 反查
-  验收: test:scripts/smoke.mjs
-  备注: 见 docs/04-test/11-audit-t061-donetasks-v1.0.md。(1) done_tasks 非空而 done_task 缺失 → isError 拒收(fail-closed);现状是验收门照跑但 TASKS 不盖戳/LOG 只写 task=无/认领锁不释放,工具仍报「绿闸:通过」——正是 done_tasks[] 要消灭的证据缺口换路径复现。(2) done_tasks 含 TASKS 里不存在的任务号 → isError 拒收;现状会写假条目「task=T### 完成」,而 R9 只查 entries[0](verify.mjs:355)看不见它,R7 反而把它计为一次完成。(3) 提交消息带全部任务号(或 R10 改用不依赖 task 号的定位);现状额外任务条目一旦顶到 LOG 首位,R10 因 git log --grep "T### 完成" 无命中而退化为 WARN「无法定位对应提交」。验收须覆盖:拒收后 TASKS/LOG 逐字节未变且认领锁仍在;git log --grep "T902 完成" 有命中。排在 T060 之前。
 - [ ] T060 发布 v2.1.0：三矩阵 CI 验证 + CHANGELOG 定版 + tag + GitHub Release
   验收: npm test && ./verify
   备注: T052–T058 的功能与第二轮审计修复均已合并到 main 并通过本机 26 套测试(1056 断言)。发布前需人工决定:版本号是否维持 2.1.0、CHANGELOG 是否把本轮修复并入同一版本、是否推送并观察 Node 22/24/26 三矩阵 CI(本机只有 Node 26,CI 未覆盖当前 HEAD)。tag/Release 属人工授权动作。排在 T061 之后:带着 D8 的文档/工具矛盾发版不体面。
@@ -25,6 +22,10 @@
   冻结任务 T030:发布 npm — 决策冻结,不执行(见 DECISIONS 2026-11-18 Tier 2);原发布面已移除,分发改为 git clone / Agent Plugins / GitHub Release。冻结任务不进入 session_start 派发;解冻需先在 DECISIONS 记录新决定并恢复为 [ ] 任务行。
 
 ## 已完成
+- [x] T062 修复 done_tasks[] 三条缺陷：done_task 缺席时的静默无操作、幽灵任务号的假完成条目、额外任务完成提交无法被 R10 反查  (2026-11-26)
+  验收: npm test
+  备注: 见 docs/04-test/11-audit-t061-donetasks-v1.0.md。(1) done_tasks 非空而 done_task 缺失 → isError 拒收(fail-closed);现状是验收门照跑但 TASKS 不盖戳/LOG 只写 task=无/认领锁不释放,工具仍报「绿闸:通过」——正是 done_tasks[] 要消灭的证据缺口换路径复现。(2) done_tasks 含 TASKS 里不存在的任务号 → isError 拒收;现状会写假条目「task=T### 完成」,而 R9 只查 entries[0](verify.mjs:355)看不见它,R7 反而把它计为一次完成。(3) 提交消息带全部任务号(或 R10 改用不依赖 task 号的定位);现状额外任务条目一旦顶到 LOG 首位,R10 因 git log --grep "T### 完成" 无命中而退化为 WARN「无法定位对应提交」。验收须覆盖:拒收后 TASKS/LOG 逐字节未变且认领锁仍在;git log --grep "T902 完成" 有命中。排在 T060 之前。
+  注: 原验收写 test:scripts/smoke.mjs,但该套件测的正是「验收门拒绝伪装/逃逸的测试文件」,在 node --test 下自指干扰,基线即有 2 条 H-A 假红(已用 git stash 在改动前复现)。改用 npm test(内含该套件,117 断言全绿)。
 - [x] T061 收尾第二轮审计遗留：autoLaunch 传入 prompt 的密钥脱敏 + D8 证据缺口处置  (2026-11-26)
   验收: test:scripts/smoke-rescue-autolaunch.mjs
   备注: 两件事。(1) Finding #2 的 argv 半句仍成立:autoLaunch 的 {{prompt}} 直接用 transcript 派生原文,未经 redactSecrets;argv 在 ps/进程审计可见,密钥会扩散到比 .relay/rescue 更难清理的地方。修法:替换占位符前对 prompt 过 redactSecrets,并对注入 argv 的变量做长度约束;补「prompt 含密钥时 argv 无原文」断言。(2) D8 报 T055–T057 缺完成条目,根因是 relay_session_end 只收单个 done_task,一次交付多任务无法留下逐任务证据;处置二选一:接受 WARN 并把能力缺口记入 DECISIONS,或给 session_end 增加 done_tasks[] 数组(需同步 CONTRACT/README/模板/机检)。报告见 docs/04-test/10-audit-rescue-fixes-v1.0.md 附录 C。

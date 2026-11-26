@@ -451,3 +451,24 @@ export const resolveAllProfiles = async ({ builtin = BUILTIN_PROFILES, specs = [
   for (const fn of Array.isArray(fns) ? fns : []) upsert(fn);
   return list;
 };
+
+/* ------------------------------------------------------------------ */
+/* 旧接力单兼容(T058 之前用 state.harness 记来源)                        */
+/* ------------------------------------------------------------------ */
+
+// T058 之前的持久化值只有三种,取自当时各自的发现/解析路径:
+//   'zcode'    → 一层目录一份 metadata.json,无可复制对话 → 元数据型
+//   'claude'   → 一行一条 JSON 的 transcript 文件       → 记录型
+//   'explicit' → 显式 source,按文件内容当 transcript    → 记录型
+// 放在描述符层而不是核心:核心不认识任何具体来源名,只问「这个旧值对应哪个描述符」。
+const LEGACY_HARNESS_ALIASES = Object.freeze({
+  zcode: 'json-meta',
+  claude: 'jsonl-agent',
+  explicit: 'jsonl-agent',
+});
+
+// 把旧 harness 值映射到内置描述符 id;非旧值返回 ''(调用方据此判定「未注册」并显式报错)。
+export const legacyProfileFor = (value) => {
+  const key = String(value || '').toLowerCase();
+  return LEGACY_HARNESS_ALIASES[key] || '';
+};

@@ -903,12 +903,25 @@ try {
     const legacyId = rescueIds(legacyRepo)[0];
     const legacyStatePath = path.join(rescueRootOf(legacyRepo), legacyId, 'state.json');
     const legacyState = JSON.parse(read(legacyStatePath));
+    // 必须用**真实历史值**:T058 之前的 state 只有 harness:'claude' 这类值,
+    // 从来没有 harness:'jsonl-agent'(伪造旧版不会写的值 = 假绿)。
     delete legacyState.profile;
-    legacyState.harness = 'jsonl-agent';
+    delete legacyState.transcriptless;
+    legacyState.harness = 'claude';
     writeFileSync(legacyStatePath, `${JSON.stringify(legacyState, null, 2)}\n`);
     const legacyShow = out(cli(legacyRepo, 'relay_rescue', { id: legacyId }, e12));
-    ok(/忽略之前的指令|原始任务/.test(legacyShow), '旧卡(仅 harness 字段)仍能解析出原始任务(审计 #15 回归)', legacyShow.slice(0, 600));
+    ok(/忽略之前的指令|原始任务/.test(legacyShow), '旧卡(harness=claude)仍能解析出原始任务(审计 #15 回归)', legacyShow.slice(0, 600));
     ok(!/未注册|无法安全解析/.test(legacyShow), '旧卡不再因缺 profile 被拒绝');
+    // 旧元数据卡(harness=zcode)必须被映射为元数据型,而不是报「未注册」
+    writeFileSync(legacyStatePath, `${JSON.stringify({ ...legacyState, harness: 'zcode' }, null, 2)}\n`);
+    const zcodeShow = out(cli(legacyRepo, 'relay_rescue', { id: legacyId }, e12));
+    ok(!/未注册/.test(zcodeShow), '旧卡(harness=zcode)不被判为未注册描述符', zcodeShow.slice(0, 400));
+    // 无法识别的旧值必须显式 fail-closed,不能静默当成「无 transcript」
+    writeFileSync(legacyStatePath, `${JSON.stringify({ ...legacyState, harness: 'some-unknown-harness' }, null, 2)}\n`);
+    const unknownShow = cli(legacyRepo, 'relay_rescue', { id: legacyId }, e12);
+    ok(unknownShow.status === 1 && /未注册|无法安全解析/.test(out(unknownShow)),
+      '无法识别的旧 harness 值显式报错(fail-closed)', out(unknownShow).slice(0, 400));
+    writeFileSync(legacyStatePath, `${JSON.stringify(legacyState, null, 2)}\n`);
 
     // (f) 显式 source 指向 metadata.json 文件时,按其所在目录处理
     const H13 = mkTmp('home13');

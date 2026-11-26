@@ -72,6 +72,8 @@ try {
   state.finishedAt = new Date().toISOString();
   atomicWriteState();
   closeSync(fd);
+  // 临时配置含 argv 派生的 prompt 内容:失败路径也必须删掉,不能留在盘上。
+  try { if (existsSync(configPath)) unlinkSync(configPath); } catch { /* ignore */ }
   process.exit(1);
 }
 state.pid = child.pid || null;

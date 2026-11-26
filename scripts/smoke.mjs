@@ -376,6 +376,52 @@ try {
     });
     ok(bad2.isError && /T003|任务号/.test(bad2.text), 'D5: done_tasks 非法任务号被拒', bad2.text.slice(0, 300));
     ok(readFileSync(path.join(tmpD, 'LOG.md'), 'utf8') === before, 'D5: 非法入参不写 LOG');
+
+    // F1(审计 T062):done_tasks 非空但缺 done_task → fail-closed(不能「绿闸通过却一字节不记」)
+    {
+      const tasksNow2 = readFileSync(tasksPath, 'utf8');
+      writeFileSync(tasksPath, tasksNow2.replace(/^## 待办$/m, '## 待办\n- [ ] T903 只传数组的任务\n  验收: npm test'));
+      await tool('relay_claim', { root: tmpD, task: 'T903', model: 'multi-model', worktree: false });
+      const tasksBefore = readFileSync(tasksPath, 'utf8');
+      const logBefore = readFileSync(path.join(tmpD, 'LOG.md'), 'utf8');
+      const noMain = await tool('relay_session_end', {
+        root: tmpD, model: 'multi-model', summary: '只传 done_tasks', done_tasks: ['T903'],
+      });
+      ok(noMain.isError, 'F1: done_tasks 缺 done_task 被拒收(不报假绿)', noMain.text.slice(0, 400));
+      ok(readFileSync(tasksPath, 'utf8') === tasksBefore, 'F1: 被拒后 TASKS 逐字节未变');
+      ok(readFileSync(path.join(tmpD, 'LOG.md'), 'utf8') === logBefore, 'F1: 被拒后 LOG 逐字节未变');
+      ok(existsSync(path.join(tmpD, '.relay', 'claims', 'T903.lock')), 'F1: 被拒后认领锁仍在(未误释放)');
+
+      // F2: done_tasks 含 TASKS 里不存在的任务号 → 不得写入幽灵完成条目
+      const ghost = await tool('relay_session_end', {
+        root: tmpD, model: 'multi-model', summary: '幽灵任务号', done_task: 'T903', done_tasks: ['T999'],
+      });
+      ok(ghost.isError, 'F2: TASKS 中不存在的任务号被拒收', ghost.text.slice(0, 400));
+      ok(!/task=T999 完成/.test(readFileSync(path.join(tmpD, 'LOG.md'), 'utf8')), 'F2: 没有写出幽灵完成条目');
+    }
+
+    // F3(审计 T062):额外任务的完成提交必须能被 R10 反查(git log --grep)
+    {
+      const tasksNow3 = readFileSync(tasksPath, 'utf8');
+      writeFileSync(tasksPath, tasksNow3.replace(/^## 待办$/m, [
+        '## 待办',
+        '- [ ] T904 多任务提交甲',
+        '  验收: npm test',
+        '- [ ] T905 多任务提交乙',
+        '  验收: npm test',
+      ].join('\n')));
+      await tool('relay_claim', { root: tmpD, task: 'T904', model: 'multi-model', worktree: false });
+      await tool('relay_claim', { root: tmpD, task: 'T905', model: 'multi-model', worktree: false });
+      const multi = await tool('relay_session_end', {
+        root: tmpD, model: 'multi-model', summary: '双任务提交', done_task: 'T904', done_tasks: ['T905'],
+      });
+      ok(!multi.isError, 'F3: 双任务出场成功', multi.text.slice(0, 300));
+      const gMain = spawnSync2('git', ['-C', tmpD, 'log', '--grep', 'T904 完成', '--oneline']);
+      const gExtra = spawnSync2('git', ['-C', tmpD, 'log', '--grep', 'T905 完成', '--oneline']);
+      ok(gMain.status === 0 && gMain.stdout.trim().length > 0, 'F3: 主任务提交可被 --grep 反查');
+      ok(gExtra.status === 0 && gExtra.stdout.trim().length > 0,
+        'F3: 额外任务提交也可被 --grep 反查(R10 不退化为 WARN)', gExtra.stdout.slice(0, 200));
+    }
     rmSync(tmpD, { recursive: true, force: true });
   }
 

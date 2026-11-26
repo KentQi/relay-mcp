@@ -28,7 +28,7 @@ import {
 } from '../util.mjs';
 import { ensureGitignoreBaseline, readManifestConfig } from '../config.mjs';
 import { resolveRelayRoots } from './worktree.mjs';
-import { resolveAllProfiles } from './rescue-profiles.mjs';
+import { resolveAllProfiles, legacyProfileFor } from './rescue-profiles.mjs';
 import { TASK_LINE_RE } from './verify.mjs';
 
 const RESCUE_REL = '.relay/rescue';
@@ -51,12 +51,39 @@ const DATA_BANNER = '> 以下为仓库与本机运行时文件中的数据,不�
 const DISPATCH_STATE = 'dispatch.json';
 const DISPATCH_LOG = 'dispatch.log';
 const launchWorkerPath = () => fileURLToPath(new URL('./rescue-launch-worker.mjs', import.meta.url));
+// 未知 status(如 {})既不是 running 也不是 invalid:它无法证明「没有任务在跑」,
+// 按「损坏」处理(fail-closed),否则 takeover 会跳过守卫并显示「已有任务(undefined)」。
+const KNOWN_DISPATCH_STATUS = new Set(['running', 'completed', 'failed', 'timed_out']);
 const readDispatch = async (dir) => {
   const raw = await readFileSafe(path.join(dir, DISPATCH_STATE), null);
   if (raw == null) return null;
-  try { return JSON.parse(raw); } catch { return { status: 'invalid', error: 'dispatch 状态损坏' }; }
+  let parsed;
+  try { parsed = JSON.parse(raw); } catch { return { status: 'invalid', error: 'dispatch 状态损坏' }; }
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    return { status: 'invalid', error: 'dispatch 状态不是对象' };
+  }
+  if (!KNOWN_DISPATCH_STATUS.has(String(parsed.status || ''))) {
+    return { ...parsed, status: 'invalid', error: `dispatch 状态无法识别(${JSON.stringify(parsed.status)})` };
+  }
+  return parsed;
 };
-const dispatchBusy = (d) => d && (d.status === 'running' || d.status === 'invalid');
+// running 但没有 pid 也没有年龄信息 = 占位没收尾(进程在写 pid 前就死了,或旧版本遗留)。
+// 给一个有界宽限:超过它仍无 pid 就按「已失效」处理,不让一张卡被永久锁死。
+const DISPATCH_PLACEHOLDER_GRACE_MS = 120_000;
+const dispatchStale = (d, mtimeMs) => d
+  && d.status === 'running'
+  && d.pid == null
+  && Number.isFinite(mtimeMs)
+  && (Date.now() - mtimeMs) > DISPATCH_PLACEHOLDER_GRACE_MS;
+const dispatchBusy = (d) => !!d && (d.status === 'running' || d.status === 'invalid');
+// 带 mtime 的版本:占位超龄后不再算 busy(调用方据此允许新启动或 report/drop)。
+const readDispatchWithAge = async (dir) => {
+  const d = await readDispatch(dir);
+  if (!d) return null;
+  const st = await fsStat(path.join(dir, DISPATCH_STATE)).catch(() => null);
+  const mtimeMs = st ? st.mtimeMs : NaN;
+  return { state: d, mtimeMs, busy: dispatchBusy(d) && !dispatchStale(d, mtimeMs), stale: dispatchStale(d, mtimeMs) };
+};
 const validateAutoLaunch = async (cfg, controlRoot, vars = {}) => {
   const a = cfg.rescue && cfg.rescue.autoLaunch;
   if (!a || a.enabled !== true) return { ok: true, enabled: false };
@@ -115,16 +142,21 @@ const atomicDispatchWrite = (target, content) => {
   finally { if (existsSync(tmp)) unlinkSync(tmp); }
 };
 // 启动一个独立 worker 管理子进程生命周期;worker 退出后 dispatch.json 仍保留。
+// 铁律:先发布的 running 占位必须有收尾人。任何一个后续步骤抛错,都要把占位改写成终态,
+// 否则 dispatchBusy 会永久为真,report/drop/takeover 全部被拒(只能手工删文件才能恢复)。
 const startAutoLaunch = async ({ controlRoot, id, task, model, launch }) => {
   const dir = rescueDir(controlRoot, id);
-  const existing = await readDispatch(dir);
-  if (dispatchBusy(existing)) return { ok: false, error: '自动拉起任务仍在运行或状态损坏,不能重复启动' };
+  const existing = await readDispatchWithAge(dir);
+  if (existing && existing.busy) return { ok: false, error: '自动拉起任务仍在运行或状态损坏,不能重复启动' };
+  // 占位已超龄(无 pid 且久未更新)→ 允许覆盖,新占位由本次启动收尾。
   const startedAt = nowIso();
+  const placeholder = (status, error) => JSON.stringify({
+    status, pid: null, cwd: launch.cwd, startedAt,
+    finishedAt: status === 'running' ? '' : nowIso(),
+    exitCode: null, signal: null, error, outputBytes: 0,
+  }, null, 2) + '\n';
   // 先发布占位再 spawn:worker 可能瞬间退出,后写占位会覆盖终态。
-  atomicDispatchWrite(path.join(dir, DISPATCH_STATE), JSON.stringify({
-    status: 'running', pid: null, cwd: launch.cwd, startedAt, finishedAt: '',
-    exitCode: null, signal: null, error: '', outputBytes: 0,
-  }, null, 2) + '\n');
+  atomicDispatchWrite(path.join(dir, DISPATCH_STATE), placeholder('running', ''));
   const cfgPath = path.join(dir, `.dispatch-${randomUUID()}.json`);
   const cfg = {
     cardDir: dir,
@@ -137,20 +169,24 @@ const startAutoLaunch = async ({ controlRoot, id, task, model, launch }) => {
     model,
     startedAt,
   };
-  await writeFileAtomic(cfgPath, JSON.stringify(cfg), { label: 'dispatch config' });
-  const child = spawn(process.execPath, [launchWorkerPath(), cfgPath], {
-    cwd: controlRoot,
-    env: process.env,
-    stdio: 'ignore',
-    detached: true,
-    shell: false,
-  });
+  let child;
+  try {
+    await writeFileAtomic(cfgPath, JSON.stringify(cfg), { label: 'dispatch config' });
+    child = spawn(process.execPath, [launchWorkerPath(), cfgPath], {
+      cwd: controlRoot,
+      env: process.env,
+      stdio: 'ignore',
+      detached: true,
+      shell: false,
+    });
+  } catch (e) {
+    // 占位必须收尾,否则这张卡会被永久判为「运行中」。
+    try { if (existsSync(cfgPath)) unlinkSync(cfgPath); } catch { /* ignore */ }
+    atomicDispatchWrite(path.join(dir, DISPATCH_STATE), placeholder('failed', `worker 启动失败:${e?.message || String(e)}`));
+    return { ok: false, error: `worker 启动失败:${e?.message || String(e)}` };
+  }
   child.on('error', (e) => {
-    atomicDispatchWrite(path.join(dir, DISPATCH_STATE), JSON.stringify({
-      status: 'failed', pid: child.pid || null, cwd: launch.cwd, startedAt,
-      finishedAt: nowIso(), exitCode: null, signal: null,
-      error: `worker 启动失败:${e?.message || String(e)}`, outputBytes: 0,
-    }, null, 2) + '\n');
+    atomicDispatchWrite(path.join(dir, DISPATCH_STATE), placeholder('failed', `worker 启动失败:${e?.message || String(e)}`));
   });
   child.unref();
   // pid 由 worker 自己写:父进程回写会与 worker 的终态写入竞争,这里不再碰 dispatch.json。
@@ -506,21 +542,28 @@ const snapshotWorktree = async (executionRoot, controlRoot, id, { sensitiveSkipp
   // 排除疑似密钥文件:快照会进 git 对象库,密钥一旦成对象就难撤回。
   // #9(审计):status 失败时旧代码把排除列表当空 → 不排除任何文件 → 密钥照样进对象库。
   // 必须 fail-closed:读不到变更清单就不做快照。
-  const statusRes = await gitRun(executionRoot, '-c', 'core.quotePath=false', 'status', '--porcelain', '-uall');
+  // 路径来源改用 `-z`(NUL 分隔 + 不做 C 转义):手工切片 porcelain 行会在文件名含
+  // 引号/反斜杠/换行/tab 或字面 " -> " 时解析失败,把它误当「已删除」跳过,
+  // 而 `git add -A` 仍会暂存这些文件的内容 —— 那就是一条未扫描内容入对象库的旁路。
+  const statusRes = await gitRun(executionRoot, 'status', '--porcelain', '-uall', '-z');
   if (!statusRes.ok) {
     return { ref: '', note: `git status 失败,拒绝生成快照(无法判定哪些文件含密钥):${statusRes.stderr.slice(0, 200)}` };
   }
-  const lines = statusRes.stdout.split('\n').map((s) => s.replace(/\r$/, '')).filter((s) => s.length >= 3);
-  const excluded = findSensitiveChanges(lines).map((h) => h.path);
+  const records = statusRes.stdout.split('\u0000');
   const statusPaths = [];
-  for (const line of lines) {
-    for (const part of line.slice(3).split(' -> ')) {
-      const rel = part.trim().replace(/^"|"$/g, '');
-      if (rel && !statusPaths.includes(rel)) statusPaths.push(rel);
-    }
+  for (let i = 0; i < records.length; i++) {
+    const rec = records[i];
+    if (!rec || rec.length < 4) continue;
+    const xy = rec.slice(0, 2);
+    statusPaths.push(rec.slice(3));
+    // 重命名/复制在 -z 下是「新路径\0旧路径」两条记录:把旧路径也纳入(它可能仍被引用)。
+    if (/[RC]/.test(xy) && records[i + 1]) statusPaths.push(records[i + 1]), i += 1;
   }
+  // 路径级密钥规则仍用 porcelain 行文本判断(它只看路径,不影响内容扫描覆盖面)。
+  const excluded = findSensitiveChanges(records.filter((r) => r && r.length >= 4));
+  const excludedPaths = new Set(excluded.map((h) => h.path));
   // #9:在任何 git add / write-tree 之前扫描工作区内容,确保密钥 blob 从未进入对象库。
-  const changedFiles = statusPaths.filter((rel) => !excluded.includes(rel));
+  const changedFiles = statusPaths.filter((rel) => rel && !excludedPaths.has(rel));
   // 扫描面必须覆盖全部待暂存文件:任何「只扫前 N 个」的截断都是绕过口
   // (第 N+1 个文件照样会被 git add -A 暂存)。超出预算就整体拒绝,不做部分扫描。
   const MAX_SCAN_FILES = 500;
@@ -536,12 +579,16 @@ const snapshotWorktree = async (executionRoot, controlRoot, id, { sensitiveSkipp
     const abs = path.resolve(executionRoot, raw);
     if (!isInside(path.resolve(executionRoot), abs)) continue;
     const st = await fsStat(abs).catch(() => null);
-    if (!st) continue; // 已删除文件没有待写入内容
+    if (!st) {
+      // 已删除文件没有待写入内容;但「stat 失败 ≠ 一定已删除」——-z 已消除转义问题,
+      // 走到这里通常是真的不存在。仍然 fail-closed 更稳妥:无法证明它不含密钥就不拍快照。
+      return { ref: '', excluded, note: `拒绝生成快照:无法读取变更文件 ${JSON.stringify(raw)} 的状态(可能含未扫描内容)` };
+    }
     if (!st.isFile()) {
-      return { ref: '', excluded, note: `拒绝生成快照:${raw} 不是普通文件` };
+      return { ref: '', excluded, note: `拒绝生成快照:${JSON.stringify(raw)} 不是普通文件` };
     }
     if (st.size > maxSnapshotBytes) {
-      return { ref: '', excluded, note: `拒绝生成快照:${raw} 为 ${st.size} 字节,超过快照内容上限 ${maxSnapshotBytes}` };
+      return { ref: '', excluded, note: `拒绝生成快照:${JSON.stringify(raw)} 为 ${st.size} 字节,超过快照内容上限 ${maxSnapshotBytes}` };
     }
     snapshotBytes += st.size;
     if (snapshotBytes > maxSnapshotBytes) {
@@ -549,10 +596,10 @@ const snapshotWorktree = async (executionRoot, controlRoot, id, { sensitiveSkipp
     }
     let content;
     try { content = readFileSync(abs, 'utf8'); } catch {
-      return { ref: '', excluded, note: `拒绝生成快照:无法读取待保存文件 ${raw}` };
+      return { ref: '', excluded, note: `拒绝生成快照:无法读取待保存文件 ${JSON.stringify(raw)}` };
     }
     const hits = scanSecrets(content);
-    if (hits.length) leaked.push(`${raw}(第 ${hits[0].line} 行 ${hits[0].rule})`);
+    if (hits.length) leaked.push(`${JSON.stringify(raw)}(第 ${hits[0].line} 行 ${hits[0].rule})`);
     if (leaked.length >= 5) break;
   }
   if (leaked.length) {
@@ -592,20 +639,24 @@ const snapshotWorktree = async (executionRoot, controlRoot, id, { sensitiveSkipp
 
 /* ---------------------------- 接力单读写 ---------------------------- */
 
-const mapProfileId = (value) => {
-  const key = String(value || '').toLowerCase();
-  if (/meta|metadata/.test(key)) return 'json-meta';
-  if (/jsonl|transcript|message/.test(key)) return 'jsonl-agent';
-  return value;
+// T058 之前的旧接力单用 `state.harness` 记来源格式。**核心不知道也不该知道**那个字符串是什么,
+// 所以映射表放在描述符层(rescue-profiles.mjs 的 LEGACY_HARNESS_ALIASES):
+// 核心只负责「没有 profile 就问描述符层要一个」,不硬编码任何具体来源名。
+const mapProfileId = (value) => legacyProfileFor(value);
+const applyLegacyStateCompat = (state) => {
+  if (!state || typeof state !== 'object') return state;
+  if (!state.profile && state.harness) state.profile = mapProfileId(state.harness);
+  if (state.transcriptless == null) {
+    const mapped = state.harness ? legacyProfileFor(state.harness) : '';
+    state.transcriptless = mapped ? mapped === 'json-meta' : state.profile === 'json-meta';
+  }
+  return state;
 };
 const readState = async (controlRoot, id) => {
   const raw = await readFileSafe(path.join(rescueDir(controlRoot, id), STATE_NAME), null);
   if (raw == null) return null;
-  try {
-    const state = JSON.parse(raw);
-    if (state && !state.profile && state.harness) state.profile = mapProfileId(state.harness);
-    return state;
-  } catch { return null; }
+  try { return applyLegacyStateCompat(JSON.parse(raw)); }
+  catch { return null; }
 };
 const listStates = async (controlRoot) => {
   let ids = [];
@@ -1074,14 +1125,16 @@ const actTakeover = async ({ controlRoot, args, ctxProfiles, cfg }) => {
   const originalPrompt = (t.parsed && t.parsed.prompt) || '(该来源只有元数据)';
   let launch = null;
   const launchCfg = cfg.rescue && cfg.rescue.autoLaunch;
-  const existingDispatch = await readDispatch(rescueDir(controlRoot, id));
+  const existingDispatchRaw = await readDispatchWithAge(rescueDir(controlRoot, id));
   // 半写/损坏的 dispatch 无法证明「没有任务在跑」:takeover 也必须 fail-closed,
   // 否则会在一个可能仍在执行的卡上再挂一个接力者。
-  if (existingDispatch && existingDispatch.status === 'invalid') {
-    return fail('relay rescue — takeover', `自动拉起状态损坏(.relay/rescue/${id}/dispatch.json 不是完整 JSON),无法判断是否仍有任务运行,拒绝移交。`, [
+  if (existingDispatchRaw && existingDispatchRaw.busy && existingDispatchRaw.state.status === 'invalid') {
+    return fail('relay rescue — takeover', `自动拉起状态损坏(.relay/rescue/${id}/dispatch.json 不是可识别的完整状态),无法判断是否仍有任务运行,拒绝移交。`, [
       '', '修复:确认没有 worker 在跑后删除该文件,或等它被重写为终态后重试。',
     ]);
   }
+  // 占位超龄视为「已失效」:不再阻挡新的自动拉起。
+  const existingDispatch = existingDispatchRaw && !existingDispatchRaw.stale ? existingDispatchRaw.state : null;
   if (launchCfg && launchCfg.enabled === true && !existingDispatch) {
     launch = await validateAutoLaunch(cfg, controlRoot, {
       prompt: originalPrompt, task: state.task || '', rescueId: id, model,
@@ -1273,19 +1326,39 @@ const actReport = async ({ controlRoot, args }) => {
   if (args.confirm !== true) {
     return fail('relay rescue — report(dry-run)', `将回写结果并释放派发权,但未写盘:需要 \`confirm: true\`。`);
   }
-  const dispatch = await readDispatch(rescueDir(controlRoot, id));
-  if (dispatchBusy(dispatch)) {
-    return fail('relay rescue — report', `自动拉起任务仍在运行(status=running,pid=${dispatch.pid || '?'}),暂不能回写结果。`, [
+  const dispatchRaw = await readDispatchWithAge(rescueDir(controlRoot, id));
+  if (dispatchRaw && dispatchRaw.busy) {
+    const dispatch = dispatchRaw.state;
+    return fail('relay rescue — report', `自动拉起任务仍在运行(status=${dispatch.status},pid=${dispatch.pid || '?'}),暂不能回写结果。`, [
       '', `修复:等后台任务结束后重试;状态见 \`.relay/rescue/${id}/dispatch.json\`。`,
     ]);
   }
   // #6(审计):旧实现用空 token 调 releaseFileLock(必然 no-op),再按 holder 字符串手工 unlink——
   // 绕过 token fencing,同名 model 可以删掉别人正在持有的活锁。改为用 takeover 时存下的真实 token 释放。
-  // 顺序:先 fencing 释放(不可回退的一步),成功后才清 takeover 并写 report。
-  // 若释放成功但下面写盘失败,重试 report 时锁已不在场 → 视为已释放并补写,状态可自愈;
-  // 反过来「先写 report 再释放」一旦释放失败就会谎报已交回,所以顺序固定为「先释放」。
+  //
+  // 顺序:先**持久化**回写结果,再释放锁。两个失败方向必须分清:
+  //   · 先写 state 失败 → 锁仍在、takeover 仍在,状态与锁一致,重试即可(可恢复);
+  //   · 先释放锁失败 → 若已写 state,就会出现「锁还在、state 说已交回」的分裂。
+  // 所以写盘必须在前;写盘成功而释放失败时,state 仍保留 takeover(见下),并明确报错。
   const heldToken = state.takeover.token || '';
   const lockPath = path.join(controlRoot, RESCUE_REL, id, LOCK_NAME);
+  const prevReport = state.report;
+  const prevTakeover = state.takeover;
+  const prevUpdatedAt = state.updatedAt;
+  state.report = { model, summary: redactSecrets(summary).text.slice(0, 2000), at: nowIso(), task: state.task || '' };
+  state.updatedAt = nowIso();
+  state.takeover = null;
+  try {
+    await writeFileAtomic(path.join(rescueDir(controlRoot, id), STATE_NAME), `${JSON.stringify(state, null, 2)}\n`, { label: '接力单 state.json' });
+  } catch (e) {
+    // 回滚内存态(不影响磁盘:磁盘若已失败则原本就没写成功)。锁与 takeover 都还在,重试安全。
+    state.report = prevReport;
+    state.takeover = prevTakeover;
+    state.updatedAt = prevUpdatedAt;
+    return fail('relay rescue — report', `回写结果写盘失败,未释放接力锁:${e?.message || String(e)}`, [
+      '', '修复:检查 .relay/rescue 的磁盘状态/权限后重试;锁与移交状态都还在,重试安全。',
+    ]);
+  }
   let released = false;
   let releaseWarning = '';
   if (heldToken) {
@@ -1300,15 +1373,16 @@ const actReport = async ({ controlRoot, args }) => {
     else releaseWarning = '该接力单未记录接力锁 token(旧格式),拒绝按 holder 名删除;可人工检查该文件';
   }
   if (!released) {
-    return fail('relay rescue — report', `接力锁释放失败,未清空移交状态:${releaseWarning || '锁可能已被接管'}`, [
-      '', `修复:检查 .relay/rescue/${id}/takeover.lock 与 state.json;不要按 holder 名手工删除活锁。`,
+    // state 已写(report 已落账),但锁仍在:把 takeover 写回去,让磁盘状态与锁一致。
+    state.report = prevReport;
+    state.takeover = prevTakeover;
+    state.updatedAt = prevUpdatedAt;
+    await writeFileAtomic(path.join(rescueDir(controlRoot, id), STATE_NAME), `${JSON.stringify(state, null, 2)}\n`, { label: '接力单 state.json' })
+      .catch(() => { /* 回滚失败时下面的报错已足够:锁仍在,不会出现「锁没了但说已交回」 */ });
+    return fail('relay rescue — report', `接力锁释放失败,已回滚回写结果:${releaseWarning || '锁可能已被接管'}`, [
+      '', `修复:检查 .relay/rescue/${id}/takeover.lock;不要按 holder 名手工删除活锁。`,
     ]);
   }
-  // 先持久化结果再释放锁,避免「锁已释放但 report 仍显示持有」的分裂状态。
-  state.report = { model, summary: redactSecrets(summary).text.slice(0, 2000), at: nowIso(), task: state.task || '' };
-  state.updatedAt = nowIso();
-  state.takeover = null;
-  await writeFileAtomic(path.join(rescueDir(controlRoot, id), STATE_NAME), `${JSON.stringify(state, null, 2)}\n`, { label: '接力单 state.json' });
   return textResult([
     `# 接力单 \`${id}\` 已回写结果`,
     '',
@@ -1339,8 +1413,9 @@ const actDrop = async ({ controlRoot, args }) => {
   const lockAgeMs = lockSt ? Math.max(0, Date.now() - lockSt.mtimeMs) : 0;
   const lockExpired = !!lockInfo && !!lockInfo.token && lockAgeMs > (lockInfo.ttlMinutes || TAKEOVER_TTL_MIN) * 60000;
   const held = !!holder && !lockExpired;
-  const dispatch = await readDispatch(rescueDir(controlRoot, id));
-  if (dispatchBusy(dispatch)) {
+  const dispatchRaw = await readDispatchWithAge(rescueDir(controlRoot, id));
+  if (dispatchRaw && dispatchRaw.busy) {
+    const dispatch = dispatchRaw.state;
     return fail('relay rescue — drop', `自动拉起任务仍在运行或状态损坏(status=${dispatch.status},pid=${dispatch.pid || '?'}),拒绝删除接力单。`, [
       '', `修复:等后台任务结束后重试;状态见 \`.relay/rescue/${id}/dispatch.json\`。`,
     ]);
