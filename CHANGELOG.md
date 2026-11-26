@@ -3,7 +3,7 @@
 本项目遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 格式;
 版本号遵循 [SemVer](https://semver.org/lang/zh-CN/)。
 
-## [Unreleased]
+## [2.1.1] - 2026-11-27
 
 ### Added(自更新启动器纳入仓库并加固 T065/T067)
 
