@@ -3,7 +3,7 @@
 本项目遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 格式;
 版本号遵循 [SemVer](https://semver.org/lang/zh-CN/)。
 
-## [Unreleased]
+## [2.1.0] - 2026-11-26
 
 ### Added(子代理抢救 T048)
 
@@ -39,13 +39,20 @@
 
 - **`relay_session_end` 新增 `done_tasks: string[]`**(仅单根):一次交付多个任务时,每个任务各得一条**独立 LOG 完成条目**(标题 `task=T### 完成`)、自己的 `[x]`、自己的认领锁释放与各自验收门。此前只接受单个 `done_task`,「一个会话做四个任务」只能写在摘要正文里,而 D8/R9 只读标题行的 `task=` 字段——这正是 T055–T057 证据缺口的根因。
 
-### Fixed(T061)
+### Fixed(T061–T063)
 
 - **autoLaunch prompt 脱敏**:注入 argv 的每个占位符变量(含 transcript 派生的 `prompt`)在替换前统一过 `redactSecrets`。argv 会出现在 `ps`/进程审计里,比 `.relay/rescue/` 更难清理;脱敏处数会在 takeover 输出中显式报告,不静默改写注入内容。
+- **验收门环境变量绕过(T063,安全)**:验收门执行 `node --test` 时未剥离外层注入的 `NODE_TEST_CONTEXT`。当 relay 自身跑在 `node --test` 里时,嵌套 runner 会打印「skipping running files」并 **exit 0**,失败或伪装的测试文件因此变绿——整道 H-A 验收防线失效。现已在执行前清理该变量,并加可证伪断言(撤销修复即变红)。
+- **提交消息锚点被截断(T063)**:默认模板 80 字符上限下,多任务时 7 个任务号起末尾 `T### 完成` 被截断,R10 的 `git log --grep` 反查失败并退化为 WARN。现把 `{{task}}`/`{{taskId}}` 视为不可截断锚点,只裁 summary 其次 evidence;单任务渲染逐字符不变。
+- **`done_tasks[]` 三条 fail-open(T062)**:缺 `done_task` 时曾「绿闸通过却一字节不记」;幽灵任务号曾写出假完成条目;额外任务提交曾不可被 R10 反查。三者均改为 fail-closed 或补齐锚点。
+- **旧接力单 harness 兼容(T062,回归)**:T058 前的持久化值 `zcode`/`claude` 曾映射不到任何描述符,旧卡打不开;映射表移入描述符层(`legacyProfileFor`),未知值显式 fail-closed。
+- **快照密钥扫描的文件名旁路(T062)**:porcelain 行改 `-z`(NUL 分隔、不转义),含引号/反斜杠/换行/字面 ` -> ` 的文件名不再被当成「已删除」跳过。
+- **自动拉起 dispatch 状态(T062)**:占位后任何抛错都回写 failed 终态;未知 status 按 invalid fail-closed;无 pid 的 running 占位超 120s 后不再永久阻塞。
+- **`report` 锁释放顺序(T062)**:改为先持久化结果再释放锁,释放失败回滚 state,消除「锁已释放、state 仍显示持有」的分裂。
 
 ### 规模
 
-- `tools/list` 15 个工具,预算 10,240 字节(实测 10,218);`scripts/smoke-rescue.mjs` 172 断言、`scripts/smoke-rescue-zcode-db.mjs` 27 断言、`scripts/smoke-rescue-autolaunch.mjs` 49 断言、`scripts/smoke.mjs` 108 断言;`npm test` **26 套**。
+- `tools/list` 15 个工具,预算 10,240 字节(实测 10,218);`scripts/smoke.mjs` 124 断言、`scripts/smoke-rescue.mjs` 174 断言、`scripts/smoke-rescue-zcode-db.mjs` 27 断言、`scripts/smoke-rescue-autolaunch.mjs` 53 断言、`scripts/smoke-budget.mjs` 37 断言;`npm test` **26 套 / 1104 断言**。
 
 ## [2.0.0] - 2026-11-18
 
