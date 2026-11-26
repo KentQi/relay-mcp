@@ -157,9 +157,29 @@ const findProtectedChanges = (statusLines, extra = []) => {
 // (PROTECTED_RULES 的 .relay/** 规则在上方定义处排除 .relay/claims/)
 
 // —— 命令执行(仅限两类已知入口;自由文本验收绝不执行)——
+// 验收门必须看到子进程的**真实**退出码。几种环境变量会让 node --test 的行为被外层污染:
+//   · NODE_TEST_CONTEXT:外层 `node --test` 注入,带它会触发
+//     「run() is being called recursively ... skipping running files」→ 嵌套文件被跳过且 exit 0,
+//     伪装/失败的测试文件反而变绿(实测),整道 H-A 防线失效;
+//   · NODE_OPTIONS 里的 --test / --experimental-test-*:同样能把子进程拉回测试上下文。
+// 这里显式清理,只保留与 node 常规运行相关的选项。
+const sanitizeAcceptanceEnv = () => {
+  const env = { ...process.env };
+  delete env.NODE_TEST_CONTEXT;
+  if (typeof env.NODE_OPTIONS === 'string' && /--test\b|--experimental-test-/.test(env.NODE_OPTIONS)) {
+    const kept = env.NODE_OPTIONS
+      .split(/\s+/)
+      .filter(Boolean)
+      .filter((f) => !/^--test\b/.test(f) && !/^--experimental-test-/.test(f));
+    if (kept.length) env.NODE_OPTIONS = kept.join(' ');
+    else delete env.NODE_OPTIONS;
+  }
+  return env;
+};
 const runCmd = async (cmd, args, cwd, timeoutMs = 180000) => {
+  const env = sanitizeAcceptanceEnv();
   try {
-    const { stdout, stderr } = await execFileAsync(cmd, args, { cwd, timeout: timeoutMs, maxBuffer: 4 * 1024 * 1024 });
+    const { stdout, stderr } = await execFileAsync(cmd, args, { cwd, timeout: timeoutMs, maxBuffer: 4 * 1024 * 1024, env });
     return { ok: true, out: `${stdout || ''}\n${stderr || ''}`.trim() };
   } catch (e) {
     if (e && e.code === 'ENOENT') return { ok: null, out: `未找到可执行文件 ${cmd}` };
@@ -991,14 +1011,49 @@ const completionOwnershipError = async (root, doneTask, model) => {
 // 提交信息模板渲染(v1.7.0):{{task}}/{{taskId}}/{{summary}}/{{evidence}} 一处实现,managed 与单根共用。
 // 默认模板(不含 {{evidence}})上限仍是 80 字符——与 v1.0.0 逐字符一致;显式使用 {{evidence}} 时
 // 放宽到 240,否则证据会被截断成无意义前缀。codePointSafe 用于人工命令串(避免切碎代理对)。
+//
+// 截断不得切掉结构字段(v1.8.1):`{{task}}`(多任务时的「T901 完成 · T902 完成 · …」)与
+// `{{taskId}}` 是 R10 用 `git log --grep "<task> 完成"` 反查完成提交的唯一锚点。旧实现按字符数
+// 一刀切,多任务时 head 长度随任务数线性增长,7 个任务起末尾任务号就被截掉 → 那些任务条目
+// 在 R10 眼里「无法定位对应提交」。现在把结构字段视为不可截断前缀,只截 summary 部分。
 export const renderCommitMessage = (tpl, vars, { maxLen = 80, codePointSafe = false } = {}) => {
-  const rendered = String(tpl)
+  const clip = (s, n) => (codePointSafe ? Array.from(s).slice(0, n).join('') : s.slice(0, n));
+  const len = (s) => (codePointSafe ? Array.from(s).length : s.length);
+  const tplStr = String(tpl);
+  const fill = (summary, evidence) => tplStr
     .replaceAll('{{task}}', vars.task || '')
     .replaceAll('{{taskId}}', vars.taskId || '')
-    .replaceAll('{{summary}}', vars.summary || '')
-    .replaceAll('{{evidence}}', vars.evidence || '');
-  return codePointSafe ? Array.from(rendered).slice(0, maxLen).join('') : rendered.slice(0, maxLen);
+    .replaceAll('{{summary}}', summary)
+    .replaceAll('{{evidence}}', evidence);
+  const summaryStr = String(vars.summary || '');
+  const evidenceStr = String(vars.evidence || '');
+  const rendered = fill(summaryStr, evidenceStr);
+  if (len(rendered) <= maxLen) return rendered;
+  // 只有 {{task}}/{{taskId}} 是不可裁剪的锚点(R10 靠它反查提交);summary 与 evidence 都可裁剪。
+  const anchorsOnly = fill('', '');
+  if (len(anchorsOnly) >= maxLen) return `${anchorsOnly}…`;
+  // 先裁 evidence(它是可再生的计数摘要),不够再裁 summary。
+  let ev = evidenceStr;
+  let sm = summaryStr;
+  let out = fill(sm, ev);
+  if (len(out) > maxLen) {
+    const roomForEv = Math.max(0, maxLen - len(fill('', '')));
+    const evLen = len(ev);
+    if (evLen > roomForEv) {
+      ev = roomForEv > 1 ? `${clip(ev, roomForEv - 1)}…` : clip(ev, roomForEv);
+      out = fill(sm, ev);
+    }
+  }
+  if (len(out) > maxLen) {
+    const room = maxLen - len(fill('', ev));
+    sm = room > 1 ? `${clip(sm, room - 1)}…` : clip(sm, Math.max(0, room));
+    out = fill(sm, ev);
+  }
+  // 兜底:仍超限就硬裁(理论上到不了这里)。
+  return len(out) <= maxLen ? out : clip(out, maxLen);
 };
+// 供机检/测试使用:模板里是否引用了 {{task}}/{{taskId}} 这两个 R10 锚点
+export const commitTemplateUsesAnchors = (tpl) => /\{\{task(Id)?\}\}/.test(String(tpl || ''));
 
 // 事实行/提交信息共用的证据摘要:verify 三态计数 + 验收执行数(不包含规则条文,保持一行可读)
 export const evidenceSummary = (controlResults, taskResults, acc) => {

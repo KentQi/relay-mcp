@@ -3,7 +3,7 @@
 // 规则条文应留在 relay_rules / relay://protocol(按需读取),不膨胀工具描述。
 // 预算 = 10 KiB(UTF-8). 超了要么压缩描述,要么把内容搬进资源,不允许悄悄涨。
 import { TOOLS, RESOURCES, dispatch } from '../src/contract.mjs';
-import { renderCommitMessage, evidenceSummary } from '../src/engines/session.mjs';
+import { renderCommitMessage, evidenceSummary, commitTemplateUsesAnchors } from '../src/engines/session.mjs';
 
 const BUDGET_BYTES = 10240;
 const EXPECTED_TOOLS = [
@@ -49,6 +49,27 @@ try {
     === 'T003 verify 1P/0W/0E · 验收 1 项', '{{evidence}} 渲染');
   ok(renderCommitMessage('{{summary}}', { summary: 'x'.repeat(300) }).length === 80, '无 {{evidence}} 时上限 80');
   ok(renderCommitMessage('{{evidence}}', { evidence: 'x'.repeat(300) }, { maxLen: 240 }).length === 240, '含 {{evidence}} 时上限 240');
+  // D2(审计 T063):任务号是不可截断锚点 —— R10 靠 `git log --grep "<task> 完成"` 反查完成提交。
+  // 旧实现按字符数一刀切,多任务时 7 个起末尾任务号被截掉(R10 对它们退化为 WARN)。
+  {
+    const tpl = 'relay: session end — {{task}}{{summary}}';
+    for (const n of [2, 6, 7, 8, 12]) {
+      const ids = Array.from({ length: n }, (_, i) => `T${String(901 + i).padStart(3, '0')}`);
+      const head = `${ids.map((t) => `${t} 完成`).join(' · ')} · `;
+      const msg = renderCommitMessage(tpl, { task: head, taskId: ids.join(','), summary: '多任务交付' });
+      const missing = ids.filter((t) => !msg.includes(`${t} 完成`));
+      ok(missing.length === 0, `N=${n} 任务时全部任务号都在提交消息里(不被截断)`, missing.join(','));
+    }
+    // 单任务行为必须逐字符不变(向后兼容)
+    const single = renderCommitMessage(tpl, { task: 'T003 完成 · ', taskId: 'T003', summary: 's' });
+    ok(single === 'relay: session end — T003 完成 · s', '单任务渲染仍逐字符不变');
+    // 锚点本身超限时保留锚点(宁可超长,也不能丢可反查性)
+    const many = Array.from({ length: 12 }, (_, i) => `T${String(901 + i).padStart(3, '0')}`);
+    const longMsg = renderCommitMessage(tpl, { task: `${many.map((t) => `${t} 完成`).join(' · ')} · `, taskId: many.join(','), summary: 'x'.repeat(200) });
+    ok(many.every((t) => longMsg.includes(`${t} 完成`)), 'summary 超长时仍保留全部任务号(牺牲长度而非可反查性)');
+    ok(commitTemplateUsesAnchors('{{task}}{{summary}}') && !commitTemplateUsesAnchors('{{summary}}'),
+      'commitTemplateUsesAnchors 能识别模板是否含 R10 锚点');
+  }
   ok(evidenceSummary([{ result: 'PASS' }, { result: 'WARN' }], [{ result: 'ERROR' }], { executed: 2 })
     === 'verify 1P/1W/1E · 验收 2 项', 'evidenceSummary 汇总格式');
 

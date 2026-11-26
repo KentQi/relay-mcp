@@ -275,6 +275,33 @@ try {
   const pwn3 = await tool('relay_session_end', { root: tmpA, model: 'smoke-model', summary: '嵌套注入尝试', done_task: 'T012' });
   ok(pwn3.isError && pwn3.text.includes('不绿'), 'H-A: 嵌套伪装文件被"不绿"拒绝(当文件跑也进不了绿灯)', pwn3.text.slice(0, 300));
   ok(!existsSync(path.join(tmpA, 'PWNED2')), 'H-A: 嵌套伪装文件未产生副作用');
+  // H-A-1c: 验收门的 node --test 必须剥掉外层注入的 NODE_TEST_CONTEXT。
+  // 带着它会触发「run() is being called recursively ... skipping running files」,
+  // 嵌套文件被**跳过且退出码 0** —— 伪装文件反而变成「绿」,整道防线失效。
+  {
+    const spyPath = path.join(tmpA, 'scripts', 'fake-green.test.mjs');
+    mkdirSync(path.dirname(spyPath), { recursive: true });
+    writeFileSync(spyPath, 'process.exit(1);\n'); // 真失败:必须被判「不绿」
+    const tkSpy = tkSaved.replace('## 待办', '## 待办\n- [ ] T013 上下文泄漏验收\n  验收: test:scripts/fake-green.test.mjs');
+    writeFileSync(tkP, tkSpy);
+    // 模拟「外层 node --test」:注入 NODE_TEST_CONTEXT 后运行 relay 引擎。
+    // 注意用原生 spawnSync:本地 spawnSync2 只接受 (cmd,args),第三个参会被丢弃。
+    const spyRun = spawnSync(process.execPath, [path.join(RELAY, 'src', 'cli.mjs'), 'relay_session_end',
+      '--root', tmpA, '--json', JSON.stringify({ model: 'smoke-model', summary: '上下文泄漏尝试', done_task: 'T013' })],
+    { encoding: 'utf8', env: { ...process.env, NODE_TEST_CONTEXT: 'child' } });
+    const spyOut = `${spyRun.stdout || ''}${spyRun.stderr || ''}`;
+    ok(spyRun.status === 1 && /不绿/.test(spyOut),
+      'H-A: 外层 NODE_TEST_CONTEXT 不会让失败测试变绿(验收门剥掉该变量)', spyOut.slice(0, 400));
+    // 另一条可能的注入通道是 NODE_OPTIONS=--test。实测 Node 直接拒绝("--test is not allowed
+    // in NODE_OPTIONS"),所以它不是真实绕过面;这里断言该前提成立,并在它将来变得可用时失效报警。
+    const spyRun2 = spawnSync(process.execPath, [path.join(RELAY, 'src', 'cli.mjs'), 'relay_session_end',
+      '--root', tmpA, '--json', JSON.stringify({ model: 'smoke-model', summary: 'NODE_OPTIONS 泄漏尝试', done_task: 'T013' })],
+    { encoding: 'utf8', env: { ...process.env, NODE_OPTIONS: '--test' } });
+    const spyOut2 = `${spyRun2.stdout || ''}${spyRun2.stderr || ''}`;
+    ok(/not allowed in NODE_OPTIONS/.test(spyOut2) || (spyRun2.status === 1 && /不绿/.test(spyOut2)),
+      'H-A: NODE_OPTIONS=--test 要么被 Node 拒绝、要么被验收门清理(两条路都 fail-closed)', spyOut2.slice(0, 300));
+    rmSync(spyPath, { force: true });
+  }
   // H-A-2: ../ 目录逃逸
   writeFileSync(path.join(tmpdir(), 'outside.test.js'), 'test("x",()=>{});\n');
   const tkEscape = tkSaved.replace('## 待办', '## 待办\n- [ ] T011 逃逸验收\n  验收: test:../outside.test.js');
@@ -423,6 +450,39 @@ try {
         'F3: 额外任务提交也可被 --grep 反查(R10 不退化为 WARN)', gExtra.stdout.slice(0, 200));
     }
     rmSync(tmpD, { recursive: true, force: true });
+  }
+
+  // D1(审计 T063):引擎写的协议行不得原地改写——摘要内容与「模型写得好」不可区分,
+  // 无法直接机检;这里做间接约束:更正必须在 DECISIONS 有依据,且更正说明不得只说「已修正」。
+  console.log('\n== D1: 协议行不可原地改(间接约束) ==');
+  {
+    // 协议面(LOG/DECISIONS)只存在于 controlRoot。任务 worktree 里的副本是检出时的快照,
+    // 在 worktree 里跑本套件时应当去 controlRoot 读,否则会读到过期副本而假红。
+    // 约定:RELAY_CONTROL_ROOT 显式指定;否则 RELAY 自身若在 .relay/worktrees/T### 下就上溯三层。
+    const protocolRoot = (() => {
+      if (process.env.RELAY_CONTROL_ROOT) return process.env.RELAY_CONTROL_ROOT;
+      const m = RELAY.match(/^(.*)\/\.relay\/worktrees\/T\d+$/);
+      return m ? m[1] : RELAY;
+    })();
+    const decisions = readFileSync(path.join(protocolRoot, 'DECISIONS.md'), 'utf8');
+    ok(/不得原地改|不得原地改写/.test(decisions),
+      'D1: DECISIONS 记录了「引擎写的协议行不得原地改写」的约束');
+    ok(/校正与依据|校正依据/.test(decisions),
+      'D1: DECISIONS 记明了 T062 摘要手改的校正与依据(T046 口径)');
+    const logText = readFileSync(path.join(protocolRoot, 'LOG.md'), 'utf8');
+    const noteLines = logText.split('\n').filter((l) => /^- 注:/.test(l));
+    if (noteLines.length) {
+      ok(noteLines.every((l) => /依据|DECISIONS|原委/.test(l)),
+        'D1: 每条 LOG 更正注都写明依据(不出现无依据的「已修正」)', noteLines.join(' | ').slice(0, 300));
+      const linked = noteLines.every(() => /T06[0-9]/.test(logText.slice(0, logText.indexOf(noteLines[0]) + 2000)));
+      ok(linked, 'D1: 更正注可关联到具体任务号');
+    } else {
+      ok(true, 'D1: 当前没有 LOG 更正注需要检查');
+    }
+    // 反向对照:证明这条约束对「无依据的更正」会判负
+    const bad = ['- 注: 已修正'];
+    ok(!bad.every((l) => /依据|DECISIONS|原委/.test(l)),
+      'D1: 对照——「已修正」这种无依据说明会被判负(断言本身能失败)');
   }
 
   console.log('\n== CLI ==');
