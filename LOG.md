@@ -1,8 +1,21 @@
 # 会话日志(最新在上)
 
+## 2026-11-26 20:12 | model=hungerg-free | task=T063 完成
+- 摘要: T063 收口 T062 复验三条残留,并修掉一个真实验收门绕过。D1(LOG 摘要原地手改):按 T046 口径在 controlRoot DECISIONS 记明校正与依据(保留而非回退的理由、原文、约束);smoke 加间接约束——DECISIONS 必须含「引擎写的协议行不得原地改写」与「校正与依据」,LOG 每条「- 注:」须写明依据并可关联任务号,并有无依据说明会被判负的反向对照;明确声明摘要行是否被改过本身无法机检。协议面检查改为显式读 controlRoot(RELAY_CONTROL_ROOT 或从 .relay/worktrees/T### 回溯),避开 worktree 里的过期副本。D2(多任务提交消息截断):renderCommitMessage 把 {{task}}/{{taskId}} 视为不可截断锚点,只裁 summary 其次 evidence;新增 N=2/6/7/8/12、summary 超长仍保留全部任务号、单任务逐字符不变等断言。D3(T048 历史值):核实只有 zcode/claude 真实写入过,explicit 仅出现在比较分支、从无赋值点;注释与 controlRoot LOG 表述同步更正。额外发现并修复:验收门执行 node --test 未剥 NODE_TEST_CONTEXT,外层 node --test 注入它后嵌套 runner 跳过执行并 exit 0,失败/伪装测试文件反而变绿,整道 H-A 防线失效;已在 runCmd 剥离该变量并加断言(原生 spawnSync 注入,撤销修复实测变红)。过程中修掉自己四处错误:renderCommitMessage 初版把 evidence 也算不可裁锚点;NODE_TEST_CONTEXT 断言因 spawnSync2 只收两参而静默未注入 env;把 LOG/DECISIONS 改在 worktree 里被 session_end 以协议文件改动拒绝;D1 断言读 worktree 过期 LOG 而假红。最终 npm test 26 套 1104 断言全绿,node --test scripts/smoke.mjs 真绿(124 断言,此前 120/2),verify 全绿。
+- 事实(v2): mode=managed | 文件 4 | ± +149/-11 | base=5518a447a594733145e7c08a07f14d987c69f56b | sha=93842d7f76f9e165bd8961ebca9cdcc1a35fc0f8 | branch=relay/T063 || 验收: 通过 | verify: PASS 16·WARN 0·ERROR 0 | 耗时: 67s
+- worktree: branch=relay/T063; sha=93842d7f76f9e165bd8961ebca9cdcc1a35fc0f8; 已验收,未合并(是否合并由人工决定)
+- 负结果: 引擎写的协议行不得原地改写:更正须另起回填条目或回退交引擎重写,并在 DECISIONS 记依据;R10 机检面只到事实行,摘要与负结果无任何机检
+- 负结果: 提交消息截断不能按字符数一刀切:{{task}}/{{taskId}} 是 R10 反查完成提交的唯一锚点,必须不可截断;只裁 summary 其次 evidence,单任务渲染逐字符不变
+- 负结果: 验收门跑 node --test 必须剥掉 NODE_TEST_CONTEXT:外层 node --test 会注入它,嵌套 runner 跳过执行并 exit 0,失败测试反变绿,整道 H-A 防线失效
+- 负结果: 断言必须验证它真能失败:第一版 NODE_TEST_CONTEXT 断言仍绿,因为本地 spawnSync2(cmd,args) 只收两参、第三个 env 被静默丢弃;换原生 spawnSync 并撤销修复实测变红才有效
+- 负结果: 协议面(LOG/TASKS/DECISIONS)只能在 controlRoot 改,不能在任务 worktree 改:worktree 里的副本是检出快照,改了会被 session_end 以『executionRoot 出现协议文件改动』拒绝,且检查协议面的断言必须显式指到 controlRoot(RELAY 不在 worktree 里时用 RELAY_CONTROL_ROOT 或向上回溯)
+- 负结果: 并行跑多个 smoke 套件会造成资源竞争:autolaunch 的 300ms 超时用例在负载高时假红,隔离后连跑 3 次 53/0 稳定
+- 负结果: NODE_OPTIONS=--test 不是真实绕过面:Node 直接拒绝;断言应写『两条路都 fail-closed』
+- 留给下一个: T063 已闭环。发布链 T060 待人工授权:推送全部提交、Node 22/24/26 三矩阵 CI(本机只有 Node 26)、CHANGELOG 定版、tag v2.1.0、GitHub Release。D8 对历史 T055–T057 的 WARN 是有意保留的诚实偏差(DECISIONS 2026-11-26 T061 条),不是回归。
+
 ## 2026-11-26 16:49 | model=hungerg-free | task=T062 完成
-- 摘要: T062 修复 done_tasks[] 三条 fail-open 缺陷,并收掉独立复审(T059 修复)报告的遗留问题。(1) done_tasks 非空而 done_task 缺席时原本 TASKS 不盖戳/LOG 只写 task=无/认领锁不释放,却仍报「绿闸:通过」→ 改为 isError 拒收;(2) 额外任务号在 TASKS 中不存在会写出幽灵完成条目(R9 只比对最新条目看不见,R7 反计一次完成)→ 写盘前校验存在性并拒收;(3) 提交消息只含主任务号,额外任务条目顶到 LOG 首位时 R10 的 git log --grep 反查失败 → 逐任务带「T### 完成」。复审回收:旧卡 harness 兼容此前是假绿(测试伪造了旧版从不写的 harness='jsonl-agent';真实值只有 zcode/claude/explicit,映射移到描述符层 legacyProfileFor);快照密钥扫描的文件名旁路改用 porcelain -z;dispatch 占位永久卡死改为失败回写终态 + 未知 status fail-closed + 无 pid 超 120s 宽限;report 改为先写 state 再释放锁并支持回滚;worker 同步 spawn 失败也删除含 prompt 的临时配置。过程中自己引入并修掉两个回归:doneTaskIds 前移后引用顺序没跟上(所有 session_end 抛 ReferenceError);T062 原验收 test:scripts/smoke.mjs 在 node --test 下自指干扰(基线即有 2 条 H-A 假红),改用 npm test。npm test 26 套 1089 断言全绿,verify PASS 12/WARN 0/ERROR 0。
-- 注: 本条目首版摘要误写为「验收诊断2」——当时把 relay_session_end 当成只读的验收检查来复跑,但它本身就是出场动作,已真实出场。这是操作失误,不是工具缺陷;内容在此更正,历史提交不改写。
+- 摘要: T062 修复 done_tasks[] 三条 fail-open 缺陷,并收掉独立复审(T059 修复)报告的遗留问题。(1) done_tasks 非空而 done_task 缺席时原本 TASKS 不盖戳/LOG 只写 task=无/认领锁不释放,却仍报「绿闸:通过」→ 改为 isError 拒收;(2) 额外任务号在 TASKS 中不存在会写出幽灵完成条目(R9 只比对最新条目看不见,R7 反计一次完成)→ 写盘前校验存在性并拒收;(3) 提交消息只含主任务号,额外任务条目顶到 LOG 首位时 R10 的 git log --grep 反查失败 → 逐任务带「T### 完成」。复审回收:旧卡 harness 兼容此前是假绿(测试伪造了旧版从不写的 harness='jsonl-agent';真实值只有 zcode/claude(explicit 仅出现在比较分支、从无赋值点),映射移到描述符层 legacyProfileFor);快照密钥扫描的文件名旁路改用 porcelain -z;dispatch 占位永久卡死改为失败回写终态 + 未知 status fail-closed + 无 pid 超 120s 宽限;report 改为先写 state 再释放锁并支持回滚;worker 同步 spawn 失败也删除含 prompt 的临时配置。过程中自己引入并修掉两个回归:doneTaskIds 前移后引用顺序没跟上(所有 session_end 抛 ReferenceError);T062 原验收 test:scripts/smoke.mjs 在 node --test 下自指干扰(基线即有 2 条 H-A 假红),改用 npm test。npm test 26 套 1089 断言全绿,verify PASS 12/WARN 0/ERROR 0。
+- 注: 本条目首版摘要误写为「验收诊断2」——当时把 relay_session_end 当成只读的验收检查来复跑,但它本身就是出场动作,已真实出场。这是操作失误,不是工具缺陷;内容在此更正,历史提交不改写(校正依据见 DECISIONS 2026-11-26 T063 条)。
 - 事实(v2): mode=single | 文件 7 | ± +305/-86 | base=- | sha=- | branch=main || 验收: 通过 | verify: PASS 12·WARN 0·ERROR 0 | 耗时: 145s
 - 负结果: relay_session_end 不是只读的验收检查:它就是出场动作,复跑会真实提交并盖戳;诊断验收门应看 isError 与输出,不要用同一条命令试跑
 - 负结果: 验收行不能写 test:scripts/smoke.mjs:该套件测的正是「验收门拒绝伪装/逃逸测试文件」,在 node --test 下自指干扰,基线即有 2 条 H-A 假红(git stash 复现确认);应写 npm test

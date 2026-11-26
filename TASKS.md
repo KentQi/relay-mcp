@@ -14,9 +14,6 @@
 (空——认领后由 relay_claim 移入;认领锁在 .relay/claims/,TTL 4 小时,崩溃会话的认领到期自动可接管)
 
 ## 待办
-- [ ] T063 收口 T062 复验的三条残留：LOG 摘要被原地手改无 DECISIONS 记录、多任务 ≥7 时提交消息截断末尾任务号、旧 harness 历史值表述不准
-  验收: test:scripts/smoke.mjs
-  备注: 见 docs/04-test/12-audit-t062-v1.0.md。(1) D1(中) 475d2f8 原地替换了引擎写的 LOG「摘要」行并手写追加 7 条「负结果」,R10 的机检面只到事实行、摘要与负结果无任何机检,故 R1–R13 全绿也发现不了;按 T046 建立的处置口径应二选一——回退原行由引擎重写,或在 DECISIONS 明确记录本次校正与依据,本次两者皆未做 → 补 DECISIONS 条目,并给「引擎写的行不得原地改」补机检(行内摘要或 commit sha)。(2) D2(低-中) DEFAULT_COMMIT_TEMPLATE 上限 80 字,多任务 head 长度 10N+21,N=7 起末尾任务号被截断,实测 T907 起 grep 不到 → 上限按任务数放开或改用独立 ref,并补 ≥7 任务回归断言。(3) D3(轻微) T048 真实持久化过的 state.harness 只有 zcode/claude 两个,'explicit' 仅出现在比较分支、从无赋值点,映射表多留一条无害但注释与 LOG 负结果里的「三种」表述要更正。
 - [ ] T060 发布 v2.1.0：三矩阵 CI 验证 + CHANGELOG 定版 + tag + GitHub Release
   验收: npm test && ./verify
   备注: T052–T058 的功能与第二轮审计修复均已合并到 main 并通过本机 26 套测试(1056 断言)。发布前需人工决定:版本号是否维持 2.1.0、CHANGELOG 是否把本轮修复并入同一版本、是否推送并观察 Node 22/24/26 三矩阵 CI(本机只有 Node 26,CI 未覆盖当前 HEAD)。tag/Release 属人工授权动作。排在 T061 之后:带着 D8 的文档/工具矛盾发版不体面。
@@ -25,6 +22,9 @@
   冻结任务 T030:发布 npm — 决策冻结,不执行(见 DECISIONS 2026-11-18 Tier 2);原发布面已移除,分发改为 git clone / Agent Plugins / GitHub Release。冻结任务不进入 session_start 派发;解冻需先在 DECISIONS 记录新决定并恢复为 [ ] 任务行。
 
 ## 已完成
+- [x] T063 收口 T062 复验的三条残留：LOG 摘要被原地手改无 DECISIONS 记录、多任务 ≥7 时提交消息截断末尾任务号、旧 harness 历史值表述不准  (2026-11-26)
+  验收: test:scripts/smoke.mjs
+  备注: 见 docs/04-test/12-audit-t062-v1.0.md。(1) D1(中) 475d2f8 原地替换了引擎写的 LOG「摘要」行并手写追加 7 条「负结果」,R10 的机检面只到事实行、摘要与负结果无任何机检,故 R1–R13 全绿也发现不了;按 T046 建立的处置口径应二选一——回退原行由引擎重写,或在 DECISIONS 明确记录本次校正与依据,本次两者皆未做 → 补 DECISIONS 条目,并给「引擎写的行不得原地改」补机检(行内摘要或 commit sha)。(2) D2(低-中) DEFAULT_COMMIT_TEMPLATE 上限 80 字,多任务 head 长度 10N+21,N=7 起末尾任务号被截断,实测 T907 起 grep 不到 → 上限按任务数放开或改用独立 ref,并补 ≥7 任务回归断言。(3) D3(轻微) T048 真实持久化过的 state.harness 只有 zcode/claude 两个,'explicit' 仅出现在比较分支、从无赋值点,映射表多留一条无害但注释与 LOG 负结果里的「三种」表述要更正。
 - [x] T062 修复 done_tasks[] 三条缺陷：done_task 缺席时的静默无操作、幽灵任务号的假完成条目、额外任务完成提交无法被 R10 反查  (2026-11-26)
   验收: npm test
   备注: 见 docs/04-test/11-audit-t061-donetasks-v1.0.md。(1) done_tasks 非空而 done_task 缺失 → isError 拒收(fail-closed);现状是验收门照跑但 TASKS 不盖戳/LOG 只写 task=无/认领锁不释放,工具仍报「绿闸:通过」——正是 done_tasks[] 要消灭的证据缺口换路径复现。(2) done_tasks 含 TASKS 里不存在的任务号 → isError 拒收;现状会写假条目「task=T### 完成」,而 R9 只查 entries[0](verify.mjs:355)看不见它,R7 反而把它计为一次完成。(3) 提交消息带全部任务号(或 R10 改用不依赖 task 号的定位);现状额外任务条目一旦顶到 LOG 首位,R10 因 git log --grep "T### 完成" 无命中而退化为 WARN「无法定位对应提交」。验收须覆盖:拒收后 TASKS/LOG 逐字节未变且认领锁仍在;git log --grep "T902 完成" 有命中。排在 T060 之前。
