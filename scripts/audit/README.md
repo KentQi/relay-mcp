@@ -20,6 +20,8 @@ status: 现行
 | `t061-probe.mjs` | A:只传 `done_tasks` 不传 `done_task`（静默无操作）<br>B:`done_tasks` 含 TASKS 里不存在的任务号（假完成条目）<br>C:正常单任务（对照） | F1 / F2 |
 | `t061-probe2.mjs` | C(修正):正常单任务出场<br>D:happy path —— `done_task` + `done_tasks` 双任务出场 | F1 的对照 |
 | `t061-probe3.mjs` | 主任务条目被幂等去重 → 额外任务条目顶到 LOG 首位 → 后续维护出场使 R10 退化 | F3 |
+| `t062-verify.mjs` | 旧卡兼容(harness='claude'/'zcode'/未知值) + F1/F2/F3 修复验证 + 多任务提交消息边界(N=2/6/7/8) | T062 复验 |
+| `t062-snapshot-verify.mjs` | 快照 porcelain `-z`:三个刁钻文件名含密钥 → 必须拒绝且 0 blob 入库；同名无密钥的对照组必须成功 | T062 复验 |
 
 跑法（各自独立，无需参数）：
 
@@ -27,6 +29,8 @@ status: 现行
 node scripts/audit/t061-probe.mjs
 node scripts/audit/t061-probe2.mjs
 node scripts/audit/t061-probe3.mjs
+node scripts/audit/t062-verify.mjs
+node scripts/audit/t062-snapshot-verify.mjs
 ```
 
 **注意**：脚本会在 `relay_init` 的目标目录里建 git 仓库并跑 `npm test`；
