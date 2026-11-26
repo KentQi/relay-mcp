@@ -41,7 +41,7 @@ export const KNOWN_NESTED_KEYS = Object.freeze({
   logBoundary: ['strict'],
   structure: ['strict'],
   acceptance: ['commands'],
-  rescue: ['sources', 'maxAgeDays', 'maxBytes', 'profiles'],
+  rescue: ['sources', 'maxAgeDays', 'maxBytes', 'profiles', 'autoLaunch'],
 });
 
 // 收集 manifest 里的未知键(顶层 + 四个已知对象内)。纯函数,不做 I/O。
@@ -181,8 +181,8 @@ export const readManifestConfig = async (root, { manifest: preloaded } = {}) => 
     },
     // 简报字符预算(T015):非有限数/非正数 → 回退默认;不改变既有行为(只影响告警阈值)。
     contextBudget: m && Number.isFinite(m.contextBudget) && m.contextBudget > 0 ? m.contextBudget : DEFAULT_CONTEXT_BUDGET,
-    // 抢救(T048):来源适配器的目录、扫描窗口与单份 transcript 上限。
-    // 缺省 = 内置 ZCode / Claude Code 适配器 + 7 天 + 8 MiB;显式 sources 时只扫这些目录。
+    // 抢救(T048/T058):来源描述符、扫描窗口与单份 transcript 上限。
+    // 缺省 = 内置参考描述符 + 7 天 + 8 MiB;显式 sources 时只扫声明的来源。
     rescue: {
       // sources 每条可以是裸路径字符串,或 { profile?, root } 对象(声明式来源,默认空 = 不扫描)。
       sources: Array.isArray(m && m.rescue && m.rescue.sources)
@@ -196,6 +196,18 @@ export const readManifestConfig = async (root, { manifest: preloaded } = {}) => 
         ? Math.floor(m.rescue.maxAgeDays) : DEFAULT_RESCUE_MAX_AGE_DAYS,
       maxBytes: m && m.rescue && Number.isFinite(m.rescue.maxBytes) && m.rescue.maxBytes > 0
         ? Math.floor(m.rescue.maxBytes) : DEFAULT_RESCUE_MAX_BYTES,
+      // T051:通用自动拉起。默认关闭;command 是 argv 数组(不经 shell),不绑定任何 harness。
+      autoLaunch: m && m.rescue && m.rescue.autoLaunch && typeof m.rescue.autoLaunch === 'object'
+        ? {
+          enabled: m.rescue.autoLaunch.enabled === true,
+          command: Array.isArray(m.rescue.autoLaunch.command) ? m.rescue.autoLaunch.command : [],
+          cwd: typeof m.rescue.autoLaunch.cwd === 'string' ? m.rescue.autoLaunch.cwd : '',
+          timeoutMs: Number.isFinite(m.rescue.autoLaunch.timeoutMs) && m.rescue.autoLaunch.timeoutMs > 0
+            ? Math.floor(m.rescue.autoLaunch.timeoutMs) : 300000,
+          maxOutputBytes: Number.isFinite(m.rescue.autoLaunch.maxOutputBytes) && m.rescue.autoLaunch.maxOutputBytes > 0
+            ? Math.floor(m.rescue.autoLaunch.maxOutputBytes) : 1024 * 1024,
+        }
+        : { enabled: false, command: [], cwd: '', timeoutMs: 300000, maxOutputBytes: 1024 * 1024 },
     },
   };
 };

@@ -183,7 +183,8 @@ export const TOOLS = [
       'another model. Harness-agnostic: sources are declared by format descriptors (manifest.rescue.sources + ' +
       'profiles); nothing is scanned by default. scan (default, read-only) lists rescuable agents; capture needs ' +
       'confirm; takeover (confirm+model) grants handing rights and registers the rebuilt task; report writes the ' +
-      'result back; drop removes it (dry-run by default).',
+      'result back; drop removes it (dry-run by default). With manifest.rescue.autoLaunch enabled, takeover also ' +
+      'starts a detached worker for a declared argv command (no shell, no harness assumptions).',
     inputSchema: {
       type: 'object',
       properties: {

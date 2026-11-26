@@ -1,5 +1,15 @@
 # DECISIONS — 追加式决策日志(最新在上)
 
+## 2026-11-26 — 自动拉起采用 manifest 声明的通用 argv,不绑定任何 harness(T051)
+
+- 背景: T048 只交付接力单与提示词,需编排会话/人工换模型拉起。用户要求继续,同时明确 relay 是通用的、不要为具体 harness 开发。
+- 决定: `manifest.rescue.autoLaunch {enabled, command:[argv...], cwd?, timeoutMs?, maxOutputBytes?}`。默认关闭;启用后 takeover 自动启动独立 detached worker,worker 再按 argv 拉起子进程并记录 `dispatch.json`/`dispatch.log`。
+- 理由: argv + `shell:false` 是跨平台、跨 harness 的最小通用执行面;不在核心认识任何 CLI。占位符只做字符串替换,shell 元字符保持字面量。
+- 减法: 不新增 MCP 工具、不加 harness 适配器;复用 takeover/report/drop 与既有接力锁。worker 独立文件,核心只负责校验配置与启动 worker。
+- 安全: command 非空字符串数组、拒 NUL;cwd realpath 必须在仓库内;超时/输出上限;运行中禁 report/drop;非法配置撤销移交并释放锁。
+- 否决: 在核心写死某 harness 的启动命令(违背 T058);默认自动扫描/启动(意外执行风险);经 shell 执行(prompt 注入会变命令执行)。
+- 状态: 现行
+
 ## 2026-11-26 — SQLite 会话抢救实现为通用描述符,不写具体 harness 特例(T050)
 
 - 背景: 首个用户的会话记录持久在 SQLite(message/part),失败时磁盘元数据只有原始 prompt 与笼统错误,完整过程会丢。但 T058 已决定核心不为任何具体 harness 开发。

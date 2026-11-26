@@ -436,3 +436,13 @@ export const startServer = async ({ onInit, onMethod }) => {
 - **降级**:库损坏、缺表、缺列、SQLite 模块不可用 → scan 的「说明」里明确报告,不静默变成「0 候选」;接力单仍可用已有元数据完成 capture(若候选存在)。
 - **机检**:`scripts/smoke-rescue-zcode-db.mjs`(22 断言)覆盖只读不变、quota 分类、完整任务、正常完成不误报、损坏/空库/maxRows 降级,以及核心零 harness 名;接入 `npm test`(25 套)。
 - **范围**:具体库的 schema 只出现在用户的 manifest 描述与测试夹具里;`src/engines/rescue.mjs` 不含任何具体 harness 名。
+
+## 2026-11-26 T051 补充契约(manifest 声明的通用自动拉起)
+
+- **默认关闭**:未配置 `manifest.rescue.autoLaunch` 或 `enabled !== true` 时,takeover 只生成接力单,不启动任何进程。
+- **通用命令面**:`autoLaunch.command` 是非空 **argv 数组**,经 `spawn(..., {shell:false})` 执行,不绑定任何 harness CLI。支持 `{{prompt}}/{{root}}/{{task}}/{{rescueId}}/{{model}}` 占位符;原样替换,不再经 shell 解释。
+- **安全**:argv 每项必须是非 NUL 字符串;`cwd` 必须在 controlRoot 内(realpath 判定);默认 `timeoutMs=300000`、`maxOutputBytes=1MiB`;配置非法在启动前 fail-closed,撤销移交并释放接力锁。
+- **生命周期**:takeover 启动独立 detached worker(`rescue-launch-worker.mjs`),worker 管理子进程 stdout/stderr → `dispatch.log`,状态 → `dispatch.json`(running/completed/failed/timed_out);超时先 SIGTERM、2s 后 SIGKILL。同一卡已有 dispatch 不重复启动。
+- **互斥**:dispatch running 时 report/drop 被拒;worker 结束后才可回写/清理。输出与状态均带 pid/exitCode/signal/error,show 卡片展示 dispatch 状态。
+- **元数据卡**:纯元数据来源物化最小 JSONL(user prompt + status/error),使原始任务可哈希校验、可供 `{{prompt}}` 使用;`agentType`(原 profileId)与格式描述符 id 分开存,避免候选类型覆盖描述符。
+- **机检**:`scripts/smoke-rescue-autolaunch.mjs`(26 断言)覆盖默认关闭、argv 原样传递、shell 元字符不执行、状态/日志、幂等、运行中 report/drop 拒绝、超时、非法 command/cwd、核心零 harness 名;接入 `npm test`(26 套)。

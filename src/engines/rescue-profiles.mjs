@@ -326,7 +326,7 @@ const jsonMetadataProfile = (id, title, { roots, metaFile = 'metadata.json', fie
           error: pick(meta, map.error),
           prompt: pick(meta, map.prompt),
           description: pick(meta, map.description),
-          profile: pick(meta, map.profile),
+          agentType: pick(meta, map.profile),
           createdAt: pick(meta, map.createdAt),
           updatedAt: pick(meta, map.updatedAt),
           mtimeMs: Number.isFinite(updated) ? updated : 0,
@@ -336,7 +336,7 @@ const jsonMetadataProfile = (id, title, { roots, metaFile = 'metadata.json', fie
     }
     return out;
   },
-  parse: () => null,
+  parse: (text) => parseWithFieldMap(text, {}),
 });
 
 /* ------------------------------------------------------------------ */
