@@ -14,17 +14,21 @@
 (空——认领后由 relay_claim 移入;认领锁在 .relay/claims/,TTL 4 小时,崩溃会话的认领到期自动可接管)
 
 ## 待办
+- [ ] T070 无待办 — v2.1.1 已发布,新工作需先与人类定义任务
+  验收: npm test && ./verify
+  备注: v2.1.1 已发布(待确认推送后 CI)。仓库无待办;新工作需先与人类定义任务。若再修问题,版本号顺延 2.1.2 并在 CHANGELOG 新段记录。
 - [ ] T069 无待办 — harness 注册面切换已验收入库,新工作需先与人类定义任务
   验收: npm test && ./verify
   备注: T066 已闭环:14 个 harness 注册面全部指向 scripts/relay-mcp-autoupdate.mjs(启动器已随 T067 加固并入库),无旧路径残留,JSON 全部合法,备份在各配置旁(.relay-bak-20261127-004651)。~/.relay-mcp/ 旧启动器已无引用,目录保留。注意事项:LOG 历史 T065 条目摘要的「PASS 10」是手写快检口径,事实行「PASS 16」是出场全量机检口径,以事实行为准。仓库当前无待办,远端已同步;新工作需先与人类定义任务。
-- [ ] T068 无待办 — 自更新通道已加固并入版本控制,新工作需先与人类定义任务
-  验收: npm test && ./verify
-  备注: T067 已闭环(max 审计 4 major + 全部可修 minor)。T066(切抰 14 个 harness 注册面)已在上一轮完成,正在本轮一并出账:其验收已改为可执行的 test:scripts/smoke-harness-paths.mjs(39 断言,本机专用,不接入 npm test)。注意 LOG 历史条目 T065 摘要写「verify 双根 PASS 10/WARN 0」而事实行写 PASS 16:前者是 summary 手写口径,后者是出场全量机检口径,以此为准;下不为例。~/.relay-mcp/ 旧启动器已无任何配置引用,目录保留(含历史备份与回滚脚本)。
 
 ## 已冻结
   冻结任务 T030:发布 npm — 决策冻结,不执行(见 DECISIONS 2026-11-18 Tier 2);原发布面已移除,分发改为 git clone / Agent Plugins / GitHub Release。冻结任务不进入 session_start 派发;解冻需先在 DECISIONS 记录新决定并恢复为 [ ] 任务行。
 
 ## 已完成
+- [x] T068 发布 v2.1.1（版本号/CHANGELOG 定版/tag/GitHub Release）  (2026-11-27)
+  验收: npm test && ./verify
+  备注: 内容 = v2.1.0 之后的 T064(归档/清理)+T065/T067(自更新启动器入库与审计加固,含验收门环境变量绕过的行为级回归)+T066(harness 注册面切换)。经用户授权执行 tag 与 Release;发布前确认当前 HEAD 的三矩阵 CI 已全绿(45868154259 success)。
+  备注: T067 已闭环(max 审计 4 major + 全部可修 minor)。T066(切抰 14 个 harness 注册面)已在上一轮完成,正在本轮一并出账:其验收已改为可执行的 test:scripts/smoke-harness-paths.mjs(39 断言,本机专用,不接入 npm test)。注意 LOG 历史条目 T065 摘要写「verify 双根 PASS 10/WARN 0」而事实行写 PASS 16:前者是 summary 手写口径,后者是出场全量机检口径,以此为准;下不为例。~/.relay-mcp/ 旧启动器已无任何配置引用,目录保留(含历史备份与回滚脚本)。
 - [x] T066 切换 14 个 harness 注册面到仓库内启动器路径并推送  (2026-11-27)
   验收: test:scripts/smoke-harness-paths.mjs
   备注: 启动器已纳入仓库(scripts/relay-mcp-autoupdate.mjs)并已出验收入库。剩余步骤:合并 relay/T065 到 main 后,把 14 个 harness 注册面(~/.claude.json、~/.zcode/cli/config.json、~/.gemini/settings.json、~/.minimax/mcp.json x2、~/.kimi/mcp.json、~/.kimi-code/mcp.json、~/.mavis/mcp.json、~/Library/Application Support/Code/User/mcp.json、Claude/Claude-3p 的 claude_desktop_config.json、~/.codex/config.toml、~/.dsh/profiles/{desktop,web}/plugins/dsh-mcp-relay-mcp/cordis.patch.yml)里 relay 条目的脚本路径从 ~/.relay-mcp/relay-mcp-autoupdate.mjs 改为 <repo>/scripts/relay-mcp-autoupdate.mjs;逐个先备份 .relay-bak-时间戳再改,改完 grep 确认无残留旧路径并实测 MCP initialize 返回 2.1.0。~/.relay-mcp/ 目录保留(含历史备份与回滚脚本),旧启动器文件不再被引用。

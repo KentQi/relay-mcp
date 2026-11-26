@@ -1,5 +1,14 @@
 # 会话日志(最新在上)
 
+## 2026-11-27 06:32 | model=hungerg-free | task=T068 完成
+- 摘要: T068 发布 v2.1.1。内容:v2.1.0 之后的 T064(LOG 归档 + worktree/分支清理)+T065/T067(自更新启动器 scripts/relay-mcp-autoupdate.mjs 入库、仓库路径自推导、四重守卫[main 分支/非 linked worktree/工作区干净/无独有提交]、rev-list fail-closed、merge SIGTERM 宽限+postMergeCheck+入口健康复核、状态原子写、预算夹取、DECISIONS ff-merge 授权边界、隔离夹具行为断言 18 条)+T066(14 个 harness 注册面切换到仓库内启动器,新增 smoke-harness-paths.mjs 39 断言本机验收)。版本三方同步:package.json/plugin.json 2.1.1,CHANGELOG [2.1.1] - 2026-11-27(由 [Unreleased] 定版)。验证:npm test 27 套 1122 断言全绿,verify 双根 PASS 10·WARN 0·ERROR 0 / PASS 4·WARN 0·ERROR 0。前置确认:当前 HEAD(8c9d550)的三矩阵 CI 45868154259 success(Node 22/24/26)。推送/tag/Release 为用户已授权的外向动作,出场合并后执行。
+- 事实(v2): mode=managed | 文件 3 | ± +3/-3 | base=8c9d550f1645a2fac47ee81481bf316f388ff8cc | sha=b5d4551662c3d06eedcf3603ddb553548cbf7136 | branch=relay/T068 || 验收: 通过 | verify: PASS 16·WARN 0·ERROR 0 | 耗时: 63s
+- worktree: branch=relay/T068; sha=b5d4551662c3d06eedcf3603ddb553548cbf7136; 已验收,未合并(是否合并由人工决定)
+- 负结果: 发布 tag 只能打在三矩阵 CI 全绿的提交上:本机只有 Node 26,44 个提交的跨版本行为差异(如 node --test 的 NODE_TEST_CONTEXT 注入)只有 CI 矩阵能暴露;先 push 看 CI 再 tag,顺序不能反
+- 负结果: 版本号三方必须同步:package.json、plugin.json、CHANGELOG 的 [x.y.z] - 日期段,任一漂移都会让 tag 与制品声明脱节
+- 负结果: 发布后出现的修复要进 CHANGELOG 新段而不是塞回已发布的 [2.1.0]:本节 [2.1.1] 记 T064–T067(自更新启动器入库/加固/harness 注册面切换)
+- 留给下一个: v2.1.1 已发布(待确认推送后 CI)。仓库无待办;新工作需先与人类定义任务。若再修问题,版本号顺延 2.1.2 并在 CHANGELOG 新段记录。
+
 ## 2026-11-27 01:28 | model=hungerg-free | task=T066 完成
 - 摘要: T066 收尾 harness 注册面切换并补可执行验收。切换本身在上一轮已执行完毕(逐个备份 .relay-bak-20261127-004651 后纯文本替换,JSON 校验合法),本任务补齐审计指出的两个缺口:(1) T065 完成态标题曾声称「已切换全部 harness」,已在 TASKS 收窄为实际交付并加注说明切换顺延至 T066(历史提交不改写);(2) T066 原验收 git push origin main 不可判定——远端已同步时 Everything up-to-date 退出 0,零交付即绿。改为新增 scripts/smoke-harness-paths.mjs(39 断言,本机专用验收,不接入 npm test 以免 CI 因缺 home 配置而红):14 个注册面逐个断言指向 scripts/relay-mcp-autoupdate.mjs、无 ~/.relay-mcp 旧路径残留、12 个 JSON 配置解析合法。实测 39/0。同时澄清 LOG 历史 T065 条目的 PASS 10(手写快检口径)与 PASS 16(出场全量机检口径)差异。出场前 npm test 27 套 1122 断言全绿、verify PASS 10/WARN 0/ERROR 0。
 - 事实(v2): mode=single | 文件 0 | ± +0/-0 | base=- | sha=- | branch=main || 验收: 通过 | verify: PASS 11·WARN 0·ERROR 0 | 耗时: 66s
