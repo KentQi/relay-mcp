@@ -180,9 +180,10 @@ export const TOOLS = [
     description:
       'Rescue a subagent killed mid-flight by a token-plan quota / 429 / idle kill: capture its transcript + a git ' +
       'snapshot of uncommitted work into a local rescue card (.relay/rescue/, never committed), then hand it to ' +
-      'another model. scan (default, read-only) lists rescuable agents of this project; capture needs confirm; ' +
-      'takeover (confirm+model) grants handing rights and registers the rebuilt task; report writes the result ' +
-      'back; drop removes it (dry-run by default).',
+      'another model. Harness-agnostic: sources are declared by format descriptors (manifest.rescue.sources + ' +
+      'profiles); nothing is scanned by default. scan (default, read-only) lists rescuable agents; capture needs ' +
+      'confirm; takeover (confirm+model) grants handing rights and registers the rebuilt task; report writes the ' +
+      'result back; drop removes it (dry-run by default).',
     inputSchema: {
       type: 'object',
       properties: {

@@ -415,3 +415,13 @@ export const startServer = async ({ onInit, onMethod }) => {
 - **进场简报**:`relay_session_start` 新增「待接力」小节(仅有待接力单时出现,≤5 行),不新增 git 子进程、不重读 LOG/TASKS/manifest(不破坏 T022/T026 的计数断言)。
 - **冒烟**:`scripts/smoke-rescue.mjs`(80 断言,夹具在 `scripts/fixtures/rescue/`),已接入 `npm test`。
 - **范围外**:抢救后自动拉起备用模型 = T051;ZCode 完整对话(只读 SQLite)= T050(需人类授权)。
+
+## 2026-11-26 T058 补充契约(抢救引擎通用化:描述符驱动,核心零 harness)
+
+- **架构铁律**:`src/engines/rescue.mjs`(**核心**)不认识任何具体 harness——不出现 ZCode/Claude 等专有名,不硬编码任何 harness 的安装目录。所有「在哪找、怎么读」收敛为 `src/engines/rescue-profiles.mjs` 的**格式描述符(profile)**。机检:`smoke-rescue` 的 6f 段对核心跑正则扫描,命中即红。
+- **描述符契约**:`{ id, title, roots?, discover(root, ctx), parse(text), transcriptless?, metaFile? }`。`discover` 返回统一候选 `{ sourcePath, agentId, parentSessionId, transcriptPath?, cwd?, status?, error?, prompt?, ... }`;`parse` 返回统一摘要 `{ prompt, cwd, edits[], commands[], todos[], narrative, toolSignals }`。**分类只看 `toolSignals`**,不含任何 harness 语义。
+- **三种接入方式**:(a) 内置参考描述符 `jsonl-agent`(一行一条 JSON)与 `json-meta`(纯元数据目录);(b) **声明式**(推荐):`manifest.rescue.profiles` 里写纯 JSON —— `{ id, kind: 'jsonl-message'|'json-metadata', metaFile?, filePattern?, fieldMap? }`;(c) **函数式**:宿主嵌入 relay 时通过 `_profiles` 注入真函数(用于需要复杂逻辑的场景)。
+- **默认零扫描**:未在 `manifest.rescue.sources` 声明来源时,`scan` **不扫描任何目录**(不读 home、不猜安装位置)。`sources` 每条是 `{ profile?, root }` 或裸路径字符串。
+- **归属 fail-closed**:候选必须能证明 `cwd` 属于 controlRoot/executionRoot 才会被列出;既无 `cwd` 又无 transcript 可佐证的候选**跳过并说明原因**,不放行。
+- **新增 harness = 加一份描述**:6f 段用一份从未见过的 `brand-new` 描述符验证「不改核心代码即可发现并分类」。
+- **报告一致性**:`state.profile` 记录来源描述符 id;读取时若该描述符未注册,`show`/`takeover` 明确报错(fail-closed),不静默当成「无 transcript」。

@@ -144,14 +144,28 @@ worktree 清理默认 dry-run：只删除已登记、已过期、非活跃、干
 ```json
 {
   "rescue": {
-    "sources": ["/path/to/other-harness/agents"],
+    "sources": [
+      { "profile": "my-harness", "root": "~/.my-harness/agents" }
+    ],
+    "profiles": [
+      {
+        "id": "my-harness",
+        "kind": "json-metadata",
+        "metaFile": "metadata.json",
+        "fieldMap": { "agentId": "agentId", "cwd": ["cwd", "workspaceRoot"] }
+      }
+    ],
     "maxAgeDays": 7,
     "maxBytes": 8388608
   }
 }
 ```
 
-`sources` 非空时只扫这些目录（其他 harness 的显式来源）；`maxAgeDays` / `maxBytes` 非法时回退默认。
+**混合云/本地 harness 一律通用**：relay 的核心引擎不认识任何具体 harness——所有「在哪找、怎么读」都由**格式描述符**声明。加一个新 harness = 加一份描述（如上），不改核心代码。
+
+- `sources` 每条是 `{ profile?, root }` 或裸路径；**为空时不扫描任何目录**（不读 home、不猜安装位置）。
+- `profiles` 支持两种 `kind`：`json-metadata`（一层目录一份元数据）与 `jsonl-message`（一行一条 JSON 的 transcript）。
+- `maxAgeDays` / `maxBytes` 非法时回退默认。
 
 ### 质量门预设（可选）
 
