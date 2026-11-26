@@ -5,9 +5,11 @@
 
 ## [Unreleased]
 
-### Added(自更新启动器纳入仓库 T065)
+### Added(自更新启动器纳入仓库并加固 T065/T067)
 
-- **`scripts/relay-mcp-autoupdate.mjs`**:此前承担全部 harness 更新通道的启动器只存在于 `~/.relay-mcp/`(手工文件,不在版本控制里)。现纳入仓库——它自己会随 ff-only 更新一起升级。新增:仓库路径缺省按脚本自身位置推导,显式传参向后兼容。新增 `scripts/smoke-autoupdate.mjs`(11 断言)接入 `npm test`(27 套),覆盖脚本在位、经包装器 initialize 应答、无效 REPO exit 2、无参数自推导。
+- **`scripts/relay-mcp-autoupdate.mjs`**:此前承担全部 harness 更新通道的启动器只存在于 `~/.relay-mcp/`(手工文件,不在版本控制里)。现纳入仓库——它自己会随 ff-only 更新一起升级。仓库路径缺省按脚本自身位置推导,显式传参向后兼容。
+- **更新安全前提(T067 加固)**:当前分支必须是 main、非 linked worktree、工作区已跟踪文件无改动、本地无独有提交——四重守卫缺一即跳过;「无法判定」(rev-list 失败/预算耗尽)一律按失败处理,绝不折算成「已是最新」。merge 超时先 SIGTERM 留宽限;结算后复核 HEAD ∈ {更新前, origin/main} 且无 index.lock,可疑的树拒绝启动 MCP;入口存在性与 `node --check` 启动前复核;状态原子写(临时文件+rename);预算 NaN/越界夹取;分支/worktree 以仓库指纹隔离节流状态。
+- **`scripts/smoke-autoupdate.mjs`(18 断言,隔离夹具)**:临时 bare origin + clone 夹具上做**行为断言**——干净落后时 HEAD 真的被快进、本地独有提交时不动、预算耗尽不动、非 main 分支不动、无效 REPO exit 2、无参数自推导;另有 `scripts/smoke-harness-paths.mjs`(本机验收,39 断言)钉住 14 个注册面指向仓库内启动器。
 
 ## [2.1.0] - 2026-11-26
 
