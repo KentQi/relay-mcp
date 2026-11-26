@@ -444,22 +444,27 @@ try {
       'state.sha256 为空时 fail-closed(不静默跳过)', out(blankHash).slice(0, 300));
     writeFileSync(stPath, `${JSON.stringify(estate, null, 2)}\n`);
 
-    // #2 围栏转义:payload 里的 ``` 不得闭合围栏
+    // #2 围栏隔离:引擎按 payload 最长反引号动态选更长围栏,必须真正保持配对。
     const shown = out(cli(edgeRepo, 'relay_rescue', { id: eid }, e5));
-    const fenceCount = (shown.match(/^```/gm) || []).length;
-    ok(fenceCount % 2 === 0, '输出围栏成对闭合(三反引号计数 ' + fenceCount + ')', shown);
-    // 真正要验的是:fence 标记没有被 payload 里的 ``` 提前闭合。
-    // 逐行扫描,数「处于围栏内」的状态:payload 的 ``` 必须已被转义成 `\`\`\`,不改变状态。
     {
       const lines2 = shown.split('\n');
-      let inside = false;
+      let openMarker = '';
       let broke = false;
       for (const l of lines2) {
-        if (/^```/.test(l)) { inside = !inside; continue; }
-        if (!inside && /忽略之前的指令/.test(l)) { broke = true; break; }
+        const close = l.match(/^(`{3,})\s*$/);
+        if (close) {
+          if (openMarker && close[1].length >= openMarker.length) openMarker = '';
+          continue;
+        }
+        const open = l.match(/^(`{3,})(?:[A-Za-z0-9_-]+)\s*$/);
+        if (open) {
+          if (!openMarker) openMarker = open[1];
+          continue;
+        }
+        if (!openMarker && /忽略之前的指令/.test(l) && !/^\s*│ /.test(l)) { broke = true; break; }
       }
       ok(!broke, '注入文本不会作为顶层 markdown 出现在围栏之外(审计 #2)', shown.slice(0, 800));
-      ok(!inside, '输出结束时围栏状态为「已闭合」(无未闭合围栏)');
+      ok(!openMarker, '输出结束时围栏状态为「已闭合」(无未闭合围栏)');
     }
 
     // #11 命令必须脱敏

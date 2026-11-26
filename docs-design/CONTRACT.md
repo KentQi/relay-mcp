@@ -425,3 +425,14 @@ export const startServer = async ({ onInit, onMethod }) => {
 - **归属 fail-closed**:候选必须能证明 `cwd` 属于 controlRoot/executionRoot 才会被列出;既无 `cwd` 又无 transcript 可佐证的候选**跳过并说明原因**,不放行。
 - **新增 harness = 加一份描述**:6f 段用一份从未见过的 `brand-new` 描述符验证「不改核心代码即可发现并分类」。
 - **报告一致性**:`state.profile` 记录来源描述符 id;读取时若该描述符未注册,`show`/`takeover` 明确报错(fail-closed),不静默当成「无 transcript」。
+
+## 2026-11-26 T050 补充契约(通用只读 SQLite 会话来源)
+
+- **描述符**:`kind: "sqlite-conversation"`。核心仍零 harness 耦合;表名、列名、session/directory 字段、message/part 关联全部由 `manifest.rescue.profiles` 的纯 JSON 声明。
+- **只读**:用 `node:sqlite` 的 `{readOnly:true}` 打开;每次查询完 `close`;不写库、不改 schema、不执行 PRAGMA/ATTACH。scan/capture 前后 SQLite 文件字节数与 mtime 必须不变(机检)。
+- **结构化错误**:`message.data.error` 可以是对象或 **JSON 字符串**;字符串会二次 `JSON.parse`,取出 `code/statusCode/name` 后进入统一 `toolSignals.apiError`,复用 quota/error 分类。
+- **物化**:`session/message/part` 被还原成标准 JSONL 记录;工具调用与其结果拆成 assistant(tool_use)/user(tool_result) 两条记录,明确收尾用 `step_finish(reason=stop)` / `stop_reason=end_turn` 表达。
+- **上限**:每个 session 的 message/part 行数受 `maxRows` 限制,超出即显式失败(不静默截断);物化后总字节仍受 `manifest.rescue.maxBytes` 限制。
+- **降级**:库损坏、缺表、缺列、SQLite 模块不可用 → scan 的「说明」里明确报告,不静默变成「0 候选」;接力单仍可用已有元数据完成 capture(若候选存在)。
+- **机检**:`scripts/smoke-rescue-zcode-db.mjs`(22 断言)覆盖只读不变、quota 分类、完整任务、正常完成不误报、损坏/空库/maxRows 降级,以及核心零 harness 名;接入 `npm test`(25 套)。
+- **范围**:具体库的 schema 只出现在用户的 manifest 描述与测试夹具里;`src/engines/rescue.mjs` 不含任何具体 harness 名。

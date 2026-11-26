@@ -49,9 +49,9 @@ const codePointClip = (s, n) => {
   return cps.length > n ? `${cps.slice(0, n).join('')}…[截断 ${cps.length - n} 字]` : cps.join('');
 };
 const FENCE_TICKS = '`'.repeat(3);
-// #2(审计):payload 里的三反引号必须被中和,否则不可信文本可自行闭合围栏、把注入内容推到
-// 围栏之外(「数据非指令」边界失效)。转义为 \`\`\`,渲染后仍可读,但不再构成 fence 标记。
-const neutralizeFence = (text) => String(text ?? '').split(FENCE_TICKS).join('`\\`\\`');
+// #2(审计):不可信文本逐行加前缀,保证它不可能以围栏标记开头。比“动态选更长围栏”
+// 更简单且可判定:无论 payload 含几个反引号,都只是普通数据行。
+const neutralizeFence = (text) => String(text ?? '').split('\n').map((line) => `│ ${line}`).join('\n');
 const fence = (text, lang = 'text') => [FENCE_TICKS + lang, neutralizeFence(text), FENCE_TICKS].join('\n');
 const rescueRoot = (controlRoot) => path.join(controlRoot, RESCUE_REL);
 const rescueDir = (controlRoot, id) => path.join(rescueRoot(controlRoot), id);
@@ -82,9 +82,10 @@ const ownedByRoots = async (roots, cwd) => {
 // 在给定 root 下用某描述符发现候选。归属由调用方在收集后统一判定。
 const discoverWithProfile = async (profile, root, { maxAgeMs }) => {
   try {
-    return await profile.discover(root, { maxAgeMs });
-  } catch {
-    return [];
+    return { candidates: await profile.discover(root, { maxAgeMs }), error: '' };
+  } catch (e) {
+    // 不静默吞异常:SQLite 缺表/损坏、权限不足等必须在 scan 的「说明」里可见。
+    return { candidates: [], error: `${profile.id}: ${e?.message || String(e)}` };
   }
 };
 
@@ -208,7 +209,18 @@ const classifyFromSignals = ({ signals, metaStatus, metaError, transcriptOk, has
     return { kind: 'error', label: '状态未知(无 transcript 可判)', evidence: metaStatus ? [`status=${metaStatus}`] : [] };
   }
 
-  // 4) transcript 信号:悬空工具调用 = 半途被杀(含「tool_result 已落盘但下一轮未开口」)
+  // 4) 明确的正常收尾(end_turn / stop / step_finish)优先于历史残留工具调用。
+  //    某些来源只物化最终状态,可能留下未配对 tool_use,但已有明确 completion 证据。
+  if (signals.explicitCompletion) {
+    return {
+      kind: 'complete',
+      label: '正常完成',
+      evidence: [signals.anyToolError
+        ? '末条 assistant 明确收尾(历史工具报错已被后续重试覆盖,不算停因)'
+        : '末条 assistant 明确收尾(end_turn/stop/step_finish)'],
+    };
+  }
+  // 5) transcript 信号:悬空工具调用 = 半途被杀(含「tool_result 已落盘但下一轮未开口」)
   if (signals.pendingToolUse && signals.pendingToolUse.size > 0) {
     return {
       kind: 'interrupted',
@@ -241,7 +253,6 @@ const describeCandidate = async (cand, { controlRoot, maxBytes, cfgProfiles }) =
     transcriptPath: '',
     prompt: '',
     description: String(cand.description || ''),
-    profile: String(cand.profile || ''),
     cwd: String(cand.cwd || ''),
     sourceStatus: String(cand.status || ''),
     sourceError: String(cand.error || ''),
@@ -253,27 +264,48 @@ const describeCandidate = async (cand, { controlRoot, maxBytes, cfgProfiles }) =
     parsed: null,
     notes: [],
   };
-  // 无 transcript 的描述符(纯元数据格式):直接按元数据判类,不伪造"转录损坏"。
-  if (!String(cand.transcriptPath || '')) {
+  const profile = cfgProfiles.find((x) => x.id === (cand.profile || ''))
+    || cfgProfiles.find((x) => !x.transcriptless);
+  // 无 transcript 且描述符也没有 loadTranscript(纯元数据格式):直接按元数据判类。
+  if (!String(cand.transcriptPath || '') && !(profile && typeof profile.loadTranscript === 'function')) {
     base.classification = classifyFromSignals({ metaStatus: cand.status, metaError: cand.error, hasTranscript: false });
     base.prompt = String(cand.prompt || '');
     base.notes.push('该来源只提供元数据(无可复制的对话),本次只抢救元数据 + 工作区现场');
     return base;
   }
-  let st;
-  try { st = await fsStat(cand.transcriptPath); } catch { st = null; }
-  if (!st) { base.notes.push('transcript 已不在磁盘上'); return base; }
-  if (st.size > maxBytes) {
-    base.notes.push(`transcript ${st.size} 字节超过上限 ${maxBytes}`);
+  let buf = null;
+  if (profile && typeof profile.loadTranscript === 'function') {
+    try {
+      const loaded = await profile.loadTranscript(cand);
+      buf = Buffer.isBuffer(loaded) ? loaded : Buffer.from(String(loaded ?? ''), 'utf8');
+      base.transcriptPath = cand.transcriptPath || '';
+    } catch (e) {
+      base.notes.push(`读取来源 transcript 失败:${e?.message || String(e)}`);
+      base.classification = classifyFromSignals({ transcriptOk: false, hasTranscript: true });
+      return base;
+    }
+  } else {
+    let st;
+    try { st = await fsStat(cand.transcriptPath); } catch { st = null; }
+    if (!st) { base.notes.push('transcript 已不在磁盘上'); return base; }
+    if (st.size > maxBytes) {
+      base.notes.push(`transcript ${st.size} 字节超过上限 ${maxBytes}`);
+      base.oversize = true;
+      return base;
+    }
+    buf = readFileSync(cand.transcriptPath);
+    base.transcriptPath = path.relative(controlRoot, cand.transcriptPath);
+  }
+  if (buf.length > maxBytes) {
+    base.notes.push(`transcript ${buf.length} 字节超过上限 ${maxBytes}`);
     base.oversize = true;
     return base;
   }
-  const buf = readFileSync(cand.transcriptPath);
   base.bytes = buf.length;
   base.sha256 = sha256Hex(buf.toString('utf8'));
-  base.transcriptPath = path.relative(controlRoot, cand.transcriptPath);
+  // 保存已经读取的字节,capture 直接物化这份(避免非文件来源二次读库导致时间窗不一致)。
+  base.transcriptBuffer = buf;
   // 用**该候选的描述符**解析;描述符缺失或抛错才降级为 transcriptOk:false。
-  const profile = cfgProfiles.find((x) => x.id === (cand.profile || '')) || cfgProfiles.find((x) => !x.transcriptless);
   let parsed = null;
   try {
     parsed = profile ? profile.parse(buf.toString('utf8')) : null;
@@ -443,11 +475,12 @@ const scanSources = async (controlRoot, executionRoot, cfg, { sourcePath = '' } 
     let found = 0;
     for (const profile of candidates) {
       if (!profile || typeof profile.discover !== 'function') continue;
-      const got = await discoverWithProfile(profile, rootAbs, { maxAgeMs });
-      for (const c of got) { c.profile = c.profile || profile.id; all.push(c); found += 1; }
+      const result = await discoverWithProfile(profile, rootAbs, { maxAgeMs });
+      if (result.error) notes.push(result.error);
+      for (const c of result.candidates) { c.profile = c.profile || profile.id; all.push(c); found += 1; }
       if (spec.profile) break; // 显式指定了描述符,不再用其它描述符试
     }
-    if (!found) notes.push(`来源 ${rootAbs} 下未发现候选`);
+    if (!found && !notes.some((n) => n.startsWith('来源 '))) notes.push(`来源 ${rootAbs} 下未发现候选`);
   }
 
   const candidates = [];
@@ -552,6 +585,13 @@ const renderCard = (controlRoot, state, parsed, view, derived = {}) => {
 
   lines.push('', '## 现场');
   if (parsed) {
+    if (parsed.toolCalls && parsed.toolCalls.length) {
+      lines.push('工具调用:', ...parsed.toolCalls.slice(0, EDIT_CAP).map((t) => {
+        const safeName = redactSecrets(String(t.name || '(unknown)')).text;
+        const safeInput = redactSecrets(JSON.stringify(t.input ?? {})).text;
+        return `- ${safeName} ${fence(codePointClip(safeInput, 240), 'json')}`;
+      }));
+    }
     lines.push(...(parsed.edits.length
       ? ['已改文件:', ...parsed.edits.slice(0, EDIT_CAP).map((e) => `- ${e.tool} \`${redactSecrets(e.path).text}\``)]
       : ['已改文件:(transcript 中未观察到写操作)']));
@@ -699,7 +739,8 @@ const actCapture = async ({ controlRoot, executionRoot, cfg, args }) => {
   const srcTranscriptPath = described.transcriptPath
     ? path.resolve(controlRoot, described.transcriptPath)
     : (target.transcriptPath ? path.resolve(target.transcriptPath) : '');
-  const transcriptBuf = srcTranscriptPath ? readFileSync(srcTranscriptPath) : null;
+  const transcriptBuf = described.transcriptBuffer
+    || (srcTranscriptPath ? readFileSync(srcTranscriptPath) : null);
   const state = {
     version: 1,
     id,
@@ -1067,7 +1108,7 @@ export const relayRescue = async (args = {}) => {
   const cfg = await readManifestConfig(controlRoot);
   // 来源格式描述符:内置参考描述 + 项目/用户自定义描述符(manifest.rescue.profiles)。
   // 核心不认识任何具体 harness;未声明 sources 时**不扫描任何目录**。
-  cfg.profiles = resolveAllProfiles({
+  cfg.profiles = await resolveAllProfiles({
     specs: (cfg.rescue && cfg.rescue.profiles) || [],
     fns: Array.isArray(args._profiles) ? args._profiles : [],
   });
