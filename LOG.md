@@ -1,5 +1,17 @@
 # 会话日志(最新在上)
 
+## 2026-11-26 14:01 | model=hungerg-free | task=T061 完成
+- 摘要: T061 收尾第二轮审计遗留的两件事。(1) autoLaunch prompt 脱敏:注入 argv 的每个占位符变量(含 transcript 派生的 prompt)在替换前统一过 redactSecrets,并显式报告脱敏处数;argv 会出现在 ps/进程审计里,比 .relay/rescue/ 更难清理。补 9 条断言:含密钥 prompt 时 argv/dispatch.json/dispatch.log 均无原文、非密钥部分保留、脱敏可见。原 Finding #2 的 argv 半句至此真正闭环(dispatch.json 从不存 prompt 这半句本就成立,报告已校正)。(2) D8 证据缺口:核实 completionIdsOf 只读 LOG 标题行的 task= 字段,我在附录 B 里『附录第 5 条不成立』的更正是错的,已撤回并新增附录 C 记录根因与处置。根因是 relay_session_end 只接受单个 done_task,一次交付多任务无法留逐任务证据。按用户决定实现 done_tasks[]:每个任务各得独立 LOG 完成条目、自己的 [x]、自己的认领锁释放与各自验收门;仅单根(受管 worktree 拒绝,成对证据无法凑齐)。探针实测 D8 从 WARN 变 OK。历史 T055–T057 缺口按 DECISIONS 决定保留可见,不回填——手写完成条目与引擎条目不可区分,正是 R10/D8 要防的假绿。同步 CONTRACT/README/skills/AGENTS 模板/DECISIONS/CHANGELOG,relay_sync 重投影。修复过程中自己的改动引入一个回归:LOG 幂等去重改成无条件按 (model,task) 全局比对,导致维护出场被误判重复、LOG 不写、提交不发生(smoke-patches P6 挂掉);已改为仅在任务实际已完成时去重。最终 npm test 26 套 1074 断言全绿,verify 双根 PASS 10/WARN 0/ERROR 0,tools/list 10218/10240。
+- 事实(v2): mode=managed | 文件 12 | ± +281/-68 | base=89c1722ef49d941ad01f85aebae561acbf533d09 | sha=8630fde3f383cfc072f479d3f4894004cb340f5e | branch=relay/T061 || 验收: 通过 | verify: PASS 15·WARN 0·ERROR 0 | 耗时: 144s
+- worktree: branch=relay/T061; sha=8630fde3f383cfc072f479d3f4894004cb340f5e; 已验收,未合并(是否合并由人工决定)
+- 负结果: D8/R9 的取证只读 LOG 标题行的 task= 字段(DONE_TASK_RE=^T\d+\s*完成$),摘要正文提到别的任务号不构成证据;我先前采信『T054 条目正文覆盖 T055-T057』是错的,附录 B 的更正已撤回
+- 负结果: 手写 `## ... | task=T055 完成` 与引擎写出的条目不可区分,正是 R10/D8 要防的假绿:历史缺口只能由人批准后回填,不能为了让 WARN 消失而补记
+- 负结果: 受管 worktree 无法支持 done_tasks[]:成对证据要求『一个任务 = 一条分支 + 一条 registry 记录』,多任务同时出场只能凑出半套证据
+- 负结果: LOG 幂等去重不能无条件按 (model, task) 全局比对:维护出场(task=维护/无)会在同一仓库重复出现,那样会把第二次维护出场误判为重复,导致 LOG 不写、提交不发生(smoke-patches P6 实测挂掉)
+- 负结果: autoLaunch 的 argv 会出现在 ps/进程审计里,比 .relay/rescue/ 更难清理:transcript 派生的 prompt 必须在替换占位符之前脱敏,且脱敏发生处数要显式报告
+- 负结果: tools/list 预算只能靠压缩低频描述腾出:加 done_tasks 字段后超 167 字节,压 relay_rescue/init/onboard 的冗余措辞才回到 10218/10240
+- 留给下一个: T061 已交付:done_tasks[] 多任务出场 + autoLaunch prompt 脱敏。发布链仍是 T060。特别注意 D8 仍会对历史 T055–T057 报 WARN——这是有意保留的诚实偏差(见 DECISIONS 2026-11-26 T061 条),不是回归;新交付不会再复现,探针实测 D8 OK。若要消除该 WARN,须由人批准后按 T046 先例补记。发布前还需:推送并观察 Node 22/24/26 三矩阵 CI(本机只有 Node 26)、CHANGELOG 定版、tag、GitHub Release。
+
 ## 2026-11-26 12:58 | model=hungerg-free | task=T059 完成
 - 摘要: T059 复核并修复第二轮审计的全部确认缺陷(原 15 条 + 7 条附录 + 复审新发现 2 条)。核心修复:(1) 快照密钥扫描前移到 git add/write-tree 之前,拒绝时对象库不残留 blob;扫描面超过 500 文件改为整体拒绝而非截断。(2) 接力锁 token 持久化进 state.json,report 用真实 token fencing 释放,释放失败即 isError 且保留 takeover;takeover 锁生命周期收敛到统一 finally。(3) dispatch.json 改临时文件+rename 原子发布,损坏态按 invalid→busy,takeover/report/drop 全部 fail-closed;父进程不再回写 state。(4) worker 用 detached 进程组 + kill(-pid) 终止整棵树,并加「超时+8s」有界结算兜底。(5) 分类器只依据最后一个有效轮次:早期 completion 作废、恢复后的 429 不再判 quota、工具报错后的分析文本不再洗成完成;新增 parseIssues 让行级损坏降级为 error。(6) SQLite 的 maxRows 下推 SQL LIMIT,jsonParse 返回 {value,ok},tool_result 按终态生成并安全序列化对象输出。(7) scan 归属推断改为先 stat 再有界前缀读 cwd。(8) 旧卡 harness→profile 映射、显式 metadata.json source、drop/edits 用 snapshotRoot、drop 识别过期锁。(9) autoLaunch 配置校验前移到任何 TASKS/state 写入之前。(10) fieldMap 的 roleMap/嵌套路径/对象型 apiErrorMarker 全部接通。文档:README 默认零扫描口径、CHANGELOG 补齐 T050/T051/T058 与本轮修复、CONTRACT 新增 T059 契约段、审计报告加附录 B 复核校正与闭环矩阵。验证:npm test 26 套 1056 断言全绿(抢救 172+27+40),relay_verify full PASS 11 WARN 0 ERROR 0, tools/list 10219/10240。
 - 事实(v2): mode=managed | 文件 12 | ± +1163/-274 | base=4f1bdda730dbc99f9315976ce5920dd4d87a6970 | sha=19836a7d5d0b7d01d11de86a485a7304bcc5f175 | branch=relay/T059 || 验收: 通过 | verify: PASS 15·WARN 0·ERROR 0 | 耗时: 55s
