@@ -156,7 +156,13 @@ worktree 清理默认 dry-run：只删除已登记、已过期、非活跃、干
       }
     ],
     "maxAgeDays": 7,
-    "maxBytes": 8388608
+    "maxBytes": 8388608,
+    "autoLaunch": {
+      "enabled": true,
+      "command": ["your-agent-runner", "--prompt", "{{prompt}}", "--root", "{{root}}"],
+      "timeoutMs": 300000,
+      "maxOutputBytes": 1048576
+    }
   }
 }
 ```
@@ -166,6 +172,7 @@ worktree 清理默认 dry-run：只删除已登记、已过期、非活跃、干
 - `sources` 每条是 `{ profile?, root }` 或裸路径；**为空时不扫描任何目录**（不读 home、不猜安装位置）。
 - `profiles` 支持三种 `kind`：`json-metadata`、`jsonl-message`，以及 `sqlite-conversation`（只读 SQLite 会话库，表名/列名全部声明）。
 - `maxAgeDays` / `maxBytes` 非法时回退默认。
+- `autoLaunch` 默认关闭；`command` 是 **argv 数组**(不经 shell),支持 `{{prompt}}/{{root}}/{{task}}/{{rescueId}}/{{model}}` 占位符。worker 独立后台运行,状态写 `.relay/rescue/<id>/dispatch.json`;运行中禁止 report/drop。
 
 ### 质量门预设（可选）
 
@@ -260,7 +267,7 @@ node src/cli.mjs --version     # 版本
 
 ### 自举
 
-本仓库使用自身协议开发：`START.md` 是入口，`TASKS.md` 是 backlog，`LOG.md` 记录会话。`npm test` 覆盖 25 套端到端冒烟（协议、补丁、worktree、升级兼容、密钥闸、事实底账、简报、doctor、检索、评审回归、性能计数、LOG 边界、会话性能、并发、归档、安全、Agent Plugins 插件包、崩溃点矩阵、上下文预算、测试框架元负控、协议结构机检、漂移备份闸、D8 归档证据面、子代理抢救、通用 SQLite 会话来源），CI 覆盖 Node 22/24/26。
+本仓库使用自身协议开发：`START.md` 是入口，`TASKS.md` 是 backlog，`LOG.md` 记录会话。`npm test` 覆盖 26 套端到端冒烟（协议、补丁、worktree、升级兼容、密钥闸、事实底账、简报、doctor、检索、评审回归、性能计数、LOG 边界、会话性能、并发、归档、安全、Agent Plugins 插件包、崩溃点矩阵、上下文预算、测试框架元负控、协议结构机检、漂移备份闸、D8 归档证据面、子代理抢救、通用 SQLite 会话来源、manifest 声明的自动拉起），CI 覆盖 Node 22/24/26。
 
 一次真实的多模型交接实测记录（含假绿事故的完整证据链）见 [docs/04-test/08-handoff-case-study-v1.0.md](docs/04-test/08-handoff-case-study-v1.0.md)。
 
