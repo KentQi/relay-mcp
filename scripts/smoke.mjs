@@ -335,6 +335,50 @@ try {
   ok(ph.isError && ph.text.includes('占位'), 'D4: 占位 model 被拒收(防署名污染)');
   rmSync(tmpC, { recursive: true, force: true });
 
+  // D5: done_tasks[] — 一次交付多个任务必须留下**逐任务**完成条目(D8/R9 只认标题 task= 字段)。
+  {
+    const tmpD = mkdtempSync(path.join(tmpdir(), 'relay-donetasks-'));
+    const jc2 = (o) => ['--json', JSON.stringify(o)];
+    await tool('relay_init', { root: tmpD, name: '多任务出场' });
+    // 造两个待办任务并分别认领(单根模式)
+    const tasksPath = path.join(tmpD, 'TASKS.md');
+    const t0 = readFileSync(tasksPath, 'utf8');
+    const injected = t0.replace(/^## 待办$/m, [
+      '## 待办',
+      '- [ ] T901 多任务出场甲',
+      '  验收: npm test',
+      '- [ ] T902 多任务出场乙',
+      '  验收: npm test',
+    ].join('\n'));
+    writeFileSync(tasksPath, injected);
+    await tool('relay_claim', { root: tmpD, task: 'T901', model: 'multi-model', worktree: false });
+    await tool('relay_claim', { root: tmpD, task: 'T902', model: 'multi-model', worktree: false });
+    const r = await tool('relay_session_end', {
+      root: tmpD, model: 'multi-model', summary: '一次交付两个任务', done_task: 'T901', done_tasks: ['T902'],
+    });
+    ok(!r.isError, 'D5: done_tasks[] 出场成功', r.text.slice(0, 400));
+    const tasksNow = readFileSync(tasksPath, 'utf8');
+    ok(/\[x\] T901/.test(tasksNow), 'D5: 主任务标 [x]');
+    ok(/\[x\] T902/.test(tasksNow), 'D5: 额外任务也标 [x](不遗漏)', tasksNow.slice(0, 600));
+    const logNow = readFileSync(path.join(tmpD, 'LOG.md'), 'utf8');
+    ok(/task=T901 完成/.test(logNow), 'D5: LOG 有 T901 完成条目');
+    ok(/task=T902 完成/.test(logNow), 'D5: LOG 有 T902 独立完成条目(D8 才认)', logNow.slice(0, 800));
+    ok(!/\[T902\]/.test(logNow.replace(/task=T902 完成/, '')), 'D5: 额外任务不是只写在正文里');
+
+    // 非法输入:非数组 / 非任务号 → 拒收且不写盘
+    const before = readFileSync(path.join(tmpD, 'LOG.md'), 'utf8');
+    const bad1 = await tool('relay_session_end', {
+      root: tmpD, model: 'multi-model', summary: 'x', done_task: 'T901', done_tasks: 'T902',
+    });
+    ok(bad1.isError && /done_tasks|数组/.test(bad1.text), 'D5: done_tasks 非数组被拒', bad1.text.slice(0, 300));
+    const bad2 = await tool('relay_session_end', {
+      root: tmpD, model: 'multi-model', summary: 'x', done_task: 'T901', done_tasks: ['not-a-task'],
+    });
+    ok(bad2.isError && /T003|任务号/.test(bad2.text), 'D5: done_tasks 非法任务号被拒', bad2.text.slice(0, 300));
+    ok(readFileSync(path.join(tmpD, 'LOG.md'), 'utf8') === before, 'D5: 非法入参不写 LOG');
+    rmSync(tmpD, { recursive: true, force: true });
+  }
+
   console.log('\n== CLI ==');
   const cli = spawnSync2('node', [path.join(RELAY, 'src/cli.mjs'), 'relay_rules']);
   ok(cli.status === 0 && cli.stdout.includes('R9'), 'cli relay_rules 可用');

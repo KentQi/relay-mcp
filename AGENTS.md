@@ -1,7 +1,7 @@
 <!-- relay:generated v1 -->
 # relay-mcp — 规范入口(canonical)
 
-本文件由 relay-mcp 单源投影生成(2026-11-25);CLAUDE.md 与 GEMINI.md 只是它的指针副本。
+本文件由 relay-mcp 单源投影生成(2026-11-26);CLAUDE.md 与 GEMINI.md 只是它的指针副本。
 规则要改:改 relay 引擎模板后运行 `relay_sync` 重投影;不要只手改其中一份(会漂移,R1 拦)。
 
 ## 项目身份
@@ -25,7 +25,7 @@
 - **升级/迁移**:旧项目先跑 `relay_sync`(重投影入口 + 幂等补 .gitignore 运行时基线 + AGENTS 迁移指引);`relay_onboard` 保留既有 manifest 配置;无标记 AGENTS.md 用 onboard 接管或手工加标记后 sync。
 - **配置面**:`manifest.worktree.enabled` 只认 JSON 布尔 `true`;`cacheDir` 只允许 controlRoot 内相对路径;未知/拼错字段静默忽略(不报错,改完建议跑一次 claim/cleanup 验证)。
 - **锁语义**:仓库写锁 `.relay/relay.lock` 约 20s 心跳 + 写前 fencing(长 cleanup/出场不被 120s 误判);任务认领锁 `.relay/claims/T###.lock` **不心跳**,保留 240min TTL 崩溃恢复(agent 崩溃后到期可接管);model 含换行/控制字符会被拒收。
-- **能力边界**:暂无 claim 的 abort/release、按任务查询 status、sessionId;恢复靠认领锁 240min TTL 到期接管 / relay_session_end 释放 / relay_worktree_cleanup。并发会话必须用不同 model 标识。
+- **能力边界**:暂无 claim 的 abort/release、按任务查询 status、sessionId;恢复靠认领锁 240min TTL 到期接管 / relay_session_end 释放 / relay_worktree_cleanup。并发会话必须用不同 model 标识。一次交付多个任务用 `relay_session_end` 的 `done_tasks: ["T0xx","T0yy"]`(仅单根):每个任务各得独立 LOG 完成条目与 `[x]`;只写在摘要正文里 D8/R9 不认。
 - **子代理抢救**:被额度上限 / 429 / 悬空杀死的子代理用 `relay_rescue` 抢救——现场 transcript + 未提交改动的 git 快照落本机接力单 `.relay/rescue/`(**永不入库**),另一个模型 `takeover` 接管续跑;`scan` 只读,写操作需 `confirm`。
 
 ## 规则速查(R 编号即规则 ID)

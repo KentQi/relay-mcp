@@ -25,7 +25,7 @@ relay-mcp 把交接状态写进仓库文件(START / SPEC / DECISIONS / TASKS / L
 2. **认领**:`relay_claim {root, task, model}` → TASKS 标 `[~]` 并加认领锁;启用 worktree 时返回 controlRoot / executionRoot,代码只在 executionRoot 写。
 3. **实现**:小步改代码,红灯优先;一轮只做一个任务,边做边写负结果。
 4. **自验**:`relay_verify {root, full:true}` → 全量 R 系列无 ERROR;错误行以「修复:」开头,照做即可。
-5. **出场**:`relay_session_end {root, model, summary, done_task?, next?}` → 绿闸 + 可执行验收都通过才提交;失败不写 TASKS/LOG、不提交、保留认领锁。
+5. **出场**:`relay_session_end {root, model, summary, done_task?, done_tasks?, next?}` → 绿闸 + 可执行验收都通过才提交;失败不写 TASKS/LOG、不提交、保留认领锁。一次交付多个任务用 `done_tasks: ["T055","T056"]`(仅单根):每个任务各得独立 LOG 完成条目与 `[x]`,否则 D8/R9 不认。
 6. **交接**:LOG 记录负结果与下一步;下一个会话从简报恢复,而不是从聊天记录恢复。
 
 ## 工具速查

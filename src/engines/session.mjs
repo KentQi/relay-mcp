@@ -1060,6 +1060,32 @@ export const relaySessionEnd = async (args = {}) => {
     out.push('## 参数校验失败', '', `\`done_task\` 须形如 T003,收到:“${doneTask}”。`, '', '修复: 传入 TASKS.md 中存在的任务号,或省略 done_task(无完成任务的会话)。');
     return { content: [{ type: 'text', text: out.join('\n') }], isError: true };
   }
+  // done_tasks[]:一次交付多个任务时逐个留完成证据(D8/R9 只认 LOG 条目标题里的 task= 字段,
+  // 「摘要正文提到别的任务号」不参与取证)。done_task 是主任务,与数组去重后一起处理。
+  const extraTasks = [];
+  if (args.done_tasks != null && !Array.isArray(args.done_tasks)) {
+    out.push('## 参数校验失败', '', '`done_tasks` 必须是任务号数组(如 ["T055","T056"])。', '', '修复: 改为数组,或省略该参数只用 done_task。');
+    return { content: [{ type: 'text', text: out.join('\n') }], isError: true };
+  }
+  for (const raw of Array.isArray(args.done_tasks) ? args.done_tasks : []) {
+    const t = String(raw ?? '').trim();
+    if (!/^T\d+$/.test(t)) {
+      out.push('## 参数校验失败', '', `\`done_tasks\` 的每一项须形如 T003,收到:“${t}”。`, '', '修复: 只放纯任务号,如 ["T055","T056"]。');
+      return { content: [{ type: 'text', text: out.join('\n') }], isError: true };
+    }
+    if (t !== doneTask && !extraTasks.includes(t)) extraTasks.push(t);
+  }
+  // 受管 worktree 的成对证据是「一个任务 = 一条分支 + 一条 registry 记录」,
+  // 多个任务无法在同一次出场里各自凑齐代码提交与完成提交,因此必须先拒绝而不是留下半套证据。
+  if (extraTasks.length && managed) {
+    out.push('## 参数校验失败 — 未提交', '',
+      '受管 worktree 出场不支持 `done_tasks[]`:成对证据要求「一个任务 = 一条任务分支 + 一条完成提交」。',
+      `当前执行树登记的是 ${(roots.record && roots.record.task) || '(未知)'},请只传该任务的 \`done_task\`。`,
+      '', '修复:在受管树里一次只完成一个任务;其余任务在各自 claim 出来的 executionRoot 里分别出场。');
+    return { content: [{ type: 'text', text: out.join('\n') }], isError: true };
+  }
+  // 多任务出场要求每个任务都有「可执行验收」的背书;这里是唯一的实现路径:逐任务跑各自的验收行。
+  // (下面的 acceptanceGate 仍按主任务跑,额外任务在 TASKS 盖戳前统一校验。)
   const blocked = String(args.blocked ?? '').replace(/[\u0000-\u001f\u007f]+/g, ' ').trim();
   const next = args.next && typeof args.next === 'object' ? args.next : null;
   if (next) {
@@ -1114,8 +1140,10 @@ export const relaySessionEnd = async (args = {}) => {
   }
 
   // 完成权限先于绿闸:越权请求不得执行测试、提交或改动协议文件。
-  if (doneTask) {
-    const ownershipError = await completionOwnershipError(root, doneTask, model);
+  // 同时对 done_tasks[] 逐个校验:每个任务都必须由当前 model 持有认领权。
+  const allDoneTasks = doneTask ? [doneTask, ...extraTasks] : [...extraTasks];
+  for (const t of allDoneTasks) {
+    const ownershipError = await completionOwnershipError(root, t, model);
     if (ownershipError) {
       out.push('## 完成权限校验失败 — 未提交', '', ownershipError);
       return { content: [{ type: 'text', text: out.join('\n') }], isError: true };
@@ -1238,6 +1266,23 @@ export const relaySessionEnd = async (args = {}) => {
 
   // 2.5 验收执行门(H1):完成声明必须有可执行的绿灯背书;不绿 → 不改任何文件、不提交
   const acc = await acceptanceGate(root, doneTask || null, cfg, executionRoot);
+  // done_tasks[]:每个额外任务也要各自通过它自己的「验收:」行——不能借主任务的测试蒙混。
+  for (const t of extraTasks) {
+    const extraAcc = await acceptanceGate(root, t, cfg, executionRoot);
+    if (extraAcc.fails.length) {
+      out.push('## 验收执行门:未通过 — 未提交', '',
+        `完成声明 \`${t}\` 缺少可执行验收的绿灯背书。按出场协议:**未更新任何文件,未提交**。`, '',
+        '失败明细:', '');
+      for (const f of extraAcc.fails) out.push(`- ${f.split('\n').join('\n  ')}`);
+      out.push('', '修复:让上述测试真正通过(而不是删测试/改验收行),再重跑 relay_session_end。');
+      await writeFailureMark(root, 'ACCEPTANCE', { task: t, scope: 'acceptance' });
+      return { content: [{ type: 'text', text: out.join('\n') }], isError: true };
+    }
+    acc.fails.push(...extraAcc.fails);
+    acc.lines.push(...extraAcc.lines.map((l) => `[${t}] ${l}`));
+    acc.notes.push(...extraAcc.notes.map((n) => `[${t}] ${n}`));
+    acc.executed += extraAcc.executed;
+  }
   if (acc.fails.length) {
     out.push('## 验收执行门:未通过 — 未提交', '',
       `完成声明 \`${doneTask || '(本次会话)'}\` 缺少可执行验收的绿灯背书。按出场协议:**未更新任何文件,未提交**。`, '',
@@ -1283,8 +1328,9 @@ export const relaySessionEnd = async (args = {}) => {
     await exitLock.release();
     return { content: [{ type: 'text', text: out.join('\n') }], isError: true };
   }
-  if (doneTask) {
-    const ownershipError = await completionOwnershipError(root, doneTask, model);
+  // 锁内二次校验:done_tasks[] 的每一项都必须仍由当前 model 持有。
+  for (const t of allDoneTasks) {
+    const ownershipError = await completionOwnershipError(root, t, model);
     if (ownershipError) {
       out.push('## 完成权限校验失败 — 未提交', '', ownershipError);
       return { content: [{ type: 'text', text: out.join('\n') }], isError: true };
@@ -1412,29 +1458,32 @@ export const relaySessionEnd = async (args = {}) => {
   if (tLines == null) { tLines = await baseTemplateLines('TASKS.md'); changes.push('TASKS.md 不存在,已按模板重建'); }
   const date = stamp().slice(0, 10);
 
-  let alreadyDone = false;
-  if (doneTask) {
-    const idx = findTaskIdx(tLines, doneTask);
+  const markTaskDone = (taskId) => {
+    const idx = findTaskIdx(tLines, taskId);
     if (idx < 0) {
-      changes.push(`警告: TASKS.md 未找到任务行 ${doneTask},未能标 [x](请核对任务号)`);
-    } else {
-      const p = parseTaskLine(tLines[idx]);
-      if (p.status === 'x') {
-        // 幂等(B5):重跑同一出场不重复盖戳
-        alreadyDone = true;
-        changes.push(`${doneTask} 已是完成态,跳过重复盖戳`);
-      } else {
-        const range = taskBlockRange(tLines, idx);
-        // 完成戳不记 sha:单提交内"盖戳+提交"自指无解(amend 会再换 sha,记录值变悬挂对象)。
-        // 考古路径:完成动作的提交消息含「T### 完成」,git log --grep 反查即得。
-        const doneLines = [`- [x] ${p.id} ${p.title}  (${date})`];
-        if (blocked) doneLines.push(`  阻塞: ${blocked}`);
-        doneLines.push(...tLines.slice(idx + 1, range.end)); // 保留「验收:」等续行
-        tLines.splice(idx, range.end - idx);
-        insertIntoSection(tLines, '已完成', doneLines);
-        changes.push(`TASKS.md: ${doneTask} → \`[x]\` (${date}),挪入「已完成」区${blocked ? '〔附阻塞说明〕' : ''}`);
-      }
+      changes.push(`警告: TASKS.md 未找到任务行 ${taskId},未能标 [x](请核对任务号)`);
+      return;
     }
+    const p = parseTaskLine(tLines[idx]);
+    if (p.status === 'x') {
+      // 幂等(B5):重跑同一出场不重复盖戳
+      changes.push(`${taskId} 已是完成态,跳过重复盖戳`);
+      return;
+    }
+    const range = taskBlockRange(tLines, idx);
+    // 完成戳不记 sha:单提交内"盖戳+提交"自指无解(amend 会再换 sha,记录值变悬挂对象)。
+    // 考古路径:完成动作的提交消息含「T### 完成」,git log --grep 反查即得。
+    const doneLines = [`- [x] ${p.id} ${p.title}  (${date})`];
+    if (blocked) doneLines.push(`  阻塞: ${blocked}`);
+    doneLines.push(...tLines.slice(idx + 1, range.end)); // 保留「验收:」等续行
+    tLines.splice(idx, range.end - idx);
+    insertIntoSection(tLines, '已完成', doneLines);
+    changes.push(`TASKS.md: ${taskId} → \`[x]\` (${date}),挪入「已完成」区${blocked ? '〔附阻塞说明〕' : ''}`);
+  };
+  if (doneTask) {
+    markTaskDone(doneTask);
+    // done_tasks[]:逐个盖戳(每个任务都要有自己的 [x] 行,D8/R9 才认)。
+    for (const t of extraTasks) markTaskDone(t);
   } else if (blocked) {
     changes.push('警告: 提供了 blocked 但无 done_task,阻塞说明改写入 LOG(留给下一个)');
   }
@@ -1498,6 +1547,9 @@ export const relaySessionEnd = async (args = {}) => {
   // 维护会话(onboard/开源化/引擎迁移等基础设施工作)不对应 TASKS 任务:
   // task=维护 且不计入 R7 发散窗口(否则探测类会话挂 task=无 会被误判为停滞)
   const maintenance = args.maintenance === true;
+  // D8/R9 只读**标题行**的 task= 字段(DONE_TASK_RE = ^T\d+\s*完成$),所以 done_tasks[] 必须
+  // 落成多条独立完成条目,否则「摘要正文提到别的任务号」不构成证据。主任务排最前。
+  const doneTaskIds = doneTask ? [doneTask, ...extraTasks] : [];
   const taskField = doneTask ? `${doneTask} 完成` : (maintenance ? '维护' : '无');
   const summaryFlat = summary.split('\n').map((s) => s.trim()).filter(Boolean).join('; ');
   // 事实底账(T013/R10):由引擎确定性派生并写入,模型不得手写/改写。
@@ -1516,31 +1568,55 @@ export const relaySessionEnd = async (args = {}) => {
     codeSha: managedCommit ? managedCommit.sha : '',
     startedAt,
   })) : null;
-  const entry = [
-    `## ${stamp()} | model=${model} | task=${taskField}`,
-    `- 摘要: ${summaryFlat}`,
-    ...(factLine ? [factLine] : []),
-  ];
-  if (managedCommit && doneTask) entry.push(`- worktree: branch=${managedCommit.branch}; sha=${managedCommit.sha}; 已验收,未合并(是否合并由人工决定)`);
-  for (const n of negatives) entry.push(`- 负结果: ${n}`);
-  if (next && next.notes && String(next.notes).trim()) entry.push(`- 留给下一个: ${String(next.notes).trim()}`);
-  if (blocked && !doneTask) entry.push(`- 留给下一个: 当前受阻:${blocked}`);
+  // 多任务出场:为每个额外任务各写一条**独立**完成条目,标题行 task= 才能被 D8/R9 识别。
+  // 条目正文完全相同(同一份摘要/事实/负结果),只有标题的任务号不同——这是「一次交付多任务」的
+  // 唯一可机检表达方式,不引入新的证据类型。主任务条目保持与单任务出场逐字符一致。
+  const entries = [];
+  const buildEntry = (field, withWorktreeLine) => {
+    const e = [
+      `## ${stamp()} | model=${model} | task=${field}`,
+      `- 摘要: ${summaryFlat}`,
+      ...(factLine ? [factLine] : []),
+    ];
+    if (withWorktreeLine && managedCommit && doneTask) e.push(`- worktree: branch=${managedCommit.branch}; sha=${managedCommit.sha}; 已验收,未合并(是否合并由人工决定)`);
+    for (const n of negatives) e.push(`- 负结果: ${n}`);
+    if (next && next.notes && String(next.notes).trim()) e.push(`- 留给下一个: ${String(next.notes).trim()}`);
+    if (blocked && !doneTask) e.push(`- 留给下一个: 当前受阻:${blocked}`);
+    return e;
+  };
+  const fields = doneTask
+    ? [taskField, ...extraTasks.map((t) => `${t} 完成`)]
+    : [taskField];
+  fields.forEach((f, i) => entries.push(buildEntry(f, i === 0)));
+  const entry = entries[0];
   let titleIdx = lLines.findIndex((l) => /^# /.test(l));
   if (titleIdx < 0) { lLines.unshift('# 会话日志(最新在上)'); titleIdx = 0; }
-  // 幂等(B5):同一会话重复出场(同 model + 同「T### 完成」)不重复记日志;
-  // 查重键扫全表——最新条目可能是其他会话的
-  const dupLog = alreadyDone && parseLogEntries(lLines.join('\n')).some((e) => e.model === model && e.task === taskField);
+  // 幂等(B5):同一会话重复出场(同 model + 同完成条目)不重复记日志;
+  // 查重键扫全表——最新条目可能是其他会话的。多任务时逐个判断,只补缺的那些。
+  // 幂等(B5)只在「任务已完成」时才用 (model, task) 查重——维护出场(task=维护/无)可以
+  // 在同一仓库重复出现,不能因为同 model 就跳过记录。
+  const existingEntries = parseLogEntries(lLines.join('\n'));
+  const taskAlreadyDone = (field) => {
+    if (!doneTaskIds.length) return false;
+    const id = field.replace(/\s*完成$/, '');
+    return doneTaskIds.includes(id) && existingEntries.some((x) => x.model === model && x.task === field);
+  };
+  const missingEntries = entries.filter((e) => {
+    const field = e[0].replace(/^## .+? \| model=.+? \| task=/, '');
+    return !taskAlreadyDone(field);
+  });
   let logTextOut = null;
-  if (!dupLog) {
-    if (lLines[titleIdx + 1] === '') lLines.splice(titleIdx + 2, 0, ...entry, '');
-    else lLines.splice(titleIdx + 1, 0, '', ...entry, '');
+  if (missingEntries.length) {
+    const payload = missingEntries.flatMap((e) => [...e, '']);
+    if (lLines[titleIdx + 1] === '') lLines.splice(titleIdx + 2, 0, ...payload);
+    else lLines.splice(titleIdx + 1, 0, '', ...payload);
     logTextOut = tidy(lLines);
     const logSecret = secretGateBlock('LOG.md', logTextOut);
     if (logSecret) {
       out.push(logSecret);
       return { content: [{ type: 'text', text: out.join('\n') }], isError: true };
     }
-    changes.push(`LOG.md: 顶部新增条目「${entry[0]}」`);
+    changes.push(`LOG.md: 顶部新增条目「${missingEntries.map((e) => e[0]).join('」「')}」`);
   } else {
     changes.push('LOG.md: 最新条目即本次出场(幂等跳过,不重复记录)');
   }
@@ -1748,14 +1824,19 @@ export const relaySessionEnd = async (args = {}) => {
         registryWarnings.push(`注册表完成状态更新失败(完成提交已落账,需人工修复注册表):${e?.message || String(e)}`);
       }
     }
-    const claimToken = await ownedClaimToken(root, doneTask, model);
-    const claimRelease = settled
-      ? await releaseClaimLock(root, doneTask, claimToken)
-      : { ok: true, released: false, warning: '' };
-    if (!claimRelease.ok && claimRelease.warning) registryWarnings.push(claimRelease.warning);
-    lockNote = claimRelease.released
-      ? `认领锁 \`.relay/claims/${doneTask}.lock\` 已释放`
-      : (guardSection ? `认领锁保留(待人工批准提交)` : (claimRelease.ok ? `认领锁不在场或不属于当前模型(无需释放)` : `⚠ 认领锁未释放:${claimRelease.warning}`));
+    const claimTokens = doneTaskIds.length ? doneTaskIds : [doneTask];
+    const releasedNotes = [];
+    for (const t of claimTokens) {
+      const claimToken = await ownedClaimToken(root, t, model);
+      const claimRelease = settled
+        ? await releaseClaimLock(root, t, claimToken)
+        : { ok: true, released: false, warning: '' };
+      if (!claimRelease.ok && claimRelease.warning) registryWarnings.push(`[${t}] ${claimRelease.warning}`);
+      if (claimRelease.released) releasedNotes.push(`\`.relay/claims/${t}.lock\``);
+    }
+    lockNote = releasedNotes.length
+      ? `认领锁 ${releasedNotes.join(' / ')} 已释放`
+      : (guardSection ? `认领锁保留(待人工批准提交)` : `认领锁不在场或不属于当前模型(无需释放)`);
   }
 
   // 7. 汇总输出

@@ -314,6 +314,43 @@ process.exit(0);
     ok(!existsSync(path.join(cardDir(repo, id), 'takeover.lock')), '接力锁未被遗留');
   }
 
+  console.log('\n== 9. 注入 argv 的 prompt 必须脱敏(T061)==');
+  {
+    const repo = fresh('redact');
+    const src = mkTmp('src');
+    makeSource(repo, src);
+    const marker = path.join(mkTmp('marker'), 'prompt.txt');
+    const SECRET = 'sk-ant-api03-DDDDDDDDDDDDDDDDDDDDDDDDDDDD';
+    const promptWithSecret = `完成任务。参考密钥 ${SECRET} 不要外传。`;
+    const metaPath = path.join(src, 'parent', 'agent-launch-agent', 'metadata.json');
+    const meta = JSON.parse(readFileSync(metaPath, 'utf8'));
+    meta.prompt = promptWithSecret;
+    writeFileSync(metaPath, JSON.stringify(meta));
+    setAutoLaunch(repo, {
+      enabled: true,
+      command: [process.execPath, workerScript, '{{prompt}}', marker],
+      timeoutMs: 10000,
+      maxOutputBytes: 65536,
+    });
+    const cap = cli(repo, 'relay_rescue', { action: 'capture', id: 'launch-agent', confirm: true });
+    ok(cap.status === 0, '含密钥 prompt 的 capture 成功', out(cap).slice(0, 300));
+    const id = idsOf(repo)[0];
+    const tk = cli(repo, 'relay_rescue', { action: 'takeover', id, model: 'redact-taker', confirm: true });
+    ok(tk.status === 0, '含密钥 prompt 仍可自动拉起', out(tk).slice(0, 400));
+    ok(/脱敏/.test(out(tk)), 'takeover 输出明确报告已脱敏(不静默改写)', out(tk).slice(0, 600));
+    await waitDispatch(repo, id, 'completed', 10000);
+    ok(existsSync(marker), '子进程仍收到 prompt 参数');
+    const got = existsSync(marker) ? readFileSync(marker, 'utf8') : '';
+    ok(!got.includes(SECRET), '注入 argv 的 prompt 不含密钥原文(T061 回归)', got.slice(0, 200));
+    ok(/REDACTED/.test(got), '密钥位置被替换为脱敏标记', got.slice(0, 200));
+    ok(got.includes('完成任务'), '非密钥部分保留(脱敏不破坏任务语义)', got.slice(0, 200));
+    const dispatchRaw = readFileSync(path.join(cardDir(repo, id), 'dispatch.json'), 'utf8');
+    ok(!dispatchRaw.includes(SECRET), 'dispatch.json 不含密钥原文');
+    const logRaw = existsSync(path.join(cardDir(repo, id), 'dispatch.log'))
+      ? readFileSync(path.join(cardDir(repo, id), 'dispatch.log'), 'utf8') : '';
+    ok(!logRaw.includes(SECRET), 'dispatch.log 不含密钥原文');
+  }
+
   console.log('\n== 8. 架构:核心零 harness ==');
   {
     const core = readFileSync(path.join(RELAY, 'src', 'engines', 'rescue.mjs'), 'utf8');
