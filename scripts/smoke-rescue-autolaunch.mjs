@@ -225,7 +225,96 @@ try {
     ok(r.status === 1 && /cwd|目录|仓库/.test(out(r)), 'cwd 逃出仓库被拒', out(r).slice(0, 400));
   }
 
-  console.log('\n== 6. 架构:核心零 harness ==');
+  console.log('\n== 7. 第二轮审计:半写状态、快速退出竞态、孙进程 ==');
+  {
+    // (a) dispatch.json 损坏必须 fail-closed(busy),不能当成「没有任务」
+    const repo = fresh('corruptdispatch');
+    const src = mkTmp('src');
+    makeSource(repo, src);
+    cli(repo, 'relay_rescue', { action: 'capture', id: 'launch-agent', confirm: true });
+    const id = idsOf(repo)[0];
+    ok(!!id, '损坏状态夹具已 capture', id || '');
+    writeFileSync(path.join(cardDir(repo, id), 'dispatch.json'), '{"status":"run');
+    const repCorrupt = cli(repo, 'relay_rescue', { action: 'report', id, model: 'x', summary: 'y', confirm: true });
+    ok(repCorrupt.status === 1, 'dispatch.json 半写时 report 被拒(审计 #6 回归)', out(repCorrupt).slice(0, 300));
+    const dropCorrupt = cli(repo, 'relay_rescue', { action: 'drop', id, confirm: true });
+    ok(dropCorrupt.status === 1, 'dispatch.json 半写时 drop 被拒(审计 #6 回归)', out(dropCorrupt).slice(0, 300));
+    const tkCorrupt = cli(repo, 'relay_rescue', { action: 'takeover', id, model: 'corrupt-taker', confirm: true });
+    ok(tkCorrupt.status === 1, 'dispatch.json 半写时不重复启动(审计 #6 回归)', out(tkCorrupt).slice(0, 300));
+  }
+  {
+    // (b) 极快退出的命令:终态不得被父进程的 running 占位覆盖
+    const repo = fresh('fast');
+    const src = mkTmp('src');
+    makeSource(repo, src);
+    setAutoLaunch(repo, {
+      enabled: true,
+      command: [process.execPath, '-e', 'process.exit(0)'],
+      timeoutMs: 10000,
+      maxOutputBytes: 65536,
+    });
+    cli(repo, 'relay_rescue', { action: 'capture', id: 'launch-agent', confirm: true });
+    const id = idsOf(repo)[0];
+    const tk = cli(repo, 'relay_rescue', { action: 'takeover', id, model: 'fast-taker', confirm: true });
+    ok(tk.status === 0, '快速命令 takeover 成功', out(tk).slice(0, 300));
+    const done = await waitDispatch(repo, id, 'completed', 10000);
+    ok(done && done.status === 'completed', '快速命令终态保持 completed(审计 #5 回归)', JSON.stringify(done));
+    await new Promise((r) => setTimeout(r, 500));
+    ok(readDispatch(repo, id)?.status === 'completed', '500ms 后仍是 completed(无占位覆盖)',
+      JSON.stringify(readDispatch(repo, id)));
+  }
+  {
+    // (c) 超时必须终止孙进程,worker 不能永久 running
+    const repo = fresh('grandchild');
+    const src = mkTmp('src');
+    makeSource(repo, src);
+    const script = path.join(mkTmp('gc'), 'grandchild.mjs');
+    writeFileSync(script, `
+import { spawn } from 'node:child_process';
+spawn(process.execPath, ['-e', 'setTimeout(()=>{}, 60000)'], { stdio: 'inherit' });
+process.exit(0);
+`);
+    setAutoLaunch(repo, {
+      enabled: true,
+      command: [process.execPath, script],
+      timeoutMs: 1200,
+      maxOutputBytes: 65536,
+    });
+    cli(repo, 'relay_rescue', { action: 'capture', id: 'launch-agent', confirm: true });
+    const id = idsOf(repo)[0];
+    cli(repo, 'relay_rescue', { action: 'takeover', id, model: 'gc-taker', confirm: true });
+    let final = null;
+    const deadline = Date.now() + 15000;
+    while (Date.now() < deadline) {
+      const d = readDispatch(repo, id);
+      if (d && d.status !== 'running') { final = d; break; }
+      await new Promise((r) => setTimeout(r, 100));
+    }
+    ok(!!final, '孙进程持有管道时 worker 仍有界结算(审计 #7 回归)', JSON.stringify(readDispatch(repo, id)));
+    ok(final && final.status !== 'running', '终态不是永久 running', JSON.stringify(final));
+  }
+  {
+    // (d) 非法 autoLaunch 配置不得留下孤儿 TASKS 待办
+    const repo = fresh('orphan');
+    const src = mkTmp('src');
+    makeSource(repo, src);
+    cli(repo, 'relay_rescue', { action: 'capture', id: 'launch-agent', confirm: true });
+    const id = idsOf(repo)[0];
+    const tasksBefore = readFileSync(path.join(repo, 'TASKS.md'), 'utf8');
+    const beforePending = (tasksBefore.match(/^- \[ \] T\d+/gm) || []).length;
+    setAutoLaunch(repo, { enabled: true, command: 'node worker.mjs' });
+    const r = cli(repo, 'relay_rescue', { action: 'takeover', id, model: 'orphan-taker', confirm: true });
+    ok(r.status === 1, '非法 autoLaunch 被拒', out(r).slice(0, 300));
+    const tasksAfter = readFileSync(path.join(repo, 'TASKS.md'), 'utf8');
+    const afterPending = (tasksAfter.match(/^- \[ \] T\d+/gm) || []).length;
+    ok(afterPending === beforePending, '被拒后没有遗留孤儿待办(附录 #3 回归)', `${beforePending} -> ${afterPending}`);
+    ok(tasksAfter === tasksBefore, 'TASKS.md 逐字节未变');
+    const st = JSON.parse(readFileSync(path.join(cardDir(repo, id), 'state.json'), 'utf8'));
+    ok(!st.takeover, 'state.takeover 未被写入(无半写)', JSON.stringify(st.takeover));
+    ok(!existsSync(path.join(cardDir(repo, id), 'takeover.lock')), '接力锁未被遗留');
+  }
+
+  console.log('\n== 8. 架构:核心零 harness ==');
   {
     const core = readFileSync(path.join(RELAY, 'src', 'engines', 'rescue.mjs'), 'utf8');
     const hits = core.split('\n').filter((l) => /zcode|claude|codex|gemini|cursor|opencode|kimi|deepseek|glm/i.test(l));

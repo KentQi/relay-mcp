@@ -7,7 +7,7 @@
 //
 // 一个 profile 的形状:
 //   {
-//     id:      string          唯一名(写入接力单 state.harness)
+//     id:      string          唯一名(写入接力单 state.profile)
 //     title:   string          人类可读名(仅用于输出,不参与逻辑)
 //     roots:   (home) => string[]   该格式在哪些根目录下找候选(空数组 = 需要显式 source)
 //     discover(root, ctx) => Promise<Candidate[]>   在单个 root 下枚举候选
@@ -25,8 +25,11 @@
 //   Parsed 统一字段:
 //     { prompt, cwd, gitBranch, sessionId, agentId, edits[], commands[], todos[],
 //       narrative, recordCount, toolSignals }
-//     toolSignals = { pendingToolUse, lastRecordKind, trailingToolError, apiError, anyToolError }
+//     toolSignals = { pendingToolUse, lastRecordKind, trailingToolError, apiError, anyToolError,
+//                     explicitCompletion, parseIssues[] }
 //     —— 引擎只根据 toolSignals 做**确定性分类**,不含任何 harness 语义。
+//     parseIssues 是描述符自报的「行数据损坏」信号(如 SQLite 行内 JSON 非法):
+//     只要非空,分类就降级为 error,绝不当成正常完成。
 //
 // 本文件只放「格式描述符的实现」与「注册表」;通用规则(归属判定、分类、快照、锁)留在 rescue.mjs。
 
@@ -113,6 +116,7 @@ const parseWithFieldMap = (text, map = {}) => {
     shellTools: ['Bash', 'Shell'],
     apiErrorMarker: 'isApiErrorMessage',
     apiErrorCodePath: 'error', apiErrorStatusPath: 'apiErrorStatus', apiErrorTextPath: 'message.content',
+    roleMap: {}, stopReasonPath: 'message.stop_reason',
     timestampField: 'timestamp', cwdField: 'cwd', sessionField: 'sessionId', agentField: 'agentId', branchField: 'gitBranch',
     ...map,
   };
@@ -125,6 +129,7 @@ const parseWithFieldMap = (text, map = {}) => {
     anyToolError: false,
     explicitCompletion: false,
     apiError: null,
+    parseIssues: [],
   };
   const edits = [];
   const commands = [];
@@ -132,18 +137,31 @@ const parseWithFieldMap = (text, map = {}) => {
   const todos = [];
   let prompt = '';
   let narrative = '';
-  let lastRole = '';
+  let lastSignalIndex = -1;
+  let apiErrorIndex = -1;
 
-  for (const rec of records) {
-    const msg = asMessage(rec, { roleField: m.role, contentPath: m.contentPath });
+  const readPath = (obj, dotted) => {
+    let cur = obj;
+    for (const seg of String(dotted).split('.')) { cur = cur == null ? null : cur[seg]; }
+    return cur;
+  };
+
+  for (let i = 0; i < records.length; i++) {
+    const rec = records[i];
+    // 描述符可以在物化记录里标注 parseIssue(如来源行 JSON 损坏):这是损坏信号,不是内容。
+    if (typeof rec.parseIssue === 'string' && rec.parseIssue) sig.parseIssues.push(clip(rec.parseIssue, 200));
+    const msg = asMessage(rec, { roleField: m.role, roleMap: m.roleMap || {}, contentPath: m.contentPath });
     if (!msg) continue;
     const { role, content } = msg;
-    // 记录级 API 错误标记:最优先,后续分类据此判定 quota/error
-    if (rec[m.apiErrorMarker] === true) {
+    // 记录级 API 错误标记:按「最后一个有效轮次」判定,后续恢复轮次会覆盖它。
+    // 标记可以是布尔 true,也可以直接是一个错误对象(声明式 fieldMap 里更自然)。
+    const markerVal = readPath(rec, m.apiErrorMarker);
+    const isApiErrorRec = markerVal === true
+      || (markerVal != null && typeof markerVal === 'object' && !Array.isArray(markerVal));
+    if (isApiErrorRec) {
       sig.lastRecordKind = 'api-error';
       let errText = '';
-      let cur = rec;
-      for (const seg of String(m.apiErrorTextPath).split('.')) { cur = cur == null ? null : cur[seg]; }
+      const cur = readPath(rec, m.apiErrorTextPath);
       if (typeof cur === 'string') errText = cur;
       else {
         const blocks = asBlocks(content).filter((b) => m.textTypes.includes(b.type));
@@ -151,22 +169,25 @@ const parseWithFieldMap = (text, map = {}) => {
       }
       let code = '';
       let status = null;
-      let c2 = rec;
-      for (const seg of String(m.apiErrorCodePath).split('.')) { c2 = c2 == null ? null : c2[seg]; }
+      const c2 = readPath(rec, m.apiErrorCodePath);
       if (typeof c2 === 'string') code = c2;
-      const st = Number(rec[m.apiErrorStatusPath]);
+      const statusRaw = readPath(rec, m.apiErrorStatusPath);
+      const st = Number(statusRaw);
       if (Number.isFinite(st)) status = st;
       sig.apiError = { code, status, text: clip(errText, 400) };
-      lastRole = 'api-error';
+      apiErrorIndex = i;
+      lastSignalIndex = i;
       continue;
     }
     const isAssistant = m.assistantIds.includes(role);
     const isUser = m.userIds.includes(role);
     if (isAssistant) {
       sig.lastRecordKind = 'assistant';
-      lastRole = 'assistant';
-      const stopReason = String(msg.stop_reason ?? msg.stopReason ?? rec.stop_reason ?? '');
-      if (stopReason === 'end_turn' || stopReason === 'completed' || stopReason === 'stop') sig.explicitCompletion = true;
+      lastSignalIndex = i;
+      // 完成信号只认**最后一条 assistant** 自己的 stop 原因:早期轮次的 end_turn 不能掩盖后续中断。
+      const stopReason = String(readPath(rec, m.stopReasonPath) ?? rec.stop_reason ?? '');
+      const completed = ['end_turn', 'completed', 'stop'].includes(stopReason);
+      sig.explicitCompletion = completed;
       for (const b of asBlocks(content)) {
         if (m.textTypes.includes(b.type) && b.text) {
           narrative = String(b.text);
@@ -194,10 +215,10 @@ const parseWithFieldMap = (text, map = {}) => {
         }
       }
     } else if (isUser) {
+      lastSignalIndex = i;
       const blocks = asBlocks(content).filter((b) => m.toolResultTypes.includes(b.type));
       if (blocks.length) {
         sig.lastRecordKind = 'user-result';
-        lastRole = 'user-result';
         let hadError = false;
         for (const b of blocks) {
           const id = b[m.toolIdPath] ?? b.tool_use_id;
@@ -215,6 +236,11 @@ const parseWithFieldMap = (text, map = {}) => {
       }
     }
   }
+  // 历史 API 错误只在其后没有新轮次时才算「当前停因」;恢复后的会话不再被判 quota。
+  if (sig.apiError && lastSignalIndex > apiErrorIndex) {
+    sig.recoveredApiError = sig.apiError;
+    sig.apiError = null;
+  }
   return {
     prompt,
     cwd: String(first[m.cwdField] || ''),
@@ -228,6 +254,7 @@ const parseWithFieldMap = (text, map = {}) => {
     narrative,
     recordCount: records.length,
     toolSignals: sig,
+    parseIssues: sig.parseIssues,
   };
 };
 

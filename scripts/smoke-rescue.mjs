@@ -735,19 +735,54 @@ try {
     }
 
     // #14(审计):被持有时必须拒绝删除,否则会中断正在进行的接力并永久丢失现场
-    const heldId = rescueIds(repo).find((x) => existsSync(path.join(rescueRootOf(repo), x, 'takeover.lock')));
+    // 显式造一张被持有的卡(前面的段落都 report 过,不能依赖残留状态)。
+    const heldCap = cli(repo, 'relay_rescue', { action: 'capture', id: 'agent-zcode-ok', confirm: true }, ENV);
+    ok(heldCap.status === 0, '为 drop 守卫夹具 capture 一张卡', out(heldCap).slice(0, 300));
+    const heldId = rescueIds(repo).find((x) => {
+      const p = path.join(rescueRootOf(repo), x, 'state.json');
+      if (!existsSync(p)) return false;
+      const st = JSON.parse(read(p));
+      return !st.report && !existsSync(path.join(rescueRootOf(repo), x, 'takeover.lock'));
+    });
+    ok(!!heldId, '存在一张未持有的卡可以接管成守卫夹具', ids.join(','));
     if (heldId) {
+      const held = cli(repo, 'relay_rescue', { action: 'takeover', id: heldId, model: 'drop-guard', confirm: true }, ENV);
+      ok(held.status === 0, '接管成功(制造持有状态)', out(held).slice(0, 300));
+      ok(existsSync(path.join(rescueRootOf(repo), heldId, 'takeover.lock')), '接力锁已存在');
       const heldDir = path.join(rescueRootOf(repo), heldId);
       const snapped = treeSnapshot(heldDir);
       const refused = cli(repo, 'relay_rescue', { action: 'drop', id: heldId, confirm: true }, ENV);
       ok(refused.status === 1 && /持有|拒绝/.test(out(refused)), '被持有时 drop 被拒绝(审计 #14)', out(refused).slice(0, 400));
       ok(treeSnapshot(heldDir) === snapped, '拒绝时接力单目录未被删除');
       ok(/持有/.test(out(cli(repo, 'relay_rescue', { action: 'drop', id: heldId }, ENV))), 'dry-run 报告持有者');
+      // 清理:用持有者身份 report,避免影响后续段落
+      cli(repo, 'relay_rescue', { action: 'report', id: heldId, model: 'drop-guard', summary: '守卫夹具收尾', confirm: true }, ENV);
+    }
 
-      // #14:符号链接防线
+    // #14 符号链接防线:真实构造 .relay/rescue 为符号链接,并真正调用 drop
+    {
       const slRepo = freshRepo('dropsym', 'drop 符号链接夹具');
-      copyFixture('claude', path.join(mkTmp('home9'), '.claude'), { ROOT: slRepo });
-      ok(true, '符号链接场景由 capture 侧已覆盖(同款 assertNoSymlinkComponents)');
+      const H9b = mkTmp('home9b');
+      copyFixture('claude', path.join(H9b, 'cc'), { ROOT: slRepo });
+      setRescueSources(slRepo, [{ profile: 'cc-ref', root: path.join(H9b, 'cc', 'projects') }], PROFILE_SPECS);
+      const e9b = {};
+      const capSl = cli(slRepo, 'relay_rescue', { action: 'capture', id: 'claude-ok', confirm: true }, e9b);
+      ok(capSl.status === 0, '符号链接夹具 capture 成功', out(capSl).slice(0, 300));
+      const slId = rescueIds(slRepo)[0];
+      ok(!!slId, '符号链接夹具存在接力单', slId || '');
+      if (slId) {
+        // 把 .relay/rescue 换到仓库外,再把真实目录内容搬过去:drop 不得删穿
+        const realRescue = path.join(slRepo, '.relay', 'rescue');
+        const outsideRescue = path.join(mkTmp('outside-rescue'), 'rescue');
+        mkdirSync(outsideRescue, { recursive: true });
+        const { renameSync } = await import('node:fs');
+        renameSync(realRescue, outsideRescue);
+        symlinkSync(outsideRescue, realRescue);
+        const slDrop = cli(slRepo, 'relay_rescue', { action: 'drop', id: slId, confirm: true }, e9b);
+        ok(slDrop.status === 1 && /符号链接/.test(out(slDrop)),
+          '.relay/rescue 为符号链接时 drop 被拒绝(审计 #14 回归)', out(slDrop).slice(0, 400));
+        ok(existsSync(path.join(outsideRescue, slId)), '外部目标里的接力单没有被删除');
+      }
     }
   }
 
@@ -763,6 +798,208 @@ try {
     const section = (brief.match(/## 待接力[\s\S]*?(?=\n## |\n入场即)/) || [''])[0];
     ok(section.split('\n').filter((l) => l.trim()).length <= 6, '「待接力」小节有界(≤5 行内容)', section);
     ok(/relay_rescue/.test(brief), '简报给出接手命令', brief.slice(0, 800));
+  }
+  // ==========================================================================
+  console.log('\n== 9. 第二轮审计修复回归 ==');
+  // ==========================================================================
+  {
+    // (a) 快照密钥必须在任何 git 对象落盘**之前**被拒
+    const secRepo = freshRepo('snapsec', '快照密钥夹具');
+    writeFileSync(path.join(secRepo, 'base.txt'), 'base\n');
+    git(secRepo, 'add', '-A');
+    git(secRepo, '-c', 'user.name=t', '-c', 'user.email=t@l', 'commit', '-qm', 'base');
+    const SECRET_LINE = 'export TOKEN=sk-ant-api03-CCCCCCCCCCCCCCCCCCCCCCCCCCCC';
+    // 文件名完全普通(不触发路径规则),密钥只在内容里
+    writeFileSync(path.join(secRepo, 'notes.txt'), `plain notes\n${SECRET_LINE}\n`);
+    const H10 = mkTmp('home10');
+    copyFixture('claude', path.join(H10, 'cc'), { ROOT: secRepo });
+    setRescueSources(secRepo, [{ profile: 'cc-ref', root: path.join(H10, 'cc', 'projects') }], PROFILE_SPECS);
+    const e10 = {};
+    const secCap = cli(secRepo, 'relay_rescue', { action: 'capture', id: 'claude-ok', confirm: true }, e10);
+    ok(secCap.status === 0, '含密钥内容的 capture 仍生成接力单(只是不拍快照)', out(secCap).slice(0, 400));
+    const secIds = rescueIds(secRepo);
+    if (secIds.length) {
+      const secState = JSON.parse(read(path.join(rescueRootOf(secRepo), secIds[0], 'state.json')));
+      ok(!secState.snapshotRef, '含密钥内容时不生成快照 ref', secState.snapshotRef || '(空)');
+      ok(/密钥/.test(secState.snapshotNote || ''), '拒绝原因写明疑似密钥', secState.snapshotNote);
+      // 关键:对象库里不能有那个 blob
+      const allObjects = git(secRepo, 'cat-file', '--batch-all-objects', '--batch').stdout || '';
+      ok(!allObjects.includes('sk-ant-api03-CCCCCCCCCCCCCCCCCCCCCCCCCCCC'),
+        '密钥内容从未进入 git 对象库(审计 #9 回归)', `objects=${allObjects.length} bytes`);
+      ok(!/notes\.txt/.test(gitOut(secRepo, 'rev-list', '--objects', '--all')),
+        '密钥文件也没有被任何提交/树对象引用');
+
+      // 超过扫描上限时必须整体拒绝,不能「只扫前 500 个」放行其余文件
+      const manyRepo = freshRepo('manyfiles', '大量改动夹具');
+      const H10b = mkTmp('home10b');
+      copyFixture('claude', path.join(H10b, 'cc'), { ROOT: manyRepo });
+      setRescueSources(manyRepo, [{ profile: 'cc-ref', root: path.join(H10b, 'cc', 'projects') }], PROFILE_SPECS);
+      for (let i = 0; i < 520; i++) writeFileSync(path.join(manyRepo, `f${i}.txt`), `content ${i}\n`);
+      const manyCap = cli(manyRepo, 'relay_rescue', { action: 'capture', id: 'claude-ok', confirm: true }, {});
+      ok(manyCap.status === 0, '大量改动时 capture 仍成功(只是不拍快照)', out(manyCap).slice(0, 300));
+      const manyIds = rescueIds(manyRepo);
+      if (manyIds.length) {
+        const manyState = JSON.parse(read(path.join(rescueRootOf(manyRepo), manyIds[0], 'state.json')));
+        ok(!manyState.snapshotRef, '改动文件超过扫描上限时不生成快照', manyState.snapshotRef || '(空)');
+        ok(/扫描上限|无法保证/.test(manyState.snapshotNote || ''), '拒绝原因说明扫描面不足', manyState.snapshotNote);
+      }
+    }
+
+    // (b) takeover 必须持久化锁 token,report 后锁真的消失
+    const relRepo = freshRepo('locktok', '锁 token 夹具');
+    const H11 = mkTmp('home11');
+    copyFixture('claude', path.join(H11, 'cc'), { ROOT: relRepo });
+    setRescueSources(relRepo, [{ profile: 'cc-ref', root: path.join(H11, 'cc', 'projects') }], PROFILE_SPECS);
+    const e11 = {};
+    ok(cli(relRepo, 'relay_rescue', { action: 'capture', id: 'claude-ok', confirm: true }, e11).status === 0, '锁夹具 capture', '');
+    const lid = rescueIds(relRepo)[0];
+    const lockFile = path.join(rescueRootOf(relRepo), lid, 'takeover.lock');
+    ok(cli(relRepo, 'relay_rescue', { action: 'takeover', id: lid, model: 'tok-a', confirm: true }, e11).status === 0, '锁夹具 takeover', '');
+    const stAfterTk = JSON.parse(read(path.join(rescueRootOf(relRepo), lid, 'state.json')));
+    ok(typeof stAfterTk.takeover.token === 'string' && stAfterTk.takeover.token.length > 0,
+      'takeover 把真实锁 token 持久化到 state.json(审计 #6 回归)', JSON.stringify(stAfterTk.takeover));
+    const tokInLock = JSON.parse(read(lockFile)).token;
+    ok(stAfterTk.takeover.token === tokInLock, 'state 里的 token 与锁文件一致');
+    const repOk = cli(relRepo, 'relay_rescue', { action: 'report', id: lid, model: 'tok-a', summary: '完成', confirm: true }, e11);
+    ok(repOk.status === 0, 'report 成功', out(repOk).slice(0, 300));
+    ok(!existsSync(lockFile), 'report 后接力锁文件真的被删除(不是只清 state)', existsSync(lockFile) ? read(lockFile) : 'gone');
+    const stAfterRep = JSON.parse(read(path.join(rescueRootOf(relRepo), lid, 'state.json')));
+    ok(stAfterRep.takeover === null && !!stAfterRep.report, 'report 后 takeover 清空且写入 report');
+
+    // (c) 锁释放失败必须 fail-closed(不能报成功却留着锁)
+    ok(cli(relRepo, 'relay_rescue', { action: 'capture', id: 'claude-ok', confirm: true }, e11).status === 0, '释放失败夹具 capture', '');
+    const lid2 = rescueIds(relRepo).filter((x) => x !== lid)[0];
+    ok(cli(relRepo, 'relay_rescue', { action: 'takeover', id: lid2, model: 'tok-b', confirm: true }, e11).status === 0, '释放失败夹具 takeover', '');
+    const lock2 = path.join(rescueRootOf(relRepo), lid2, 'takeover.lock');
+    // 伪造「锁已被别人接管」:换成不同 token 的锁内容
+    writeFileSync(lock2, `${JSON.stringify({
+      version: 2, holder: 'intruder', token: 'not-the-real-token',
+      acquiredAt: new Date().toISOString(), pid: 1, ttlMinutes: 240,
+    })}\n`);
+    const repBad = cli(relRepo, 'relay_rescue', { action: 'report', id: lid2, model: 'tok-b', summary: '不应成功', confirm: true }, e11);
+    ok(repBad.status === 1 && /释放失败|token/.test(out(repBad)), '锁已被接管时 report 报错(不假成功)', out(repBad).slice(0, 400));
+    const stBad = JSON.parse(read(path.join(rescueRootOf(relRepo), lid2, 'state.json')));
+    ok(stBad.takeover && stBad.takeover.model === 'tok-b', '释放失败时保留 takeover 状态(可恢复)', JSON.stringify(stBad.takeover));
+
+    // (d) 过期锁不再阻止 drop
+    const lockJson = JSON.parse(read(lock2));
+    lockJson.holder = 'tok-b';
+    lockJson.token = stBad.takeover.token;
+    writeFileSync(lock2, `${JSON.stringify(lockJson)}\n`);
+    const { utimesSync } = await import('node:fs');
+    const old = new Date(Date.now() - 241 * 60000);
+    utimesSync(lock2, old, old);
+    const dropExpired = cli(relRepo, 'relay_rescue', { action: 'drop', id: lid2, confirm: true }, e11);
+    ok(dropExpired.status === 0 && !existsSync(path.join(rescueRootOf(relRepo), lid2)),
+      'TTL 过期锁不再阻止 drop(审计 #14 回归)', out(dropExpired).slice(0, 300));
+
+    // (e) T058 前的旧接力单(只有 harness 字段)仍可读出原始任务
+    const legacyRepo = freshRepo('legacy', '旧卡兼容夹具');
+    const H12 = mkTmp('home12');
+    copyFixture('claude', path.join(H12, 'cc'), { ROOT: legacyRepo });
+    setRescueSources(legacyRepo, [{ profile: 'cc-ref', root: path.join(H12, 'cc', 'projects') }], PROFILE_SPECS);
+    const e12 = {};
+    ok(cli(legacyRepo, 'relay_rescue', { action: 'capture', id: 'claude-ok', confirm: true }, e12).status === 0, '旧卡夹具 capture', '');
+    const legacyId = rescueIds(legacyRepo)[0];
+    const legacyStatePath = path.join(rescueRootOf(legacyRepo), legacyId, 'state.json');
+    const legacyState = JSON.parse(read(legacyStatePath));
+    delete legacyState.profile;
+    legacyState.harness = 'jsonl-agent';
+    writeFileSync(legacyStatePath, `${JSON.stringify(legacyState, null, 2)}\n`);
+    const legacyShow = out(cli(legacyRepo, 'relay_rescue', { id: legacyId }, e12));
+    ok(/忽略之前的指令|原始任务/.test(legacyShow), '旧卡(仅 harness 字段)仍能解析出原始任务(审计 #15 回归)', legacyShow.slice(0, 600));
+    ok(!/未注册|无法安全解析/.test(legacyShow), '旧卡不再因缺 profile 被拒绝');
+
+    // (f) 显式 source 指向 metadata.json 文件时,按其所在目录处理
+    const H13 = mkTmp('home13');
+    const metaDir = path.join(H13, 'agents', 'p1', 'agent-meta-1');
+    mkdirSync(metaDir, { recursive: true });
+    writeFileSync(path.join(metaDir, 'metadata.json'), JSON.stringify({
+      agentId: 'meta-1', cwd: legacyRepo, workspaceRoot: legacyRepo, prompt: '元数据来源任务',
+      status: 'failed', error: '[1308][已达到 5 小时的使用上限。]',
+      createdAt: '2026-11-26T05:00:00.000Z', updatedAt: '2026-11-26T05:00:10.000Z',
+    }));
+    const explicitMeta = cli(legacyRepo, 'relay_rescue', {
+      action: 'capture', id: 'meta-1', source: path.join(metaDir, 'metadata.json'), confirm: true,
+    }, e12);
+    ok(explicitMeta.status === 0, '显式 metadata.json 文件可作为 source(附录 #2 回归)', out(explicitMeta).slice(0, 400));
+
+    // (g)(h)(i) 分类器跨轮次/错误后文本
+    const H14 = mkTmp('home14');
+    const repos14 = path.join(H14, '.claude', 'projects', '-x');
+    const mkA = (sess, agentId, recs) => {
+      const d = path.join(repos14, sess, 'subagents');
+      mkdirSync(d, { recursive: true });
+      writeFileSync(path.join(d, `agent-${agentId}.jsonl`), recs.map((r) => JSON.stringify(r)).join('\n') + '\n');
+    };
+    const clsRepo2 = freshRepo('cls2', '第二轮分类夹具');
+    setRescueSources(clsRepo2, [{ profile: 'cc-ref', root: path.join(H14, '.claude', 'projects') }], PROFILE_SPECS);
+    const e14 = {};
+    const U14 = (sess, agent, content) => ({ type: 'user', uuid: 'u1', sessionId: sess, agentId: agent, isSidechain: true, cwd: clsRepo2, timestamp: '2026-11-26T06:00:00.000Z', message: { role: 'user', content } });
+    const A14 = (sess, agent, uuid, content, stopReason) => ({ type: 'assistant', uuid, sessionId: sess, agentId: agent, isSidechain: true, cwd: clsRepo2, timestamp: '2026-11-26T06:00:10.000Z', message: { role: 'assistant', model: 'm', stop_reason: stopReason, content } });
+    const R14 = (sess, agent, toolUseId, isErr) => ({ type: 'user', uuid: 'r-' + toolUseId, sessionId: sess, agentId: agent, isSidechain: true, cwd: clsRepo2, timestamp: '2026-11-26T06:00:05.000Z', message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: toolUseId, ...(isErr ? { is_error: true } : {}), content: 'x' }] } });
+
+    // (g) 早期 429 之后恢复并正常收尾 → 不应被判 quota
+    mkA('s-recovered429', 'recovered429', [
+      U14('s-recovered429', 'recovered429', '任务'),
+      { type: 'assistant', uuid: 'e1', sessionId: 's-recovered429', agentId: 'recovered429', isSidechain: true, cwd: clsRepo2, timestamp: '2026-11-26T06:00:02.000Z', apiErrorStatus: 429, isApiErrorMessage: true, error: 'rate_limit', message: { role: 'assistant', stop_reason: 'error', content: [{ type: 'text', text: 'API Error: 429 rate_limit' }] } },
+      A14('s-recovered429', 'recovered429', 'a2', [{ type: 'text', text: '继续完成任务。' }], 'end_turn'),
+    ]);
+    // (h) 工具报错后只输出分析文本就被杀 → 必须可抢救
+    mkA('s-errtext', 'errtext', [
+      U14('s-errtext', 'errtext', '任务'),
+      A14('s-errtext', 'errtext', 'a1', [{ type: 'tool_use', id: 'tu-x', name: 'Bash', input: { command: 'npm test' } }], 'tool_use'),
+      R14('s-errtext', 'errtext', 'tu-x', true),
+      A14('s-errtext', 'errtext', 'a2', [{ type: 'text', text: '测试失败了,我先分析一下原因……' }], 'tool_use'),
+    ]);
+    // (i) 早期 end_turn 之后又开了未配对调用 → 必须判 interrupted
+    mkA('s-stalecomplete', 'stalecomplete', [
+      U14('s-stalecomplete', 'stalecomplete', '任务'),
+      A14('s-stalecomplete', 'stalecomplete', 'a1', [{ type: 'text', text: '第一轮完成。' }], 'end_turn'),
+      A14('s-stalecomplete', 'stalecomplete', 'a2', [{ type: 'tool_use', id: 'tu-late', name: 'Edit', input: { file_path: '/x' } }], 'tool_use'),
+    ]);
+    const scan14 = out(cli(clsRepo2, 'relay_rescue', { action: 'scan' }, e14));
+    const rescuable14 = (scan14.match(/## 可抢救\((\d+)\)([\s\S]*?)(?=\n## )/) || ['', '', ''])[2];
+    ok(!/recovered429/.test(rescuable14), '早期 429 恢复后不再误判 quota(审计 #9 回归)', rescuable14);
+    ok(/recovered429/.test(scan14), 'recovered429 出现在「已正常完成」');
+    ok(/errtext/.test(rescuable14), '工具报错后的分析文本不能洗成正常完成(审计 #10 回归)', rescuable14);
+    ok(/stalecomplete/.test(rescuable14), '陈旧的 end_turn 不能掩盖后续悬空调用(审计 #9 回归)', rescuable14);
+
+    // (j) fieldMap 转发:roleMap / 嵌套 apiErrorStatusPath / message.stop_reason 必须生效
+    {
+      const { parseWithFieldMap } = await import('../src/engines/rescue-profiles.mjs');
+      const fm = {
+        role: 'kind',
+        roleMap: { human: 'user', ai: 'assistant' },
+        contentPath: 'payload',
+        stopReasonPath: 'meta.stop',
+        apiErrorStatusPath: 'err.status',
+        apiErrorCodePath: 'err.code',
+        apiErrorTextPath: 'err.message',
+      };
+      const okRecs = [
+        { kind: 'human', payload: '任务' },
+        { kind: 'ai', payload: [{ type: 'text', text: '完成' }], meta: { stop: 'end_turn' } },
+      ];
+      const parsedOk = parseWithFieldMap(okRecs.map((r) => JSON.stringify(r)).join('\n'), fm);
+      ok(parsedOk.prompt === '任务', 'fieldMap roleMap + contentPath 生效(附录 #4 回归)', JSON.stringify(parsedOk.prompt));
+      ok(parsedOk.toolSignals.explicitCompletion === true, 'fieldMap stopReasonPath 读到嵌套 stop_reason');
+      const errRecs = [
+        { kind: 'human', payload: '任务' },
+        { kind: 'ai', payload: [], err: { status: 429, code: 'rate_limit', message: 'quota exceeded' } },
+      ];
+      const parsedErr = parseWithFieldMap(errRecs.map((r) => JSON.stringify(r)).join('\n'), {
+        ...fm,
+        apiErrorMarker: 'err',
+        apiErrorStatusPath: 'err.status',
+        apiErrorCodePath: 'err.code',
+        apiErrorTextPath: 'err.message',
+      });
+      ok(parsedErr.toolSignals.apiError && parsedErr.toolSignals.apiError.status === 429,
+        'fieldMap 嵌套 apiErrorStatusPath 解析出 429(附录 #4 回归)', JSON.stringify(parsedErr.toolSignals.apiError));
+      ok(parsedErr.toolSignals.apiError && parsedErr.toolSignals.apiError.text.includes('quota'),
+        'fieldMap 嵌套 apiErrorTextPath 取到错误文本');
+    }
   }
 } catch (e) {
   fail += 1;

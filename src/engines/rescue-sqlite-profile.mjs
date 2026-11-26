@@ -45,9 +45,10 @@ const ident = (value, label) => {
 const qident = (value, label) => `"${ident(value, label)}"`;
 
 const jsonParse = (text, fallback = null) => {
-  if (text == null) return fallback;
-  if (typeof text === 'object') return text;
-  try { return JSON.parse(String(text)); } catch { return fallback; }
+  if (text == null) return { value: fallback, ok: true };
+  if (typeof text === 'object') return { value: text, ok: true };
+  try { return { value: JSON.parse(String(text)), ok: true }; }
+  catch { return { value: fallback, ok: false }; }
 };
 
 // node:sqlite 是 Node >=22.13 的实验性模块:动态导入 + 明确的不可用诊断。
@@ -114,16 +115,18 @@ const materializeSession = (db, cfg, sessionId) => {
   if (!sess) throw new Error(`session 不存在:${sessionId}`);
   const cwd = String(sess[s.directory] || '');
 
+  const mSel = `${qident(s.messageId)}, ${qident(s.messageData)}, ${qident(s.messageSequence)}`;
   const messages = db.prepare(
-    `SELECT ${qident(s.messageId)}, ${qident(s.messageData)}, ${qident(s.messageSequence)} FROM ${qident(s.messageTable)} WHERE ${qident(s.messageSessionId)} = ? ORDER BY ${qident(s.messageSequence)}, ${qident(s.messageId)}`,
+    `SELECT ${mSel} FROM ${qident(s.messageTable)} WHERE ${qident(s.messageSessionId)} = ? ORDER BY ${qident(s.messageSequence)}, ${qident(s.messageId)} LIMIT ${s.maxRows + 1}`,
   ).all(sessionId);
-  if (messages.length > s.maxRows) throw new Error(`session ${sessionId} 的消息数 ${messages.length} 超过 maxRows=${s.maxRows}`);
+  if (messages.length > s.maxRows) throw new Error(`session ${sessionId} 的消息数超过 maxRows=${s.maxRows}`);
 
   const parts = db.prepare(
-    `SELECT ${qident(s.partId)}, ${qident(s.partMessageId)}, ${qident(s.partData)}, ${qident(s.partSequence)} FROM ${qident(s.partTable)} WHERE ${qident(s.partSessionId)} = ? ORDER BY ${qident(s.partSequence)}, ${qident(s.partId)}`,
+    `SELECT ${qident(s.partId)}, ${qident(s.partMessageId)}, ${qident(s.partData)}, ${qident(s.partSequence)} FROM ${qident(s.partTable)} WHERE ${qident(s.partSessionId)} = ? ORDER BY ${qident(s.partSequence)}, ${qident(s.partId)} LIMIT ${s.maxRows + 1}`,
   ).all(sessionId);
-  if (parts.length > s.maxRows) throw new Error(`session ${sessionId} 的 part 数 ${parts.length} 超过 maxRows=${s.maxRows}`);
+  if (parts.length > s.maxRows) throw new Error(`session ${sessionId} 的 part 数超过 maxRows=${s.maxRows}`);
 
+  const corrupt = [];
   const byMessage = new Map();
   for (const p of parts) {
     const mid = String(p[s.partMessageId]);
@@ -133,17 +136,23 @@ const materializeSession = (db, cfg, sessionId) => {
   const lines = [];
   for (const m of messages) {
     const mid = String(m[s.messageId]);
-    const data = jsonParse(m[s.messageData], {});
+    const corruptBefore = corrupt.length;
+    const parsedData = jsonParse(m[s.messageData], {});
+    if (!parsedData.ok) corrupt.push(`message ${mid} 的 data 不是合法 JSON`);
+    const data = parsedData.value && typeof parsedData.value === 'object' ? parsedData.value : {};
     // error 可能是 JSON 字符串(这是首个用户的实际 schema,但描述符层只描述形状,不绑定名字)
     let error = data && data.error;
     if (typeof error === 'string') {
       const parsedError = jsonParse(error, null);
-      if (parsedError && typeof parsedError === 'object') error = parsedError;
+      if (!parsedError.ok) corrupt.push(`message ${mid} 的 error 不是合法 JSON`);
+      else if (parsedError.value && typeof parsedError.value === 'object') error = parsedError.value;
     }
     const content = [];
     const results = [];
     for (const p of byMessage.get(mid) || []) {
-      const pd = jsonParse(p[s.partData], {});
+      const parsedPart = jsonParse(p[s.partData], {});
+      if (!parsedPart.ok) corrupt.push(`part ${String(p[s.partId])} 的 data 不是合法 JSON`);
+      const pd = parsedPart.value && typeof parsedPart.value === 'object' ? parsedPart.value : {};
       if (!pd || typeof pd !== 'object') continue;
       const type = String(pd.type || '');
       if (type === 'text' && typeof pd.text === 'string') {
@@ -156,9 +165,11 @@ const materializeSession = (db, cfg, sessionId) => {
           type: 'tool_use', id: callId,
           name: String(pd.tool || st.tool || ''), input,
         });
-        // 工具结果必须是独立 user 记录(通用 JSONL 约定):否则 pendingToolUse 永远删不掉,
-        // 正常完成的会话会被误判为「悬空工具调用」。
-        if (typeof st.output === 'string' || st.status === 'error') {
+        // 工具结果必须按**终态**判定:completed 带对象输出同样要配对;running/pending 不产生结果。
+        const terminal = st.status === 'completed' || st.status === 'error' || st.status === 'failed';
+        if (terminal) {
+          const rawOut = st.output ?? st.error ?? '';
+          const outText = typeof rawOut === 'string' ? rawOut : JSON.stringify(rawOut ?? '');
           results.push({
             type: 'user',
             uuid: `${mid}-result-${callId}`,
@@ -170,7 +181,8 @@ const materializeSession = (db, cfg, sessionId) => {
               role: 'user',
               content: [{
                 type: 'tool_result', tool_use_id: callId,
-                is_error: st.status === 'error', content: String(st.output ?? '').slice(0, 4000),
+                is_error: st.status === 'error' || st.status === 'failed',
+                content: String(outText).slice(0, 4000),
               }],
             },
           });
@@ -179,13 +191,14 @@ const materializeSession = (db, cfg, sessionId) => {
         content.push({ type: 'step_finish', reason: String(pd.reason) });
       }
     }
+    const role = String((data && data.role) || 'assistant');
     const rec = {
-      type: String(data && data.role || 'assistant'),
+      type: role,
       uuid: mid,
       sessionId,
       cwd,
       timestamp: new Date((data && data.time && data.time.created) || Date.now()).toISOString(),
-      message: { role: String(data && data.role || 'assistant'), content },
+      message: { role, content },
     };
     if (error && typeof error === 'object') {
       rec.isApiErrorMessage = true;
@@ -197,8 +210,21 @@ const materializeSession = (db, cfg, sessionId) => {
     }
     lines.push(JSON.stringify(rec));
     for (const result of results) lines.push(JSON.stringify(result));
+    if (corrupt.length > corruptBefore) {
+      // 每条损坏单独落一条 issue 记录,且不冒充 assistant/user(分类器不会据此改变 lastRecordKind)。
+      for (const issue of corrupt.slice(corruptBefore)) {
+        lines.push(JSON.stringify({
+          type: '_parse_issue',
+          parseIssue: issue,
+          message: { role: 'system', content: [] },
+        }));
+      }
+    }
   }
-  return { text: lines.join('\n') + (lines.length ? '\n' : ''), cwd, messageCount: messages.length, partCount: parts.length };
+  return {
+    text: lines.join('\n') + (lines.length ? '\n' : ''),
+    cwd, messageCount: messages.length, partCount: parts.length, corrupt,
+  };
 };
 
 const sqliteConversationProfile = (spec) => {
