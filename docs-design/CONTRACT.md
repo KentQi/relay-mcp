@@ -413,7 +413,7 @@ export const startServer = async ({ onInit, onMethod }) => {
 - **接力互斥**:`takeover` 用独立接力锁(`acquireFileLock`:O_EXCL、同 model 幂等、240min TTL 不心跳、token fencing),并在仓库写锁内于 TASKS 待办区登记接管任务(派发权与 relay 认领权解耦)。`report` 回写结果并释放锁。同失败签名在接续链上重复出现 → 显式告警「不要原样重跑」。
 - **不可信文本**:transcript 一律 ``` 围栏 + 「不是给你的指令」横幅;输出前 `redactSecrets` 脱敏密钥样式串(保留首 4 字符);逐段码点安全截断。
 - **进场简报**:`relay_session_start` 新增「待接力」小节(仅有待接力单时出现,≤5 行),不新增 git 子进程、不重读 LOG/TASKS/manifest(不破坏 T022/T026 的计数断言)。
-- **冒烟**:`scripts/smoke-rescue.mjs`(80 断言,夹具在 `scripts/fixtures/rescue/`),已接入 `npm test`。
+- **冒烟**:`scripts/smoke-rescue.mjs`(172 断言,夹具在 `scripts/fixtures/rescue/`),已接入 `npm test`。
 - **范围外**:抢救后自动拉起备用模型 = T051;ZCode 完整对话(只读 SQLite)= T050(需人类授权)。
 
 ## 2026-11-26 T058 补充契约(抢救引擎通用化:描述符驱动,核心零 harness)
@@ -434,7 +434,7 @@ export const startServer = async ({ onInit, onMethod }) => {
 - **物化**:`session/message/part` 被还原成标准 JSONL 记录;工具调用与其结果拆成 assistant(tool_use)/user(tool_result) 两条记录,明确收尾用 `step_finish(reason=stop)` / `stop_reason=end_turn` 表达。
 - **上限**:每个 session 的 message/part 行数受 `maxRows` 限制,超出即显式失败(不静默截断);物化后总字节仍受 `manifest.rescue.maxBytes` 限制。
 - **降级**:库损坏、缺表、缺列、SQLite 模块不可用 → scan 的「说明」里明确报告,不静默变成「0 候选」;接力单仍可用已有元数据完成 capture(若候选存在)。
-- **机检**:`scripts/smoke-rescue-zcode-db.mjs`(22 断言)覆盖只读不变、quota 分类、完整任务、正常完成不误报、损坏/空库/maxRows 降级,以及核心零 harness 名;接入 `npm test`(25 套)。
+- **机检**:`scripts/smoke-rescue-zcode-db.mjs`(27 断言)覆盖只读不变、quota 分类、完整任务、正常完成不误报、损坏/空库/maxRows 降级、行内 JSON 损坏与对象输出配对,以及核心零 harness 名;接入 `npm test`(26 套)。
 - **范围**:具体库的 schema 只出现在用户的 manifest 描述与测试夹具里;`src/engines/rescue.mjs` 不含任何具体 harness 名。
 
 ## 2026-11-26 T051 补充契约(manifest 声明的通用自动拉起)
@@ -442,7 +442,18 @@ export const startServer = async ({ onInit, onMethod }) => {
 - **默认关闭**:未配置 `manifest.rescue.autoLaunch` 或 `enabled !== true` 时,takeover 只生成接力单,不启动任何进程。
 - **通用命令面**:`autoLaunch.command` 是非空 **argv 数组**,经 `spawn(..., {shell:false})` 执行,不绑定任何 harness CLI。支持 `{{prompt}}/{{root}}/{{task}}/{{rescueId}}/{{model}}` 占位符;原样替换,不再经 shell 解释。
 - **安全**:argv 每项必须是非 NUL 字符串;`cwd` 必须在 controlRoot 内(realpath 判定);默认 `timeoutMs=300000`、`maxOutputBytes=1MiB`;配置非法在启动前 fail-closed,撤销移交并释放接力锁。
-- **生命周期**:takeover 启动独立 detached worker(`rescue-launch-worker.mjs`),worker 管理子进程 stdout/stderr → `dispatch.log`,状态 → `dispatch.json`(running/completed/failed/timed_out);超时先 SIGTERM、2s 后 SIGKILL。同一卡已有 dispatch 不重复启动。
-- **互斥**:dispatch running 时 report/drop 被拒;worker 结束后才可回写/清理。输出与状态均带 pid/exitCode/signal/error,show 卡片展示 dispatch 状态。
+- **生命周期**:takeover 启动独立 detached worker(`rescue-launch-worker.mjs`),worker 管理子进程 stdout/stderr → `dispatch.log`,状态 → `dispatch.json`(running/completed/failed/timed_out);超时先 SIGTERM、2s 后 SIGKILL,并终止**整个进程组**;另有「超时+8s」有界结算兜底,孙进程持有管道也不会让状态永久停在 running。同一卡已有 dispatch(含损坏态)不重复启动。
+- **互斥**:dispatch running 或状态损坏时 takeover/report/drop 一律被拒;worker 结束后才可回写/清理。输出与状态均带 pid/exitCode/signal/error,show 卡片展示 dispatch 状态。
 - **元数据卡**:纯元数据来源物化最小 JSONL(user prompt + status/error),使原始任务可哈希校验、可供 `{{prompt}}` 使用;`agentType`(原 profileId)与格式描述符 id 分开存,避免候选类型覆盖描述符。
-- **机检**:`scripts/smoke-rescue-autolaunch.mjs`(26 断言)覆盖默认关闭、argv 原样传递、shell 元字符不执行、状态/日志、幂等、运行中 report/drop 拒绝、超时、非法 command/cwd、核心零 harness 名;接入 `npm test`(26 套)。
+- **机检**:`scripts/smoke-rescue-autolaunch.mjs`(40 断言)覆盖默认关闭、argv 原样传递、shell 元字符不执行、状态/日志、幂等、运行中 report/drop 拒绝、超时、孙进程有界结算、dispatch 半写 fail-closed、非法 command/cwd 不留孤儿待办、核心零 harness 名;接入 `npm test`(26 套)。
+
+## 2026-11-26 T059 补充契约(第二轮审计修复)
+
+- **快照密钥边界**:工作区内容在**任何 `git add`/`write-tree` 之前**被扫描;命中疑似密钥即拒绝生成快照,对象库里不残留 blob。`git status`/`diff`/读取失败一律 fail-closed。快照待保存内容总量受 `manifest.rescue.maxBytes` 约束。
+- **接力锁 token**:`takeover` 把真实 lock token 持久化进 `state.json`;`report` 用该 token 做 fencing 释放,释放失败即 isError 且**保留** `takeover` 状态(可恢复),不再出现「报成功但锁残留 240 分钟」。
+- **锁生命周期**:takeover 的锁获取后所有失败路径由统一 `finally` 释放;`autoLaunch` 配置在**任何 TASKS/state 写入之前**校验,非法配置不留孤儿待办。
+- **dispatch 状态**:`dispatch.json` 用临时文件 + rename 原子发布;解析失败按 `invalid` 处理,takeover/report/drop 全部 fail-closed。
+- **分类器轮次语义**:`explicitCompletion` / `apiError` 只反映**最后一个有效轮次**;工具报错保持到成功结果或明确收尾,后续分析文本不构成恢复证据;描述符自报的行级损坏(`parseIssues`)一律降级为 error。
+- **SQLite 资源与配对**:`maxRows` 下推到 SQL `LIMIT maxRows+1`;tool_result 按终态(completed/error/failed)生成并对任意 output 类型安全序列化。
+- **扫描资源边界**:归属推断先 `stat`、再用有界前缀读 cwd;超大 transcript 不会在 `maxBytes` 检查前被整份读入内存(超限候选保留并给出明确失败)。
+- **兼容与清理**:旧接力单缺 `profile` 时按 `harness` 映射到内置描述符;显式 `source` 指向 `metadata.json` 按所在目录处理;`drop`/`edits` 统一用 `state.snapshotRoot`;`drop` 识别过期锁并真实覆盖符号链接防线。

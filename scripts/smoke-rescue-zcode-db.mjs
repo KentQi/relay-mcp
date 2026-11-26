@@ -199,7 +199,58 @@ try {
     ok(/maxRows|上限|过多|超限/.test(r), '超过 maxRows 显式失败(不静默截断)', r.slice(0, 400));
   }
 
-  console.log('\n== 5. 架构:核心仍零 harness 专有名 ==');
+  console.log('\n== 5. 第二轮审计:损坏行、对象输出、列上限 ==');
+  {
+    // (a) 行内 JSON 损坏不能被吞成「正常完成」
+    const repo = fresh('corruptrow');
+    const dbPath = path.join(mkTmp('db'), 'corruptrow.sqlite');
+    buildFor(repo, dbPath, { failed: true });
+    {
+      const db = new DatabaseSync(dbPath);
+      db.prepare('UPDATE message SET data = ? WHERE id = ?').run('{not-json', 'a2');
+      db.close();
+    }
+    setSources(repo, dbPath);
+    const outCorrupt = out(cli(repo, 'relay_rescue', { action: 'scan' }, {}));
+    const rescuableCorrupt = (outCorrupt.match(/## 可抢救\((\d+)\)([\s\S]*?)(?=\n## )/) || ['', '', ''])[2];
+    ok(/sess_failed_001/.test(rescuableCorrupt), '行内 JSON 损坏的会话仍列为可抢救(审计 #11 回归)', outCorrupt.slice(0, 600));
+    ok(/损坏|不可完整判定|无法解析/.test(outCorrupt), '损坏被显式报告(不静默当空对象)', outCorrupt.slice(0, 600));
+  }
+  {
+    // (b) completed + 对象输出必须生成 tool_result(不能留假悬空调用)
+    const repo = fresh('objout');
+    const dbPath = path.join(mkTmp('db'), 'objout.sqlite');
+    mkdirSync(path.dirname(dbPath), { recursive: true });
+    const db = new DatabaseSync(dbPath);
+    db.exec(`
+      CREATE TABLE session (id TEXT PRIMARY KEY, directory TEXT, parent_id TEXT, title TEXT);
+      CREATE TABLE message (id TEXT PRIMARY KEY, session_id TEXT, data TEXT, sequence INTEGER);
+      CREATE TABLE part (id TEXT PRIMARY KEY, session_id TEXT, message_id TEXT, data TEXT, sequence INTEGER);
+    `);
+    const sid = 'sess_obj_out';
+    db.prepare('INSERT INTO session VALUES (?, ?, ?, ?)').run(sid, repo, null, 'object output');
+    db.prepare('INSERT INTO message VALUES (?, ?, ?, ?)').run('m1', sid, JSON.stringify({ role: 'user', time: { created: Date.now() } }), 1);
+    db.prepare('INSERT INTO part VALUES (?, ?, ?, ?, ?)').run('q1', sid, 'm1', JSON.stringify({ type: 'text', text: '读文件' }), 1);
+    db.prepare('INSERT INTO message VALUES (?, ?, ?, ?)').run('m2', sid, JSON.stringify({ role: 'assistant', time: { created: Date.now() } }), 2);
+    db.prepare('INSERT INTO part VALUES (?, ?, ?, ?, ?)').run('q2', sid, 'm2', JSON.stringify({
+      type: 'tool', callID: 'tu-obj', tool: 'Read',
+      state: { status: 'completed', input: { filePath: repo + '/f.txt' }, output: { lines: 3, text: 'abc' } },
+    }), 2);
+    db.prepare('INSERT INTO message VALUES (?, ?, ?, ?)').run('m3', sid, JSON.stringify({ role: 'assistant', time: { created: Date.now() } }), 3);
+    db.prepare('INSERT INTO part VALUES (?, ?, ?, ?, ?)').run('q3', sid, 'm3', JSON.stringify({ type: 'step-finish', reason: 'stop' }), 3);
+    db.close();
+    setSources(repo, dbPath);
+    const outObj = out(cli(repo, 'relay_rescue', { action: 'scan' }, {}));
+    const rescuableObj = (outObj.match(/## 可抢救\((\d+)\)([\s\S]*?)(?=\n## )/) || ['', '', ''])[2];
+    ok(!/sess_obj_out/.test(rescuableObj), 'completed + 对象输出被正确配对,不误判悬空(审计 #12 回归)', outObj.slice(0, 600));
+    ok(/sess_obj_out/.test(outObj), '该会话仍在「已正常完成」中可见');
+  }
+  {
+    const src = readFileSync(path.join(RELAY, 'src', 'engines', 'rescue-sqlite-profile.mjs'), 'utf8');
+    ok(/LIMIT \$\{s\.maxRows \+ 1\}/.test(src), 'SQL 查询带 LIMIT maxRows+1(审计 #13 回归)');
+  }
+
+  console.log('\n== 6. 架构:核心仍零 harness 专有名 ==');
   {
     const core = readFileSync(path.join(RELAY, 'src', 'engines', 'rescue.mjs'), 'utf8');
     const hits = core.split('\n').filter((l) => /zcode|claude|codex|gemini|cursor|opencode|kimi|deepseek|glm/i.test(l));

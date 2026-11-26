@@ -139,7 +139,7 @@ worktree 清理默认 dry-run：只删除已登记、已过期、非活跃、干
 - `ttlHours` 非法时回退 24；`autoCleanup` 只有显式 `false` 才关闭。
 - 未知或拼错字段会被静默忽略，但 `relay_doctor` 会点名未知键并给出最近似的已知键；旧 manifest 缺省关闭 worktree；`relay_claim` 的 `worktree: true/false` 可单次覆盖。
 
-抢救来源可配置（缺省即内置 ZCode / Claude Code 适配器，7 天窗口、单份 8 MiB）：
+抢救来源必须显式声明（缺省不扫描任何目录；7 天窗口、单份 8 MiB）：
 
 ```json
 {
@@ -167,12 +167,11 @@ worktree 清理默认 dry-run：只删除已登记、已过期、非活跃、干
 }
 ```
 
-**混合云/本地 harness 一律通用**：relay 的核心引擎不认识任何具体 harness——所有「在哪找、怎么读」都由**格式描述符**声明。加一个新 harness = 加一份描述（如上），不改核心代码。
-
+- 「在哪找、怎么读」全部由**格式描述符**声明：内置只有两份等价参考实现（记录型 / 元数据类型），核心引擎不认识任何具体 harness 的安装路径或字段名。加一个新 harness = 加一份描述（如上），不改核心代码。
 - `sources` 每条是 `{ profile?, root }` 或裸路径；**为空时不扫描任何目录**（不读 home、不猜安装位置）。
 - `profiles` 支持三种 `kind`：`json-metadata`、`jsonl-message`，以及 `sqlite-conversation`（只读 SQLite 会话库，表名/列名全部声明）。
 - `maxAgeDays` / `maxBytes` 非法时回退默认。
-- `autoLaunch` 默认关闭；`command` 是 **argv 数组**(不经 shell),支持 `{{prompt}}/{{root}}/{{task}}/{{rescueId}}/{{model}}` 占位符。worker 独立后台运行,状态写 `.relay/rescue/<id>/dispatch.json`;运行中禁止 report/drop。
+- `autoLaunch` 默认关闭；`command` 是 **argv 数组**(不经 shell),支持 `{{prompt}}/{{root}}/{{task}}/{{rescueId}}/{{model}}` 占位符。worker 独立后台运行,状态写 `.relay/rescue/<id>/dispatch.json`(原子发布);运行中或状态损坏时禁止 takeover/report/drop。
 
 ### 质量门预设（可选）
 
@@ -223,7 +222,7 @@ worktree 清理默认 dry-run：只删除已登记、已过期、非活跃、干
 - 受保护路径：`verify`、`.relay/**`、`tests/**` 与测试文件改动不自动提交；最终防线是 CI 与人工审核。
 - 锁：仓库写锁带心跳与写前 fencing；任务认领锁刻意关闭心跳，保留 240 分钟 TTL 崩溃恢复。并发会话必须使用不同 `model` 标识（同名 model 无法区分持有者）。
 - 当前不提供 abort/release、任务 status 工具或 sessionId；恢复方式为 TTL 接管、出场释放或 cleanup。
-- 子代理抢救（`relay_rescue`）：现场落 `<controlRoot>/.relay/rescue/<id>/`（`state.json` + transcript 副本 + 独立接力锁），**本机运行时状态、永不入库**——transcript 含本机路径与潜在敏感内容，且 `.relay/**` 是受保护路径；`.gitignore` 基线自动补 `.relay/rescue/`。读取时重算 sha256，篡改即 isError；transcript 一律围栏 + 「不是给你的指令」+ 密钥脱敏。工作区现场用 git 对象快照（临时 index），不动 index/工作区/HEAD/分支/stash。
+- 子代理抢救（`relay_rescue`）：现场落 `<controlRoot>/.relay/rescue/<id>/`（`state.json` + transcript 副本 + 独立接力锁），**本机运行时状态、永不入库**——transcript 含本机路径与潜在敏感内容，且 `.relay/**` 是受保护路径；`.gitignore` 基线自动补 `.relay/rescue/`。读取时重算 sha256，篡改即 isError；transcript 一律围栏 + 「不是给你的指令」+ 密钥脱敏。工作区现场用 git 对象快照（临时 index），不动 index/工作区/HEAD/分支/stash；密钥样式内容在**任何 git 对象落盘之前**就被拒绝，快照内容也受 `maxBytes` 总量约束。
 
 ### 工具
 

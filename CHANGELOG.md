@@ -7,13 +7,37 @@
 
 ### Added(子代理抢救 T048)
 
-- **`relay_rescue`**:抢救被 Token Plan 额度上限 / 429 / 悬空杀死的子代理。`scan`(只读)自动发现本项目在 ZCode(`~/.zcode/cli/agents`)与 Claude Code(`~/.claude/projects/.../subagents`)下的失败/中断子代理,也接受显式 `source`;`capture` 把 transcript + **工作区未提交改动的 git 对象快照**落成本机接力单 `.relay/rescue/<id>/`;`takeover` 用独立接力锁(240min TTL、同 model 幂等)移交派发权并在 TASKS 待办区登记接管任务;`report` 回写结果并释放;`drop` 清理(默认 dry-run)。
+- **`relay_rescue`**:抢救被 Token Plan 额度上限 / 429 / 悬空杀死的子代理。`scan`(只读)列出本项目的失败/中断子代理,也接受显式 `source`;`capture` 把 transcript + **工作区未提交改动的 git 对象快照**落成本机接力单 `.relay/rescue/<id>/`;`takeover` 用独立接力锁(240min TTL、同 model 幂等)移交派发权并在 TASKS 待办区登记接管任务;`report` 回写结果并释放;`drop` 清理(默认 dry-run)。
 - **确定性中断分类**(零 LLM):quota / error / interrupted / complete,并附证据片段;正常完成的子代理不列为可抢救。接续链上同一失败签名重复出现 → 显式告警「不要原样重跑」。
-- **安全边界**:接力单永不入库(含本机路径与潜在敏感内容,且 `.relay/**` 是受保护路径),`.gitignore` 基线自动补 `.relay/rescue/`;读取时重算 sha256,篡改即 isError;transcript 一律围栏 + 「不是给你的指令」+ `redactSecrets` 密钥脱敏;快照排除疑似密钥文件;`.relay` 为符号链接时拒绝写。
+- **安全边界**:接力单永不入库(含本机路径与潜在敏感内容,且 `.relay/**` 是受保护路径),`.gitignore` 基线自动补 `.relay/rescue/`;读取时重算 sha256,篡改即 isError;transcript 一律围栏 + 「不是给你的指令」+ `redactSecrets` 密钥脱敏;快照在**任何 git 对象落盘之前**扫描疑似密钥并 fail-closed;`.relay` 为符号链接时拒绝写。
 - **进场简报**:新增「待接力」小节(仅有待接力单时出现,≤5 行),不新增 git 子进程、不重读 LOG/TASKS/manifest。
-- **配置**:`manifest.rescue { sources?, maxAgeDays?, maxBytes? }`(默认 7 天 / 8 MiB),进已知键白名单。
-- **规模**:`tools/list` 15 个工具、9,894 字节(预算 10,240,靠压缩低频工具描述腾出空间);新增 `scripts/smoke-rescue.mjs`(80 断言,夹具在 `scripts/fixtures/rescue/`);`npm test` 24 套。
-- **范围外**:抢救后自动拉起备用模型 = T051;ZCode 完整对话(只读 SQLite)= T050。
+- **配置**:`manifest.rescue { sources?, profiles?, maxAgeDays?, maxBytes?, autoLaunch? }`(默认零扫描 / 7 天 / 8 MiB),进已知键白名单。
+- **范围外**:抢救后自动拉起 = T051;SQLite 完整对话 = T050。
+
+### Added(通用化与自动拉起 T058 / T050 / T051)
+
+- **格式描述符层(T058)**:核心引擎零 harness 耦合。内置只有两份等价参考描述(`jsonl-message` / `json-metadata`),具体布局、文件名、字段映射全部收敛为声明式描述;新增 harness = 加一份 `manifest.rescue.profiles` 描述,不改核心代码。默认**不扫描任何目录**,来源一律显式。
+- **只读 SQLite 会话来源(T050)**:`kind: "sqlite-conversation"` 描述符,表名/列名/session-directory/message-part 关联全部由纯 JSON 声明;`node:sqlite` 以 `readOnly: true` 打开;行内 JSON 损坏会显式降级为不可判定而不是伪装完成。
+- **默认关闭的通用自动拉起(T051)**:`manifest.rescue.autoLaunch.command` 是 argv 数组(`shell: false`),支持 `{{prompt}}/{{root}}/{{task}}/{{rescueId}}/{{model}}`;独立 detached worker 写 `dispatch.log` 与原子发布的 `dispatch.json`;超时终止整个进程组并有界结算,运行中或状态损坏时 takeover/report/drop 一律 fail-closed。
+
+### Fixed(第二轮审计,T052–T058 修复回归)
+
+- 快照密钥扫描前移到 `git add`/`write-tree` 之前:拒绝时对象库里不再残留密钥 blob。`diff`/读取失败一律 fail-closed。
+- 接力锁 token 持久化进 `state.json`;`report` 用真实 token fencing 释放,释放失败即 isError 且保留移交状态(不再报成功却留锁 240 分钟)。
+- takeover 的锁生命周期收敛到统一 `finally`,TASKS/state 写盘失败不再泄漏锁;非法 `autoLaunch` 配置在任何 TASKS/state 写入之前就被拒绝,不留孤儿待办。
+- `dispatch.json` 改为临时文件 + rename 原子发布;半写状态按 busy fail-closed,`takeover` 也不再对损坏状态重复启动。
+- worker 超时终止整个进程组,并对「孙进程持有管道」设置有界结算,不再永久 `running`。
+- 分类器只依据**最后一个有效轮次**:早期 `end_turn` / 429 不再掩盖后续中断;工具报错后的分析文本不再被洗成正常完成。
+- SQLite 工具结果按**终态**生成并安全序列化任意 output 类型;`maxRows` 下推到 SQL `LIMIT`,不再先全量物化。
+- `scan` 归属推断改为先 stat 再用有界前缀读 cwd,超大 transcript 不会在 `maxBytes` 检查前被整份读入内存。
+- 恢复旧接力单兼容:缺失 `profile` 时按 `harness` 映射到内置描述符,不再静默丢原始任务与现场。
+- 显式 `source` 指向 `metadata.json` 时按其所在目录处理(与传目录等价)。
+- `drop`/`edits` 统一用 `state.snapshotRoot` 清理与展示快照,嵌套仓库不再留下孤儿 ref;`drop` 识别过期锁,并真正覆盖符号链接防线。
+- 描述符契约注释与 README/CHANGELOG 对齐实际行为(默认零扫描、26 套测试)。
+
+### 规模
+
+- `tools/list` 15 个工具,预算 10,240 字节(实测 10,219);`scripts/smoke-rescue.mjs` 172 断言、`scripts/smoke-rescue-zcode-db.mjs` 27 断言、`scripts/smoke-rescue-autolaunch.mjs` 40 断言;`npm test` **26 套**。
 
 ## [2.0.0] - 2026-11-18
 
