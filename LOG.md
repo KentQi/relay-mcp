@@ -1,8 +1,16 @@
 # 会话日志(最新在上)
 
 ## 2026-11-26 16:49 | model=hungerg-free | task=T062 完成
-- 摘要: 验收诊断2
+- 摘要: T062 修复 done_tasks[] 三条 fail-open 缺陷,并收掉独立复审(T059 修复)报告的遗留问题。(1) done_tasks 非空而 done_task 缺席时原本 TASKS 不盖戳/LOG 只写 task=无/认领锁不释放,却仍报「绿闸:通过」→ 改为 isError 拒收;(2) 额外任务号在 TASKS 中不存在会写出幽灵完成条目(R9 只比对最新条目看不见,R7 反计一次完成)→ 写盘前校验存在性并拒收;(3) 提交消息只含主任务号,额外任务条目顶到 LOG 首位时 R10 的 git log --grep 反查失败 → 逐任务带「T### 完成」。复审回收:旧卡 harness 兼容此前是假绿(测试伪造了旧版从不写的 harness='jsonl-agent';真实值只有 zcode/claude/explicit,映射移到描述符层 legacyProfileFor);快照密钥扫描的文件名旁路改用 porcelain -z;dispatch 占位永久卡死改为失败回写终态 + 未知 status fail-closed + 无 pid 超 120s 宽限;report 改为先写 state 再释放锁并支持回滚;worker 同步 spawn 失败也删除含 prompt 的临时配置。过程中自己引入并修掉两个回归:doneTaskIds 前移后引用顺序没跟上(所有 session_end 抛 ReferenceError);T062 原验收 test:scripts/smoke.mjs 在 node --test 下自指干扰(基线即有 2 条 H-A 假红),改用 npm test。npm test 26 套 1089 断言全绿,verify PASS 12/WARN 0/ERROR 0。
+- 注: 本条目首版摘要误写为「验收诊断2」——当时把 relay_session_end 当成只读的验收检查来复跑,但它本身就是出场动作,已真实出场。这是操作失误,不是工具缺陷;内容在此更正,历史提交不改写。
 - 事实(v2): mode=single | 文件 7 | ± +305/-86 | base=- | sha=- | branch=main || 验收: 通过 | verify: PASS 12·WARN 0·ERROR 0 | 耗时: 145s
+- 负结果: relay_session_end 不是只读的验收检查:它就是出场动作,复跑会真实提交并盖戳;诊断验收门应看 isError 与输出,不要用同一条命令试跑
+- 负结果: 验收行不能写 test:scripts/smoke.mjs:该套件测的正是「验收门拒绝伪装/逃逸测试文件」,在 node --test 下自指干扰,基线即有 2 条 H-A 假红(git stash 复现确认);应写 npm test
+- 负结果: 旧卡兼容必须先查真实历史值:把 harness 映射写进核心既违反零 harness 名(被 smoke 6f 抓住),又因测试伪造旧版从不写的值而假绿;真实值只有 zcode/claude/explicit
+- 负结果: porcelain 行不能 split(' -> ') 手工解析:含引号/反斜杠/换行/字面箭头的文件名会被当「已删除」跳过,而 git add -A 仍暂存其内容;必须用 -z
+- 负结果: 先发布 running 占位就必须有收尾人:占位后任何抛错会让 dispatch.json 永久停在 running;未知 status 也会被当成「没有任务」
+- 负结果: done_tasks[] 的三条 fail-open 同一个错误:新增入口只接了主路径,缺 done_task 时工具报「绿闸通过」却一字节不记
+- 负结果: 断言必须能失败:report 半写用例的卡从未 takeover,在持有者校验就返回,根本走不到 dispatchBusy 守卫
 
 ## 2026-11-26 14:01 | model=hungerg-free | task=T061 完成
 - 摘要: T061 收尾第二轮审计遗留的两件事。(1) autoLaunch prompt 脱敏:注入 argv 的每个占位符变量(含 transcript 派生的 prompt)在替换前统一过 redactSecrets,并显式报告脱敏处数;argv 会出现在 ps/进程审计里,比 .relay/rescue/ 更难清理。补 9 条断言:含密钥 prompt 时 argv/dispatch.json/dispatch.log 均无原文、非密钥部分保留、脱敏可见。原 Finding #2 的 argv 半句至此真正闭环(dispatch.json 从不存 prompt 这半句本就成立,报告已校正)。(2) D8 证据缺口:核实 completionIdsOf 只读 LOG 标题行的 task= 字段,我在附录 B 里『附录第 5 条不成立』的更正是错的,已撤回并新增附录 C 记录根因与处置。根因是 relay_session_end 只接受单个 done_task,一次交付多任务无法留逐任务证据。按用户决定实现 done_tasks[]:每个任务各得独立 LOG 完成条目、自己的 [x]、自己的认领锁释放与各自验收门;仅单根(受管 worktree 拒绝,成对证据无法凑齐)。探针实测 D8 从 WARN 变 OK。历史 T055–T057 缺口按 DECISIONS 决定保留可见,不回填——手写完成条目与引擎条目不可区分,正是 R10/D8 要防的假绿。同步 CONTRACT/README/skills/AGENTS 模板/DECISIONS/CHANGELOG,relay_sync 重投影。修复过程中自己的改动引入一个回归:LOG 幂等去重改成无条件按 (model,task) 全局比对,导致维护出场被误判重复、LOG 不写、提交不发生(smoke-patches P6 挂掉);已改为仅在任务实际已完成时去重。最终 npm test 26 套 1074 断言全绿,verify 双根 PASS 10/WARN 0/ERROR 0,tools/list 10218/10240。
