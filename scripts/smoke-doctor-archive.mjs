@@ -52,6 +52,7 @@ const addArchive = (dir, name, entryText) => {
 };
 const pointer = (dir, rel) => edit(dir, 'LOG.md', (t) => t + `\n<!-- relay:log-archive: ${rel} -->\n`);
 const doctor = (dir) => out(cli('relay_doctor', { root: dir }));
+const verify = (dir) => out(cli('relay_verify', { root: dir }));
 
 try {
   console.log('== 1. 归档完成条目可证明 TASKS [x](不再永久 WARN)==');
@@ -102,6 +103,7 @@ try {
     addArchive(dir, 'LOG-2025-old.md', '## 2025-12-01 10:00 | model=claude | task=T003 完成');
     const d8 = row(doctor(dir), 'D8');
     ok(/D8 .*\|\s*OK/.test(d8) && /归档/.test(d8), '孤立归档文件仍被纳入 D8 证据面', d8);
+    ok(/\| R9 \| PASS/.test(row(verify(dir), 'R9')), 'R9 同样保留孤立 LOG 归档的有效证据');
   }
 
   console.log('\n== 6. 非 LOG 归档不属协议证据面(文档版本隔离)==');
@@ -111,6 +113,8 @@ try {
     addArchive(dir, 'ARCHIVED-2025-old.md', '## 2025-12-01 10:00 | model=claude | task=T004 完成');
     const d8 = row(doctor(dir), 'D8');
     ok(/D8 .*\|\s*WARN/.test(d8) && /T004/.test(d8), '仅非 LOG 归档 → D8 WARN(不把文档版本当证据)', d8);
+    const r9 = row(verify(dir), 'R9');
+    ok(/\| R9 \| ERROR/.test(r9) && /T004/.test(r9), 'R9 同样拒绝非 LOG 文档作为完成证据', r9);
   }
 } catch (e) {
   fail += 1;

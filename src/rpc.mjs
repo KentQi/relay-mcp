@@ -1,4 +1,4 @@
-// relay-mcp — src/rpc.mjs (W2)
+// relay-mcp — JSON-RPC stdio 层
 // MCP stdio 子集:换行分隔 JSON-RPC 2.0。
 // 铁律:stdout 只输出协议响应(每响应一行 JSON),任何日志走 stderr。
 import { createInterface } from 'node:readline';
@@ -14,12 +14,6 @@ const KNOWN_METHODS = new Set([
   'prompts/list',
   'prompts/get',
 ]);
-
-const DEFAULT_INIT_RESULT = () => ({
-  protocolVersion: '2025-06-18',
-  capabilities: { tools: {}, resources: {}, prompts: {} },
-  serverInfo: { name: 'relay-mcp', version: '1.0.0' },
-});
 
 /**
  * 启动 stdio JSON-RPC 循环。stdin 关闭时 resolve。
@@ -75,7 +69,10 @@ export const startServer = async ({ onInit, onMethod } = {}) => {
     try {
       let result;
       if (method === 'initialize') {
-        result = onInit ? await onInit(params) : DEFAULT_INIT_RESULT();
+        if (!onInit) {
+          throw { code: -32603, message: 'initialize handler is not configured' };
+        }
+        result = await onInit(params);
       } else if (method === 'ping') {
         result = {};
       } else {

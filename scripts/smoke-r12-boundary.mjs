@@ -6,6 +6,7 @@ import { mkdtempSync, rmSync, readFileSync, writeFileSync, mkdirSync, readdirSyn
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { R12_MAX_DONE_ENTRIES, R12_MAX_LOG_LINES } from '../src/engines/verify.mjs';
 
 const RELAY = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const CLI = path.join(RELAY, 'src', 'cli.mjs');
@@ -87,15 +88,18 @@ try {
   const contract = readFileSync(path.join(RELAY, 'docs-design', 'CONTRACT.md'), 'utf8');
   const rules = cli('relay_rules', {});
   const tpl = readFileSync(path.join(RELAY, 'templates', 'AGENTS.md.tpl'), 'utf8');
+  const agents = readFileSync(path.join(RELAY, 'AGENTS.md'), 'utf8');
   const readme = readFileSync(path.join(RELAY, 'README.md'), 'utf8');
   const r12Rows = {
     CONTRACT: (contract.match(/^\| R12 \|.*$/m) || [''])[0],
     relay_rules: (out(rules).match(/^\| R12 \|.*$/m) || [''])[0],
     'AGENTS 模板': (tpl.match(/^\| R12 \|.*$/m) || [''])[0],
+    AGENTS: (agents.match(/^\| R12 \|.*$/m) || [''])[0],
   };
   for (const [name, text] of Object.entries(r12Rows)) {
-    ok(/150/.test(text) && /20/.test(text) && /warn/i.test(text) && /logBoundary\.strict/.test(text),
-      `${name} 的 R12 行内容一致(阈值 150/20 + 判定 WARN + 开关键名)`, text.slice(0, 180));
+    ok(text.includes(String(R12_MAX_LOG_LINES)) && text.includes(String(R12_MAX_DONE_ENTRIES))
+      && /warn/i.test(text) && /logBoundary\.strict/.test(text),
+      `${name} 的 R12 行阈值直接等于运行时常量(${R12_MAX_LOG_LINES}/${R12_MAX_DONE_ENTRIES})`, text.slice(0, 180));
   }
   ok(/R1–R13/.test(readme) && !/R1–R12/.test(readme) && !/R1–R11/.test(readme), 'README 中英文两半规则区间均为 R1–R13(无 R1–R12/R1–R11 残留)');
   const contributing = readFileSync(path.join(RELAY, 'CONTRIBUTING.md'), 'utf8');

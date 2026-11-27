@@ -2,11 +2,12 @@
 // T032 冒烟:relay_sync/onboard 的漂移备份(*.relay-bak-*)不得被自动提交。
 // 红线:制造入口漂移 → relay_sync 重写并留下可恢复备份;备份不得出现在 git status / git add -A 暂存区;
 // 旧项目(基线缺该行)运行 relay_sync 后基线被幂等补齐;重复 sync 不产生多余备份;嵌套 .relay 备份同样忽略。
-import { mkdtempSync, writeFileSync, readFileSync, readdirSync, existsSync, rmSync } from 'node:fs';
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { spawnSync } from 'node:child_process';
+import { backupFile, MAX_BACKUP_FILES } from '../src/util.mjs';
 
 const RELAY = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const PATTERN = '*.relay-bak-*';
@@ -101,6 +102,86 @@ try {
     git(dir, ['add', '-A']);
     const staged = git(dir, ['diff', '--cached', '--name-only']).stdout || '';
     ok(!/relay-bak/.test(staged), '嵌套 .relay 备份未进入暂存区', staged);
+  }
+
+  console.log('\n== 4b. 自动备份保留上限 ==');
+  {
+    const dir = fresh('sync-backup-retention');
+    const target = path.join(dir, 'AGENTS.md');
+    for (let i = 0; i < MAX_BACKUP_FILES + 5; i += 1) {
+      write(target, `backup ${i}\n`);
+      await backupFile(target);
+    }
+    const baks = backupsOf(dir);
+    ok(baks.length === MAX_BACKUP_FILES, `自动备份最多保留 ${MAX_BACKUP_FILES} 份`, `actual=${baks.length}`);
+    ok(baks.some((name) => read(path.join(dir, name)).includes(`backup ${MAX_BACKUP_FILES + 4}`)),
+      '最新备份不会被保留策略删掉');
+  }
+  {
+    const dir = fresh('sync-backup-manual-preserve');
+    const target = path.join(dir, 'AGENTS.md');
+    const manual = [];
+    for (let i = 0; i < MAX_BACKUP_FILES; i += 1) {
+      const p = path.join(dir, `AGENTS.md.relay-bak-manual-${String(i).padStart(2, '0')}`);
+      write(p, `manual ${i}\n`);
+      manual.push(p);
+    }
+    write(target, 'engine backup\n');
+    await backupFile(target);
+    ok(manual.every((p) => existsSync(p)),
+      '备份 retention 只收口引擎生成文件,不删除人工 relay-bak 命名');
+  }
+  console.log('\n== 4c. onboard manifest 原子备份同样受上限约束 ==');
+  {
+    const dir = fresh('onboard-manifest-retention');
+    const manifestPath = path.join(dir, '.relay', 'manifest.json');
+    let allRunsOk = true;
+    let lastFailure = '';
+    for (let i = 0; i < MAX_BACKUP_FILES + 5; i += 1) {
+      const manifest = JSON.parse(read(manifestPath));
+      manifest.projectName = `onboard-retention-${i}`;
+      write(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+      const r = cli('relay_onboard', { root: dir });
+      if (r.status !== 0) {
+        allRunsOk = false;
+        lastFailure = `run ${i + 1}: ${out(r).slice(0, 300)}`;
+      }
+    }
+    ok(allRunsOk, `onboard 连续 ${MAX_BACKUP_FILES + 5} 次 manifest 重写成功`, lastFailure);
+    const baks = readdirSync(path.join(dir, '.relay')).filter((f) => f.startsWith('manifest.json.relay-bak-'));
+    ok(baks.length === MAX_BACKUP_FILES, `manifest 原子备份最多保留 ${MAX_BACKUP_FILES} 份`, `actual=${baks.length}`);
+  }
+
+  console.log('\n== 5. 引擎模板缺失时不得谎报全部一致 ==');
+  {
+    const dir = fresh('sync-missing-template');
+    const engine = mkdtempSync(path.join(tmpdir(), 'relay-sync-engine-'));
+    tmpDirs.push(engine);
+    mkdirSync(path.join(engine, 'src', 'engines'), { recursive: true });
+    cpSync(path.join(RELAY, 'src', 'util.mjs'), path.join(engine, 'src', 'util.mjs'));
+    cpSync(path.join(RELAY, 'src', 'config.mjs'), path.join(engine, 'src', 'config.mjs'));
+    cpSync(path.join(RELAY, 'src', 'engines', 'sync.mjs'), path.join(engine, 'src', 'engines', 'sync.mjs'));
+    cpSync(path.join(RELAY, 'templates'), path.join(engine, 'templates'), { recursive: true });
+    rmSync(path.join(engine, 'templates', 'AGENTS.md.tpl'));
+    const importUrl = pathToFileURL(path.join(engine, 'src', 'engines', 'sync.mjs')).href;
+    const runner = [
+      `const { relaySync } = await import(${JSON.stringify(importUrl)});`,
+      `const result = await relaySync({ root: ${JSON.stringify(dir)} });`,
+      'process.stdout.write(JSON.stringify(result));',
+    ].join('\n');
+    const r = spawnSync(process.execPath, ['--input-type=module', '--eval', runner], {
+      encoding: 'utf8',
+      timeout: 120000,
+    });
+    let text = '';
+    try {
+      const result = JSON.parse(r.stdout || '{}');
+      text = result?.content?.[0]?.text || '';
+    } catch { /* 下面的断言会带出原始输出 */ }
+    ok(r.status === 0, '隔离引擎中的 relay_sync 成功返回', out(r).slice(0, 500));
+    ok(/templates\/AGENTS\.md\.tpl 缺失/.test(text), '报告缺失的是引擎自身模板', text.slice(0, 500));
+    ok(/有模板缺失被跳过/.test(text), '摘要明确说明存在跳过项', text.slice(-500));
+    ok(!/全部入口文件与模板再生内容一致,无漂移/.test(text), '同一次输出不再谎报全部一致');
   }
 } catch (e) {
   fail += 1;

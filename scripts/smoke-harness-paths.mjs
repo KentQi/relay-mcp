@@ -8,9 +8,11 @@
 import { existsSync, readFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 const H = os.homedir();
-const NEW = path.join(H, 'Desktop/projects/relay-mcp/scripts/relay-mcp-autoupdate.mjs');
+const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+const NEW = path.join(REPO, 'scripts', 'relay-mcp-autoupdate.mjs');
 const OLD = path.join(H, '.relay-mcp/relay-mcp-autoupdate.mjs');
 
 // label, path, kind(json=额外校验合法 JSON)

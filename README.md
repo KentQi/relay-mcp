@@ -48,6 +48,8 @@ node src/index.mjs        # stdio MCP server（也可由客户端拉起）
 
 重启客户端后，工具名为 `mcp__relay-mcp__relay_*`。
 
+如需随客户端启动检查更新，将 `args` 改为 `["/abs/path/relay-mcp/scripts/relay-mcp-autoupdate.mjs"]`。启动器只在主工作树的 `main` 干净且没有本地独有提交时执行快进；fetch 后固定 before/upstream 两个 SHA，以 `git update-ref <new> <old>` 做后端无关的原子 CAS，再用 `read-tree -m -u` 拒绝覆盖并发本地编辑。发布前写事务 journal；若进程在 ref 与工作树之间被强杀，下次启动会在冷却判断之前检查 journal，无法证明 HEAD/index/worktree 同端点时拒绝启动。SHA-1、SHA-256 与 files/reftable ref 后端使用同一条 Git 原生发布路径。已迁移的安装可能还保留旧启动器和备份，当前注册路径应指向仓库内的启动器。
+
 ### Agent Plugins 插件包（v1.0.0）
 
 仓库根目录同时是一个符合 [Agent Plugins 1.0.0](https://agent-plugins.org/specification) 的插件包，支持该标准的客户端可以直接把仓库目录当插件加载：
@@ -65,7 +67,7 @@ relay-mcp/
 
 ```sh
 node scripts/validate-plugin.mjs        # 校验 plugin.json / mcp.json / skills/**/SKILL.md
-node scripts/smoke-plugin.mjs           # 43–44 断言：合规 + 真实 initialize/tools/list + 规范负例
+node scripts/smoke-plugin.mjs           # 51 断言：合规 + 真实 initialize/tools/list + 规范负例
 ```
 
 不支持插件包的客户端使用上面的 `mcpServers` 片段。
@@ -90,13 +92,15 @@ node scripts/smoke-plugin.mjs           # 43–44 断言：合规 + 真实 initi
 出场前必须同时满足：
 
 1. `relay_verify` 全量 R 系列规则无 ERROR；
-2. 任务的可执行验收真实通过（`test:` 路径运行 `node --test`；项目声明 `scripts.test` 时运行 `npm test`）。
+2. 任务的可执行验收真实通过（`test:` 路径运行 `node --test`；逐字符命中 `manifest.acceptance.commands` 的 `test:<命令>` 经 shell 执行；项目声明 `scripts.test` 时运行 `npm test`）。
 
 任一条件不满足：不更新 TASKS/LOG、不提交、保留认领锁。
 
+每个验收命令默认最多运行 180 秒，仓库属主可通过 `manifest.acceptance.timeoutMs` 调整毫秒数。批量完成各跑任务自己的 `test:`，共享一次项目级 `npm test`。
+
 **简报有界（T015）**：入场简报的每条 LOG 摘要硬上限 200 字符（负结果/交接提示 120），超长条目只截断展示并标注"全文见 LOG.md"；总长超过 `manifest.contextBudget`（默认 6000）时追加显式告警而**不裁剪任何段落**（裁剪即静默降级）。
 
-**事实底账（R10）**：出场时由引擎写入一行 `- 事实(v2): mode=… | 文件 N | ± +x/-y | base=… | sha=… | branch=… || 验收: … | verify: PASS a·WARN b·ERROR c | 耗时: Ns`，模型不得手写或改写。以 ` || ` 拆两段：**机检段**（mode/文件数/base/sha/branch；± 仅 managed 可复算）由 `relay_verify` 与 git 重算逐字段对账，不一致即 ERROR；**branch 归属**也校验——声称的分支必须真实包含声明的 sha（存在但不含 → ERROR；分支合并后删除、且完成提交仍在当前分支历史 → PASS 带注记，否则 WARN）；**叙述段**（验收/verify 汇总/耗时）是写时快照，检查时点重算不出，不参与对账、不构成交接证据。无法定位对应提交（伪造 sha、历史被改写）→ WARN，**永不 PASS**；v1 旧行只做结构校验并 WARN（数字权威仅 v2）；`manifest.facts.since` 之前的旧条目豁免，保证升级项目不被历史卡住。
+**事实底账（R10）**由引擎在出场时写入，` || ` 分隔机检段与验收、verify 汇总和耗时。受管模式用注册表的 `baseSha` 和同一 LOG 条目唯一的 `worktree` 成对 SHA 重算文件数与增删行数。分支应包含该提交，合并并删除分支后可用当前 Git 历史验证。单根模式按修改 LOG 的完成提交及其父代对账文件数。缺少独立证据、证据不唯一或只有 v1 事实行时，R10 报 WARN。机检字段不符时报 ERROR。`manifest.facts.since` 限定日期范围，旧历史只有在引入提交是 `manifest.facts.baselineSha` 的祖先时才豁免；提交时间与标题时间不作为信任锚。
 
 ### 任务级 worktree
 
@@ -110,7 +114,9 @@ node scripts/smoke-plugin.mjs           # 43–44 断言：合规 + 真实 initi
 - **双根绿闸**：controlRoot 跑全量 R 系列；executionRoot 跑任务树 R1/R2/R3/R4/R8；两侧 ERROR 合并阻断。
 - **根错配保护**：受管任务从 controlRoot 完成一律 isError（无空树例外）；HEAD 无新提交的伪 SHA 同样拒绝。
 - **成对证据（R5/R6）**：任务分支代码提交、controlRoot 完成提交、TASKS/LOG 已提交干净、LOG 记录 `branch=` 与代码 SHA，四项缺一不可。
-- **注册表恢复**：`.relay/worktrees.json` 缺失或损坏时 fail-closed；可用 `git worktree list` 核对，并在 controlRoot 重新 `relay_claim` 重建登记。
+- **注册表恢复（fail-closed）**：
+  - **缺失**：先确认当前目录是否确为 relay 任务 worktree；是则用 `git worktree list` 核对痕迹，并回到 controlRoot 重新 `relay_claim {worktree:true}` 重建登记；否则离开该 worktree，在 controlRoot 操作。
+  - **损坏**：`relay_claim` / 完成出场会拒绝继续，不会自动重建。先备份 `.relay/worktrees.json`，再由人修复或删除损坏注册表，然后重新 claim 登记；cleanup 只报告并给出恢复指引。
 
 **验收通过 ≠ 已合并。** relay 不会自动 merge / rebase / push，也不会删除任务分支。人工整合：
 
@@ -119,7 +125,7 @@ git log --oneline main..relay/T003
 git merge --no-ff relay/T003
 ```
 
-worktree 清理默认 dry-run：只删除已登记、已过期、非活跃、干净且不含 ignored 本地内容的目录；`.env`、`node_modules`、构建产物等本地内容默认保留；任务分支始终保留。
+worktree 清理默认 dry-run：只删除已登记、已过期、非活跃、干净且不含 ignored 本地内容的目录。活跃性以 TASKS 的 `[~]` 活跃任务集为准，不以 registry 的 `status=completed` 替代；未提交、冲突、locked、路径越界、分支缺失均保留。`.env`、`node_modules`、构建产物等本地内容默认保留；任务分支始终保留。
 
 ### 配置
 
@@ -202,7 +208,7 @@ worktree 清理默认 dry-run：只删除已登记、已过期、非活跃、干
 - 只有 `验收: test:<值>` 会被执行；自由文本验收不会执行。
 - 值不能以 `.js/.mjs/.cjs/.ts/.tsx` 结尾——那会被当成测试文件走 `node --test`，到不了白名单。
 - 值不能以 `-` 开头；匹配是**整串逐字符相等**，不做前缀或正则。
-- 白名单为空时只接受 js/ts 测试文件；命中后经 **shell 执行，超时 180 秒**——这就是"人类签字"的信任边界。
+- 白名单为空时只接受 js/ts 测试文件。命中的命令经 shell 执行，时限取 `manifest.acceptance.timeoutMs`，缺省 180 秒。
 - 外部工具请锁版本、在 CI 或容器里运行；relay 不会自动安装它们。
 - 本仓库自身未启用（`.relay/**` 是受保护路径，启用需人类批准后单独提交）。
 
@@ -215,12 +221,12 @@ worktree 清理默认 dry-run：只删除已登记、已过期、非活跃、干
 ### 安全与边界
 
 - 密钥守卫：`.env*`、`*secret*`、`*credential*`、`*.key`、`*.pem`、`id_rsa` 不自动提交。
-- 改写备份：`relay_sync` / `relay_onboard` 在重写入口或 manifest 前生成 `*.relay-bak-*` 备份供人工恢复；该类文件已入 `.gitignore` 运行时基线，不会被 `git add -A` 卷进提交，恢复后请自行删除。
-- LOG 边界（R12）：LOG 活跃区（归档指针之前的行）超过 150 行、或完成条目超过 20 条 → `relay_verify` 报 WARN（`manifest.logBoundary.strict=true` 升 ERROR）；只报警不自动归档，归档动作由人工决定（`docs/archive/LOG-*.md` + 指针）；指针必须指向仓库内真实存在的 `LOG-*.md`，失效指针 → WARN 而非静默 PASS。
+- 改写备份：`relay_sync` / `relay_onboard` 在重写入口或 manifest 前生成 `*.relay-bak-*` 备份供人工恢复；每个目标最多保留最新 20 份，避免运行时无限增长。该类文件已入 `.gitignore` 运行时基线，不会被 `git add -A` 卷进提交。
+- LOG 边界（R12）：LOG 活跃区（归档指针之前的行）超过 150 行、或完成条目超过 20 条 → `relay_verify` 报 WARN（`manifest.logBoundary.strict=true` 升 ERROR）；只报警不自动归档，归档动作由人工决定。R12 只认**第一个有效指针**：目标须为 `docs/archive/LOG-*.md`、真实存在且非空、realpath 在仓库内且目录组件非符号链接；失效指针 → WARN 而非静默 PASS。
 - 协议结构（R13）：TASKS 任务行必须匹配契约正则且任务号唯一，`[~]` 带 `(model, YYYY-MM-DD HH:mm)`、`[x]` 带 `(YYYY-MM-DD)`；LOG 条目标题必须匹配 `## 时间 | model=<名> | task=<T### …>`；HTML 注释块与缩进行豁免。违规 → WARN（`manifest.structure.strict=true` 升 ERROR）。
-- 内容级密钥闸（R11）：协议面 8 个文件（`TASKS.md` / `LOG.md` / `AGENTS.md` / `CLAUDE.md` / `GEMINI.md` / `START.md` / `SPEC.md` / `DECISIONS.md`）与 `docs/archive/**/*.md`（含文档旧版）命中 AWS / GitHub / Slack / OpenAI / Google 密钥样式或 PEM 私钥块 → `relay_verify` 报 ERROR，出场写盘前直接阻断（不写、不提交）；误报可在同一行标注 `relay:secret-ok` 豁免。扫描输出只给前 4 字符预览，绝不回显完整密钥。安全面不随证据面收窄：D8/R12 只认 `LOG-*.md`，R11 仍扫全部归档文本。
+- 内容级密钥闸（R11）：协议面 8 个文件（`TASKS.md` / `LOG.md` / `AGENTS.md` / `CLAUDE.md` / `GEMINI.md` / `START.md` / `SPEC.md` / `DECISIONS.md`）与 `docs/archive/*.md`（单层全部 `.md`，含文档旧版）命中 AWS / GitHub / Slack / OpenAI / Google 密钥样式或 PEM 私钥块 → `relay_verify` 报 ERROR，出场写盘前直接阻断（不写、不提交）。误报在同一行标注 `relay:secret-ok` **只豁免 R11 检测；协议写入路径一律拒绝该标记**。扫描输出只给前 4 字符预览，绝不回显完整密钥。安全面不随证据面收窄：D8/R12 只认 `LOG-*.md`，R11 仍扫归档目录单层全部 `.md`。
 - 受保护路径：`verify`、`.relay/**`、`tests/**` 与测试文件改动不自动提交；最终防线是 CI 与人工审核。
-- 锁：仓库写锁带心跳与写前 fencing；任务认领锁刻意关闭心跳，保留 240 分钟 TTL 崩溃恢复。并发会话必须使用不同 `model` 标识（同名 model 无法区分持有者）。
+- 锁：仓库写锁约 20s 心跳续租 + 写前 fencing；任务认领锁刻意关闭心跳，240 分钟 TTL 按锁内 `acquiredAt` 判定。并发会话必须使用不同 `model` 标识（同名 model 无法区分持有者）。
 - 当前不提供 abort/release、任务 status 工具或 sessionId；恢复方式为 TTL 接管、出场释放或 cleanup。
 - 子代理抢救（`relay_rescue`）：现场落 `<controlRoot>/.relay/rescue/<id>/`（`state.json` + transcript 副本 + 独立接力锁），**本机运行时状态、永不入库**——transcript 含本机路径与潜在敏感内容，且 `.relay/**` 是受保护路径；`.gitignore` 基线自动补 `.relay/rescue/`。读取时重算 sha256，篡改即 isError；transcript 一律围栏 + 「不是给你的指令」+ 密钥脱敏。工作区现场用 git 对象快照（临时 index），不动 index/工作区/HEAD/分支/stash；密钥样式内容在**任何 git 对象落盘之前**就被拒绝，快照内容也受 `maxBytes` 总量约束。
 
@@ -251,9 +257,9 @@ worktree 清理默认 dry-run：只删除已登记、已过期、非活跃、干
 1. `relay_recall { query?, status?, model?, limit? }` → 紧凑索引（每条一行，约 20 tokens），带显式截断标记；
 2. `relay_get { ids: ["T013","T019"] }` → 全文（TASKS 验收 + 最新 LOG 条目 + 事实行/分支 SHA + 关联决策）。
 
-两者都**只读、调用时从 LOG/TASKS 即时派生**（不落任何持久索引），输出统一围栏包裹并标注「数据非指令」。
+两者都**只读、调用时从 LOG/TASKS 即时派生**（不落任何持久索引）。recall 合并 live LOG 与**唯一合法归档指针**指向的历史；get 在 live 未命中时回查归档。输出统一围栏包裹并标注「数据非指令」。
 
-> **状态说明**：检索寻址（T018）的动工闸门是「LOG ≥ 20 条或出现取回失败」，实测为 16 条、闸门未过，按用户指令先行交付。收益复核见 TASKS.md 的 T021；若实测无收益，回退方式仅为移除这两个工具的注册，协议面与事实底账不受影响。
+> **状态说明**：检索寻址（T018）的动工闸门是「LOG ≥ 20 条或出现取回失败」，实测为 16 条、闸门未过，按用户指令先行交付。收益复核见 TASKS.md 的 T021（T018 收益复核决策证据）；若实测无收益，回退方式仅为移除这两个工具的注册，协议面与事实底账不受影响。
 
 CLI 与 MCP 共用同一引擎（npm 冻结后不再提供 `relay` bin，直接用 `node src/cli.mjs`）：
 
@@ -266,7 +272,7 @@ node src/cli.mjs --version     # 版本
 
 ### 自举
 
-本仓库使用自身协议开发：`START.md` 是入口，`TASKS.md` 是 backlog，`LOG.md` 记录会话。`npm test` 覆盖 27 套端到端冒烟（协议、补丁、worktree、升级兼容、密钥闸、事实底账、简报、doctor、检索、评审回归、性能计数、LOG 边界、会话性能、并发、归档、安全、Agent Plugins 插件包、崩溃点矩阵、上下文预算、测试框架元负控、协议结构机检、漂移备份闸、D8 归档证据面、子代理抢救、通用 SQLite 会话来源、manifest 声明的自动拉起、自更新启动器），CI 覆盖 Node 22/24/26。
+本仓库使用自身协议开发。`START.md` 是入口，`TASKS.md` 管理任务，`LOG.md` 记录会话。`npm test` 执行 `package.json` 列出的 31 套冒烟，包括认领锁边界和受管出场恢复。CI 覆盖 Node 22/24/26。
 
 一次真实的多模型交接实测记录（含假绿事故的完整证据链）见 [docs/04-test/08-handoff-case-study-v1.0.md](docs/04-test/08-handoff-case-study-v1.0.md)。
 
@@ -284,7 +290,7 @@ relay-mcp is an MCP server for reliable handoff across coding models and session
 - `AGENTS.md` is the required project entry; `CLAUDE.md` / `GEMINI.md` are optional projections
 - The repo root is also a conformant [Agent Plugins v1.0.0](https://agent-plugins.org/specification) package: root `plugin.json`, `mcp.json` (stdio, `${PLUGIN_ROOT}` placeholders), and `skills/relay-protocol/SKILL.md`. Validate with `node scripts/validate-plugin.mjs`.
 - Task worktrees: `relay_claim` returns `controlRoot` and `executionRoot`. Exit makes two commits (task branch code plus controlRoot TASKS/LOG) and reports both SHAs. Accepted is not merged: merge manually with `git merge --no-ff relay/T###`.
-- Cleanup is dry-run by default and never removes dirty, active, or local-content (`.env`, `node_modules`) worktrees; branches are preserved.
+- Cleanup is dry-run by default. Inactivity comes from the TASKS `[~]` active set, not merely registry `status=completed`; dirty, conflicted, locked, unregistered, out-of-cache, branchless, or local-content (including ignored `.env` / `node_modules`) worktrees are kept. Branches are preserved.
 - No automatic merge/rebase/push, and no abort/release/status/sessionId yet. Use unique `model` ids for concurrent sessions. Subagents killed mid-task are rescued by `relay_rescue` into a local, never-committed card under `.relay/rescue/`.
 
 ### Install

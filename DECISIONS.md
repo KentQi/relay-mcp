@@ -87,8 +87,8 @@
 ## 2026-11-18 — 审计复核修正:R11 安全面不随证据面收窄
 
 - 背景: 审计发现 R11 只扫 `docs/archive/LOG-*.md` 后,非 LOG 归档里的密钥不再被发现(A/B 复现:同一 AKIA 串放进 `notes.md` 放行、放进 `LOG-*.md` 报 ERROR),反转了 2026-11-01 审计 P2-2 的保证。
-- 决定: 维持 Tier 2 的「证据面收窄」——D8 完成态证据与 R12 指针只认 `docs/archive/LOG-*.md`;但 R11 是安全面,恢复扫描 `docs/archive/**/*.md`(含 `ARCHIVED-*` 文档旧版),不随证据面收窄。
-- 理由: 证据面收窄是为了避免文档旧版被误当协议历史;密钥扫描没有这个语义负担,漏扫的代价是密钥进入 git 历史且不可撤回。
+- 决定: 维持 Tier 2 的「证据面收窄」——D8 完成态证据与 R12 指针只认 `docs/archive/LOG-*.md`;但 R11 是安全面,扫描 `docs/archive/*.md`(单层全部 `.md`,含 `ARCHIVED-*` 文档旧版),不随证据面收窄。
+- 理由: 证据面收窄是为了避免文档旧版被误当协议历史;密钥扫描没有这个语义负担,漏扫的代价是密钥进入 git 历史且不可撤回。实现采用单层 `readdir`,不承诺递归扫描子目录。
 - 同步: `verify.mjs` 的 archiveFiles 过滤恢复 `/.md$/i`;R11 规则行/README/AGENTS 模板/CONTRACT/CHANGELOG 与 `smoke-security` 用例同步;D8/R12 文案保持不变。
 - 否决: 让 R11 继续只扫 `LOG-*`(安全面为语义隔离让路,代价不可接受);把文档旧版归档移出 `docs/archive`(会破坏既有文档归档约定)。
 - 状态: 现行
@@ -107,8 +107,8 @@
 
 - npm: **正式冻结**。理由:npm 上 `relay-mcp` 属他人,且没有第二个真实消费者;半开火状态(打包面就绪但永不发布)只增加维护面与误发布风险。动作:`package.json` 置 `private: true`,移除 `bin` / `files` / 安装器 / 发布护栏 / 打包与安装器冒烟;README 改为 `git clone` + Agent Plugins + `mcpServers` 片段;T030 以「冻结」关闭。
 - Node: **下界 18 → 22**。理由:CI 实测矩阵为 22/24/26,Node 18/20 已 EOL 且从未被 CI 覆盖;声明支持未测试的运行时比破坏性变更更危险。动作:`engines.node`、doctor D1、bootstrap 提示、skills、preset、CI 模板、README 与 SPEC 同步;建议下一个 major 发版时明确标注。
-- 归档: **R11/D8 扫描面与 R12 指针收窄到 `docs/archive/LOG-*.md`**。理由:`docs/archive/` 同时承载 LOG 历史与文档旧版,全量扫描会把 `ARCHIVED-*` 文档版本误当协议证据。代价:非 LOG 文件不再过密钥闸,已在 CONTRACT Tier 2 段明示。
-- 注:归档收窄是对 2026-11-01 P2-2「归档目录任何 .md 都扫」的有意反转——语义隔离优先于全量覆盖;两处规则表、README、模板与冒烟已同步。
+- 归档: **R11/D8 扫描面与 R12 指针收窄到 `docs/archive/LOG-*.md`**。理由:`docs/archive/` 同时承载 LOG 历史与文档旧版,全量扫描会把 `ARCHIVED-*` 文档版本误当协议证据。代价:非 LOG 文件不再过密钥闸,已在 CONTRACT Tier 2 段明示。(后续 2026-11-18 决策已反转本条的 R11 安全面部分:R11 扫描单层全部 `.md`;D8/R12 证据面仍只认 `LOG-*.md`。)
+- 注:归档收窄是对 2026-11-01 P2-2「归档目录任何 .md 都扫」的有意反转——语义隔离优先于全量覆盖;两处规则表、README、模板与冒烟已同步。(R11 部分随后被 2026-11-18「R11 安全面不随证据面收窄」取代,当前以该决策的 `docs/archive/*.md` 为准。)
 - 否决: 保持 npm 半开火(维护面与误发布风险);保持 Node >=18(声明未测的 EOL 运行时);维持 `docs/archive` 全量扫描(语义混用)。
 - 状态: 现行
 
