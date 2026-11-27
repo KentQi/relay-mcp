@@ -897,7 +897,11 @@ try {
     writeFileSync(path.join(root, 't102.txt'), 'b\n');
     git(root, 'add', '-A');
     git(root, '-c', 'user.name=t', '-c', 'user.email=t@t', 'commit', '-qm', 't102 work');
-    git(root, 'checkout', '-q', 'main');
+    // 不能假设初始分支叫 main:relay_init 的 git init 在不同 git/平台默认值不同(CI 实测非 main)。
+    // 用「切回初始分支起点」的方式恢复:直接 checkout 回 base 提交所在的本地分支。
+    const initialBranch = git(root, 'for-each-ref', '--format=%(refname:short)', '--points-at', base)
+      .split('\n').map((l) => l.trim()).filter(Boolean)[0];
+    git(root, 'checkout', '-q', initialBranch);
     const wt = path.join(root, '.relay', 'worktrees', 'T101');
     mkdirSync(path.dirname(wt), { recursive: true });
     git(root, 'worktree', 'add', wt, 'relay/T101');
