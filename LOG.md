@@ -1,5 +1,10 @@
 # 会话日志(最新在上)
 
+## 2026-11-27 15:46 | model=hungerg-audit-fix | task=T072 完成
+- 摘要: T072 推进:推送 T071 的三个 CI 修复(813d148 TDZ、27fc10a 分支名假设、4f5b81a R10 锚点改用 LOG 成对证据行)到 origin/relay/T071;PR #12 已更新。等待三矩阵 CI(22/24/26)结果。
+- 事实(v2): mode=single | 文件 1 | ± +7/-1 | base=- | sha=- | branch=main || 验收: 通过 | verify: PASS 12·WARN 0·ERROR 0 | 耗时: 114s
+- 留给下一个: CI 结果见 gh pr checks 12;若仍红用 gh run view --log-failed 定位。审计报告在分支 docs/04-test/13-audit-deep-scan-v2.1.md。
+
 ## 2026-11-27 14:15 | model=hungerg-audit-fix | task=T071 完成
 - 摘要: T071 全面修复深层审计确认项：R10 独立锚定重写（任务分支 tip + registry.baseSha 祖先，字段对账先于分支归属）、R9 全局化并给本会话收尾任务崩溃恢复豁免、R2 改 readdir+git 并集并用 manifest.runtimeTopLevel 显式声明运行时目录、进程组终止修正（child.detached 恒为 undefined 导致只杀直接子进程）、认领锁 claimLockExpiry 单一真相源与 ttl_minutes 覆盖、CLI schema 校验与 stdout 不截断、recall 纳入无 LOG 待办并合并归档、archive 与 R12 共用合法指针且保留 3 个任务会话、sync/restructure/rescue 符号链接防线与 writeProtocolFile、自更新启动器 fail-closed 与并发锁、退役 scripts/audit 与死代码、pack 纳入启动器、文档口径与版式修正。29/29 套件全绿，verify 双层 PASS 10/WARN 1(历史 T055-T057 已批准缺口)/ERROR 0。
 - 事实(v2): mode=managed | 文件 59 | ± +2849/-1157 | base=0d8764b11b886c748c6b04544d0c97d95d8d4cd9 | sha=e3f660d9871b96ff100092fbe86c7c1c9c2a92a0 | branch=relay/T071 || 验收: 通过 | verify: PASS 14·WARN 1·ERROR 0 | 耗时: 100s
