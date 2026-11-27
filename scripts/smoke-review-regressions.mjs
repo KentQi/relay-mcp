@@ -28,6 +28,7 @@ const tmpA = mkdtempSync(path.join(tmpdir(), 'relay-rev-managed-'));
 const tmpB = mkdtempSync(path.join(tmpdir(), 'relay-rev-single-'));
 const tmpC = mkdtempSync(path.join(tmpdir(), 'relay-rev-sentinel-'));
 const tmpD = mkdtempSync(path.join(tmpdir(), 'relay-rev-merge-'));
+const tmpE = mkdtempSync(path.join(tmpdir(), 'relay-rev-cquote-'));
 
 try {
   // ================= A. managed:密钥必须在任何提交之前被拦 =================
@@ -162,11 +163,28 @@ try {
   const r5m = rowOf(out(vD), 'R5');
   ok(/R5\s*\|\s*SKIP/.test(r5m), 'merge 提交 → R5 SKIP(不再静默 PASS)', r5m);
   ok(/merge/.test(r5m), 'SKIP 文案说明是 merge 提交', r5m);
+
+  // ================= H. Git C-quote 文件名不能绕过 R5/R6 =================
+  console.log('\n== H. Git C-quote 文件名保持原始路径语义 ==');
+  const initE = cliAt(tmpE, 'relay_init', { name: '评审回归-C-quote' });
+  ok(initE.status === 0, 'init tmpE', out(initE).slice(0, 200));
+  const quotedName = 'src/evil\nTASKS.md';
+  mkdirSync(path.join(tmpE, 'src'), { recursive: true });
+  writeFileSync(path.join(tmpE, quotedName), 'export const quoted = 1;\n');
+  git(tmpE, 'add', '--', quotedName);
+  const quotedCommit = git(tmpE, '-c', 'user.name=rev', '-c', 'user.email=rev@local', 'commit', '-q', '-m', 'feat: newline path');
+  ok(quotedCommit.status === 0, '提交真实换行文件名', (quotedCommit.stderr || '').slice(0, 200));
+  const vE = cliAt(tmpE, 'relay_verify', { full: true });
+  const r5q = rowOf(out(vE), 'R5');
+  const r6q = rowOf(out(vE), 'R6');
+  ok(/R5\s*\|\s*WARN/.test(r5q) && /evil/.test(r5q), 'R5 识别 C-quoted src 路径', r5q);
+  ok(/R6\s*\|\s*WARN/.test(r6q), 'R6 同样识别 C-quoted src 路径', r6q);
 } finally {
   rmSync(tmpA, { recursive: true, force: true });
   rmSync(tmpB, { recursive: true, force: true });
   rmSync(tmpC, { recursive: true, force: true });
   rmSync(tmpD, { recursive: true, force: true });
+  rmSync(tmpE, { recursive: true, force: true });
 }
 
 console.log(`\n结果: ${pass} 通过 / ${fail} 失败`);

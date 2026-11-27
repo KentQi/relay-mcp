@@ -79,7 +79,7 @@ relay_claim 创建/复用 worktree，session_start/session_end 维护状态，�
 ```text
 .relay/worktrees/<task-id>/
 .relay/worktrees.json
-.relay/worktrees.lock
+.relay/relay.lock            # 仓库级写锁(运行时、带心跳与 fencing)
 ```
 
 注册表至少记录：task、path、branch、baseSha、owner、status、createdAt、lastUsedAt。path 只用于定位，清理前必须重新做 realpath  containment 和 `git worktree list --porcelain` 双重核验，不能信任注册表中的任意路径。

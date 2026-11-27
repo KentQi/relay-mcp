@@ -48,7 +48,7 @@ node src/index.mjs        # stdio MCP server（也可由客户端拉起）
 
 重启客户端后，工具名为 `mcp__relay-mcp__relay_*`。
 
-如需随客户端启动检查更新，将 `args` 改为 `["/abs/path/relay-mcp/scripts/relay-mcp-autoupdate.mjs"]`。启动器只在主工作树的 `main` 干净且没有本地独有提交时执行快进。已迁移的安装可能还保留旧启动器和备份，当前注册路径应指向仓库内的启动器。
+如需随客户端启动检查更新，将 `args` 改为 `["/abs/path/relay-mcp/scripts/relay-mcp-autoupdate.mjs"]`。启动器只在主工作树的 `main` 干净且没有本地独有提交时执行快进；fetch 后固定 before/upstream 两个 SHA，以 `git update-ref <new> <old>` 做后端无关的原子 CAS，再用 `read-tree -m -u` 拒绝覆盖并发本地编辑。发布前写事务 journal；若进程在 ref 与工作树之间被强杀，下次启动会在冷却判断之前检查 journal，无法证明 HEAD/index/worktree 同端点时拒绝启动。SHA-1、SHA-256 与 files/reftable ref 后端使用同一条 Git 原生发布路径。已迁移的安装可能还保留旧启动器和备份，当前注册路径应指向仓库内的启动器。
 
 ### Agent Plugins 插件包（v1.0.0）
 
@@ -67,7 +67,7 @@ relay-mcp/
 
 ```sh
 node scripts/validate-plugin.mjs        # 校验 plugin.json / mcp.json / skills/**/SKILL.md
-node scripts/smoke-plugin.mjs           # 43–44 断言：合规 + 真实 initialize/tools/list + 规范负例
+node scripts/smoke-plugin.mjs           # 51 断言：合规 + 真实 initialize/tools/list + 规范负例
 ```
 
 不支持插件包的客户端使用上面的 `mcpServers` 片段。
@@ -100,7 +100,7 @@ node scripts/smoke-plugin.mjs           # 43–44 断言：合规 + 真实 initi
 
 **简报有界（T015）**：入场简报的每条 LOG 摘要硬上限 200 字符（负结果/交接提示 120），超长条目只截断展示并标注"全文见 LOG.md"；总长超过 `manifest.contextBudget`（默认 6000）时追加显式告警而**不裁剪任何段落**（裁剪即静默降级）。
 
-**事实底账（R10）**由引擎在出场时写入，` || ` 分隔机检段与验收、verify 汇总和耗时。受管模式用注册表的 `baseSha` 和同一 LOG 条目唯一的 `worktree` 成对 SHA 重算文件数与增删行数。分支应包含该提交，合并并删除分支后可用当前 Git 历史验证。单根模式按修改 LOG 的完成提交及其父代对账文件数。缺少独立证据、证据不唯一或只有 v1 事实行时，R10 报 WARN。机检字段不符时报 ERROR。`manifest.facts.since` 限定日期范围，R10 读取范围内最新的完成条目。
+**事实底账（R10）**由引擎在出场时写入，` || ` 分隔机检段与验收、verify 汇总和耗时。受管模式用注册表的 `baseSha` 和同一 LOG 条目唯一的 `worktree` 成对 SHA 重算文件数与增删行数。分支应包含该提交，合并并删除分支后可用当前 Git 历史验证。单根模式按修改 LOG 的完成提交及其父代对账文件数。缺少独立证据、证据不唯一或只有 v1 事实行时，R10 报 WARN。机检字段不符时报 ERROR。`manifest.facts.since` 限定日期范围，旧历史只有在引入提交是 `manifest.facts.baselineSha` 的祖先时才豁免；提交时间与标题时间不作为信任锚。
 
 ### 任务级 worktree
 
@@ -221,7 +221,7 @@ worktree 清理默认 dry-run：只删除已登记、已过期、非活跃、干
 ### 安全与边界
 
 - 密钥守卫：`.env*`、`*secret*`、`*credential*`、`*.key`、`*.pem`、`id_rsa` 不自动提交。
-- 改写备份：`relay_sync` / `relay_onboard` 在重写入口或 manifest 前生成 `*.relay-bak-*` 备份供人工恢复；该类文件已入 `.gitignore` 运行时基线，不会被 `git add -A` 卷进提交，恢复后请自行删除。
+- 改写备份：`relay_sync` / `relay_onboard` 在重写入口或 manifest 前生成 `*.relay-bak-*` 备份供人工恢复；每个目标最多保留最新 20 份，避免运行时无限增长。该类文件已入 `.gitignore` 运行时基线，不会被 `git add -A` 卷进提交。
 - LOG 边界（R12）：LOG 活跃区（归档指针之前的行）超过 150 行、或完成条目超过 20 条 → `relay_verify` 报 WARN（`manifest.logBoundary.strict=true` 升 ERROR）；只报警不自动归档，归档动作由人工决定。R12 只认**第一个有效指针**：目标须为 `docs/archive/LOG-*.md`、真实存在且非空、realpath 在仓库内且目录组件非符号链接；失效指针 → WARN 而非静默 PASS。
 - 协议结构（R13）：TASKS 任务行必须匹配契约正则且任务号唯一，`[~]` 带 `(model, YYYY-MM-DD HH:mm)`、`[x]` 带 `(YYYY-MM-DD)`；LOG 条目标题必须匹配 `## 时间 | model=<名> | task=<T### …>`；HTML 注释块与缩进行豁免。违规 → WARN（`manifest.structure.strict=true` 升 ERROR）。
 - 内容级密钥闸（R11）：协议面 8 个文件（`TASKS.md` / `LOG.md` / `AGENTS.md` / `CLAUDE.md` / `GEMINI.md` / `START.md` / `SPEC.md` / `DECISIONS.md`）与 `docs/archive/*.md`（单层全部 `.md`，含文档旧版）命中 AWS / GitHub / Slack / OpenAI / Google 密钥样式或 PEM 私钥块 → `relay_verify` 报 ERROR，出场写盘前直接阻断（不写、不提交）。误报在同一行标注 `relay:secret-ok` **只豁免 R11 检测；协议写入路径一律拒绝该标记**。扫描输出只给前 4 字符预览，绝不回显完整密钥。安全面不随证据面收窄：D8/R12 只认 `LOG-*.md`，R11 仍扫归档目录单层全部 `.md`。

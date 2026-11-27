@@ -24,6 +24,12 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: ${{ matrix.node-version }}
+      - name: whitespace and conflict-marker check
+        shell: bash
+        run: |
+          base="$(git merge-base origin/main HEAD)"
+          git diff --check "$base...HEAD"
+          git diff-tree --check --root -r HEAD
       - name: relay verify (structure, self-hosted engine)
         run: node src/cli.mjs relay_verify --root .
       - name: smoke tests (protocol, patches and worktree lifecycle)

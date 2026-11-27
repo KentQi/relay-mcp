@@ -218,6 +218,12 @@ try {
     const refsBeforeRetry = gitOut(repo, 'for-each-ref', '--format=%(refname)', 'refs/relay/rescue/');
     const retry = cli(repo, 'relay_rescue', { action: 'capture', id: 'claude-ok', confirm: true }, ENV);
     ok(retry.status === 0 && /幂等重试/.test(out(retry)), '原样重试 capture 幂等成功', out(retry).slice(0, 300));
+    rmSync(copied);
+    const repaired = cli(repo, 'relay_rescue', { action: 'capture', id: 'claude-ok', confirm: true }, ENV);
+    ok(repaired.status === 0 && /原子修复/.test(out(repaired)) && existsSync(copied),
+      'transcript 丢失时原样重试按 state.sha256 原子修复', out(repaired).slice(0, 400));
+    ok(existsSync(copied) && sha256(readFileSync(copied)) === srcHash,
+      '修复后的 transcript 与原始来源逐字节一致');
     ok(JSON.stringify(rescueIds(repo)) === JSON.stringify(idsBeforeRetry), '幂等重试不新增接力单', idsBeforeRetry.join(','));
     ok(gitOut(repo, 'for-each-ref', '--format=%(refname)', 'refs/relay/rescue/') === refsBeforeRetry,
       '幂等重试不新增 git ref');
@@ -689,6 +695,26 @@ try {
     const nhOut = out(cli(noSrc, 'relay_rescue', { action: 'scan' }, {}));
     ok(/nh-1/.test(nhOut), '新 harness 仅靠一份描述即可被发现(不改核心代码)', nhOut.slice(0, 600));
     ok(/额度\/限流|quota/i.test(nhOut), '新 harness 的停因被正确分类', nhOut.slice(0, 600));
+
+    const customRepo = freshRepo('custom-source-map', '自定义元数据字段');
+    const customSpec = {
+      id: 'custom-meta-source', kind: 'json-metadata', metaFile: 'state.json',
+      fieldMap: { agentId: 'uuid', cwd: 'workspace', prompt: 'objective', status: 'phase', error: 'failure' },
+    };
+    setRescueSources(customRepo, [], [customSpec]);
+    const customDir = path.join(mkTmp('custom-meta-source'), 'agent-one');
+    mkdirSync(customDir, { recursive: true });
+    writeFileSync(path.join(customDir, 'state.json'), JSON.stringify({
+      uuid: 'u-explicit-1',
+      workspace: customRepo,
+      objective: '显式来源映射任务',
+      phase: 'failed',
+      failure: 'quota exceeded (429)',
+    }));
+    const customCapture = cli(customRepo, 'relay_rescue', {
+      action: 'capture', id: 'u-explicit-1', source: customDir, confirm: true,
+    });
+    ok(customCapture.status === 0, '显式 source 的 custom metaFile + fieldMap 可被 capture', out(customCapture).slice(0, 700));
   }
 
   // ==========================================================================
@@ -930,17 +956,26 @@ try {
     const stBad = JSON.parse(read(path.join(rescueRootOf(relRepo), lid2, 'state.json')));
     ok(stBad.takeover && stBad.takeover.model === 'tok-b', '释放失败时保留 takeover 状态(可恢复)', JSON.stringify(stBad.takeover));
 
-    // (d) 过期锁不再阻止 drop
+    // (d) TTL 只看 acquiredAt:mtime 回填不能让活锁过期;真正过期的锁才允许 drop。
     const lockJson = JSON.parse(read(lock2));
     lockJson.holder = 'tok-b';
     lockJson.token = stBad.takeover.token;
+    lockJson.acquiredAt = new Date().toISOString();
     writeFileSync(lock2, `${JSON.stringify(lockJson)}\n`);
     const { utimesSync } = await import('node:fs');
     const old = new Date(Date.now() - 241 * 60000);
     utimesSync(lock2, old, old);
+    const dropFreshByAcquired = cli(relRepo, 'relay_rescue', { action: 'drop', id: lid2, confirm: true }, e11);
+    ok(dropFreshByAcquired.status === 1 && /持有|无法取得|TTL/.test(out(dropFreshByAcquired))
+      && existsSync(path.join(rescueRootOf(relRepo), lid2)),
+    'mtime 回填不能让 acquiredAt 仍新鲜的活锁过期', out(dropFreshByAcquired).slice(0, 400));
+    lockJson.acquiredAt = old.toISOString();
+    writeFileSync(lock2, `${JSON.stringify(lockJson)}\n`);
+    const now = new Date();
+    utimesSync(lock2, now, now);
     const dropExpired = cli(relRepo, 'relay_rescue', { action: 'drop', id: lid2, confirm: true }, e11);
     ok(dropExpired.status === 0 && !existsSync(path.join(rescueRootOf(relRepo), lid2)),
-      'TTL 过期锁不再阻止 drop(审计 #14 回归)', out(dropExpired).slice(0, 300));
+      'acquiredAt 真过期后 drop 可取得并释放卡锁', out(dropExpired).slice(0, 300));
 
     // (e) T058 前的旧接力单(只有 harness 字段)仍可读出原始任务
     const legacyRepo = freshRepo('legacy', '旧卡兼容夹具');
@@ -1070,7 +1105,7 @@ try {
     const repo = freshRepo('scan-cap', '扫描聚合上限');
     const sources = [];
     const spec = { id: 'cap-ref', kind: 'json-metadata', metaFile: 'metadata.json' };
-    // 单来源 401 个候选:描述符层应截到 400,聚合层也不能再多。
+    // 单来源 401 个候选:scan 展示仍严格限制 400,capture 的精确 match 必须能越过展示上限。
     const root = path.join(mkTmp('scan-cap-home'), 'agents');
     for (let i = 0; i < 401; i += 1) {
       const dir = path.join(root, `parent-${i}`, `agent-${i}`);
@@ -1089,7 +1124,11 @@ try {
     // 候选是 0-based 命名(cap-0..cap-400 共 401 个),上限 400 条时 cap-400 有可能恰好入选。
     // 真正要钉的是「总条数不超过上限」,而不是某一个序号是否出现。
     const shown = (text.match(/^- `cap-\d+`/gm) || []).length;
-    ok(shown === 400, '第 401 个候选被截断(展示条数恰好等于上限)', `shown=${shown}`);
+    ok(shown === 400, 'scan 展示条数严格等于上限', `shown=${shown}`);
+    const captureBeyond = cli(repo, 'relay_rescue', {
+      action: 'capture', id: 'cap-400', confirm: true,
+    });
+    ok(captureBeyond.status === 0, '同来源第 401 个候选仍可按 id capture', out(captureBeyond).slice(0, 600));
   }
   // ==========================================================================
   console.log('\n== 13. 并发 capture 与扫描上限语义 ==');
@@ -1199,6 +1238,41 @@ try {
       action: 'capture', id: 'valid-after-cap', confirm: true,
     });
     ok(capture.status === 0, 'capture 仍可找到上限之后的项目内候选', out(capture).slice(0, 800));
+  }
+  {
+    const repo = freshRepo('scan-cap-same-source', '同来源跳过项不吞候选');
+    const otherProject = freshRepo('scan-cap-same-other', '别的项目');
+    const root = path.join(mkTmp('scan-cap-same-root'), 'agents');
+    const spec = { id: 'cap-same-ref', kind: 'json-metadata', metaFile: 'metadata.json' };
+    const writeMeta = (parent, agentId, cwd) => {
+      const dir = path.join(root, parent, agentId);
+      mkdirSync(dir, { recursive: true });
+      writeFileSync(path.join(dir, 'metadata.json'), JSON.stringify({
+        agentId, cwd, prompt: `task ${agentId}`, status: 'failed', error: 'quota 429',
+        createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
+      }));
+    };
+    for (let i = 0; i < 400; i += 1) writeMeta(`external-${i}`, `external-${i}`, otherProject);
+    writeMeta('target-parent', 'same-source-target', repo);
+    setRescueSources(repo, [{ profile: spec.id, root }], [spec]);
+    const scan = out(cli(repo, 'relay_rescue', { action: 'scan' }));
+    ok(/same-source-target/.test(scan), '同一来源前 400 个外部项目候选不会遮住项目内目标', scan.slice(0, 700));
+
+    const jsonlRepo = freshRepo('scan-cap-jsonl', 'JSONL 同来源精确 capture');
+    const jsonlRoot = mkTmp('scan-cap-jsonl-root');
+    const jsonlSpec = { id: 'cap-jsonl-ref', kind: 'jsonl-message', filePattern: '^agent-(.+)\\.jsonl$' };
+    const pendingJsonl = [
+      JSON.stringify({ type: 'user', cwd: jsonlRepo, message: { role: 'user', content: 'JSONL 上限任务' } }),
+      JSON.stringify({ type: 'assistant', message: { role: 'assistant', content: [{ type: 'tool_use', id: 'pending', name: 'Read', input: {} }] } }),
+    ].join('\n') + '\n';
+    for (let i = 0; i < 401; i += 1) {
+      writeFileSync(path.join(jsonlRoot, `agent-jsonl-${i}.jsonl`), pendingJsonl);
+    }
+    setRescueSources(jsonlRepo, [{ profile: jsonlSpec.id, root: jsonlRoot }], [jsonlSpec]);
+    const jsonlCapture = cli(jsonlRepo, 'relay_rescue', {
+      action: 'capture', id: 'jsonl-400', confirm: true,
+    });
+    ok(jsonlCapture.status === 0, 'JSONL 同来源第 401 个候选可按 id capture', out(jsonlCapture).slice(0, 700));
   }
   {
     const repo = freshRepo('capture-beyond-scan-cap', 'capture 不受展示上限截断');

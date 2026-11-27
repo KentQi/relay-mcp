@@ -24,7 +24,7 @@ status: 已完成
 - 新项目默认启用 worktree；既有项目缺少 `worktree.enabled` 时默认 false。
 - 自动清理只处理 relay 登记、非活跃、干净、路径受管且过期的 worktree，保留分支。
 - 不自动 merge/rebase/push，不使用 `rm -rf` 清理 worktree。
-- 未经用户明确要求不创建 Git 提交；每个任务以测试和 diff 检查作为检查点。
+- 代码与测试只在 executionRoot 提交；绿闸通过后由 relay_session_end 完成代码提交和控制面双提交。非出场流程不自行创建 Git 提交。
 
 ## Review Focus
 

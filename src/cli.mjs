@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// relay-mcp — src/cli.mjs (W2)
+// relay-mcp — 命令行接口
 // `node src/cli.mjs <tool> [--root path] [--json '{...}' | --json k=v k=v ...]`
 // 复用 contract.mjs 的 dispatch,人类可读输出;isError → exit code 1。
 // verify.sh 与 CI(workflow-relay.yml)通过本文件调用 relay_verify。

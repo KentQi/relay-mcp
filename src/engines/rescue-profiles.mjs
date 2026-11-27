@@ -37,6 +37,9 @@ import { readdir, stat as fsStat } from 'node:fs/promises';
 import path from 'node:path';
 import { readFileSafe } from '../util.mjs';
 
+export const MAX_RESCUE_SCAN_CANDIDATES = 400;
+export const MAX_RESCUE_DISCOVERY_CANDIDATES = MAX_RESCUE_SCAN_CANDIDATES * 10;
+
 const clip = (s, n) => {
   const cps = Array.from(String(s ?? ''));
   return cps.length > n ? cps.slice(0, n).join('') : cps.join('');
@@ -267,15 +270,20 @@ const parseWithFieldMap = (text, map = {}) => {
 const jsonlMessageProfile = (id, title, { roots, agentFilePattern = /^agent-(.+)\.jsonl$/ } = {}) => ({
   id,
   title,
+  kind: 'jsonl-message',
   roots: typeof roots === 'function' ? roots : () => roots || [],
   transcriptless: false,
-  async discover(root, { maxAgeMs = 7 * 86400000 } = {}) {
+  async discover(root, {
+    maxAgeMs = 7 * 86400000,
+    limit = MAX_RESCUE_DISCOVERY_CANDIDATES,
+    match = null,
+  } = {}) {
     const cutoff = Date.now() - maxAgeMs;
     const out = [];
     // 递归到底(最多 MAX_DEPTH 层):不预设 harness 的目录层数,只认文件名模式。
     const MAX_DEPTH = 6;
     const walk = async (dir, depth) => {
-      if (depth > MAX_DEPTH || out.length >= 400) return;
+      if (depth > MAX_DEPTH || out.length >= limit) return;
       let entries = [];
       try { entries = await readdir(dir, { withFileTypes: true }); } catch { return; }
       for (const e of entries) {
@@ -287,14 +295,16 @@ const jsonlMessageProfile = (id, title, { roots, agentFilePattern = /^agent-(.+)
         let st;
         try { st = await fsStat(p); } catch { continue; }
         if (maxAgeMs > 0 && st.mtimeMs < cutoff) continue;
-        out.push({
+        const candidate = {
           sourcePath: p,
           transcriptPath: p,
           agentId: mm[1],
           parentSessionId: path.basename(path.dirname(path.dirname(dir))),
           mtimeMs: st.mtimeMs,
-        });
-        if (out.length >= 400) return;
+        };
+        if (match && !match(candidate)) continue;
+        out.push(candidate);
+        if (out.length >= limit) return;
       }
     };
     await walk(root, 0);
@@ -308,9 +318,47 @@ const jsonlMessageProfile = (id, title, { roots, agentFilePattern = /^agent-(.+)
 const jsonMetadataProfile = (id, title, { roots, metaFile = 'metadata.json', fieldMap = {} } = {}) => ({
   id,
   title,
+  kind: 'json-metadata',
+  metaFile,
+  fieldMap,
   roots: typeof roots === 'function' ? roots : () => roots || [],
   transcriptless: true,
-  async discover(root, { maxAgeMs = 7 * 86400000 } = {}) {
+  readMetadata(meta, { sourcePath = '', fallbackId = '', parentSessionId = '' } = {}) {
+    const map = {
+      agentId: 'agentId', parentSessionId: 'parentSessionId',
+      cwd: ['cwd', 'workspaceRoot'], status: 'status', error: 'error',
+      prompt: 'prompt', description: 'description', profile: 'profileId',
+      createdAt: 'createdAt', updatedAt: ['updatedAt', 'completedAt'],
+      ...fieldMap,
+    };
+    const pick = (obj, spec) => {
+      const keys = Array.isArray(spec) ? spec : [spec];
+      for (const k of keys) {
+        const v = obj && obj[k];
+        if (typeof v === 'string' && v) return v;
+      }
+      return '';
+    };
+    return {
+      sourcePath,
+      transcriptPath: '',
+      agentId: pick(meta, map.agentId) || String(fallbackId || '').replace(/^agent[_-]/, ''),
+      parentSessionId: pick(meta, map.parentSessionId) || parentSessionId,
+      cwd: pick(meta, map.cwd),
+      status: pick(meta, map.status),
+      error: pick(meta, map.error),
+      prompt: pick(meta, map.prompt),
+      description: pick(meta, map.description),
+      agentType: pick(meta, map.profile),
+      createdAt: pick(meta, map.createdAt),
+      updatedAt: pick(meta, map.updatedAt),
+    };
+  },
+  async discover(root, {
+    maxAgeMs = 7 * 86400000,
+    limit = MAX_RESCUE_DISCOVERY_CANDIDATES,
+    match = null,
+  } = {}) {
     const cutoff = Date.now() - maxAgeMs;
     const map = {
       agentId: 'agentId', parentSessionId: 'parentSessionId',
@@ -343,22 +391,17 @@ const jsonMetadataProfile = (id, title, { roots, metaFile = 'metadata.json', fie
         try { meta = JSON.parse(raw); } catch { continue; }
         const updated = Date.parse(pick(meta, map.updatedAt) || pick(meta, map.createdAt) || '');
         if (Number.isFinite(updated) && maxAgeMs > 0 && updated < cutoff) continue;
-        out.push({
-          sourcePath: metaPath,
-          transcriptPath: '',
-          agentId: pick(meta, map.agentId) || agent.name.replace(/^agent[_-]/, ''),
-          parentSessionId: pick(meta, map.parentSessionId) || parent.name,
-          cwd: pick(meta, map.cwd),
-          status: pick(meta, map.status),
-          error: pick(meta, map.error),
-          prompt: pick(meta, map.prompt),
-          description: pick(meta, map.description),
-          agentType: pick(meta, map.profile),
-          createdAt: pick(meta, map.createdAt),
-          updatedAt: pick(meta, map.updatedAt),
+        const candidate = {
+          ...this.readMetadata(meta, {
+            sourcePath: metaPath,
+            fallbackId: agent.name,
+            parentSessionId: parent.name,
+          }),
           mtimeMs: Number.isFinite(updated) ? updated : 0,
-        });
-        if (out.length >= 400) return out;
+        };
+        if (match && !match(candidate)) continue;
+        out.push(candidate);
+        if (out.length >= limit) return out;
       }
     }
     return out;

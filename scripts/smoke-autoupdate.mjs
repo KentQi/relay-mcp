@@ -37,6 +37,9 @@ const ok = (cond, label, extra = '') => {
   if (cond) { pass += 1; console.log(`  ✓ ${label}`); }
   else { fail += 1; console.log(`  ✗ FAIL ${label}${extra ? ' — ' + String(extra).slice(0, 400) : ''}`); }
 };
+const expect = (cond, label) => {
+  if (!cond) throw new Error(label);
+};
 const tmpDirs = [];
 const mkTmp = (tag) => { const d = mkdtempSync(path.join(tmpdir(), `relay-au-${tag}-`)); tmpDirs.push(d); return d; };
 // Wrapper fallback state/log files use os.homedir(); pin every fixture to a
@@ -75,21 +78,27 @@ process.stdin.on('end',()=>process.exit(0));`;
 
 // 建夹具:origin(普通仓)+ clone 的工作仓,复制启动器到 work/scripts/
 // (同时验证「脚本在仓库内」这一交付形态:夹具跑的就是仓库里那份启动器)。
-const makeFixture = (tag) => {
+const makeFixture = (tag, { objectFormat = '', refFormat = '' } = {}) => {
   const root = mkTmp(tag);
   const origin = path.join(root, 'origin');
   const work = path.join(root, 'work');
   mkdirSync(origin, { recursive: true });
   mkdirSync(path.join(origin, 'src'), { recursive: true });
   mkdirSync(path.join(origin, 'scripts'), { recursive: true });
-  git(origin, 'init', '--initial-branch=main');
+  const initArgs = ['init', '--initial-branch=main'];
+  if (objectFormat) initArgs.push(`--object-format=${objectFormat}`);
+  if (refFormat) initArgs.push(`--ref-format=${refFormat}`);
+  git(origin, ...initArgs);
   writeFileSync(path.join(origin, 'src', 'index.mjs'), RESPONDER);
   // 启动器先提交进 origin 再 clone:若留在 work 侧,work 会与 origin 分叉,
   // wrapper 正确地拒绝合并,ff 场景就永远测不到(实测踩过)。
   writeFileSync(path.join(origin, 'scripts', 'relay-mcp-autoupdate.mjs'), readFileSync(WRAPPER_SRC, 'utf8'));
   writeFileSync(path.join(origin, 'README.md'), 'origin\n');
   commit(origin, 'init');
-  git(root, 'clone', '--quiet', origin, work);
+  const cloneArgs = ['clone', '--quiet'];
+  if (refFormat) cloneArgs.push(`--ref-format=${refFormat}`);
+  cloneArgs.push(origin, work);
+  git(root, ...cloneArgs);
   return { root, origin, work };
 };
 const head = (repo) => git(repo, 'rev-parse', 'HEAD');
@@ -172,10 +181,17 @@ try {
   console.log('== 1. 静态不变量:真实行为之外的调用点保护 ==');
   {
     const src = readFileSync(WRAPPER_SRC, 'utf8');
-    ok(/\[\s*'merge'\s*,\s*'--ff-only'/.test(src),
-      '合并调用点精确匹配 git([merge, --ff-only])');
-    ok(/rev-list['",\s]+'--count'/.test(src.replace(/\n/g, ' ')) && !/behind\.ok \? Number\([^)]*\) : 0/.test(src),
-      'rev-list 失败不再折算成 0(fail-closed)');
+    ok(/atomicFastForwardMain/.test(src) && /'read-tree', '-m', '-u'/.test(src)
+      && !/'read-tree', '--reset', '-u'/.test(src)
+      && /'update-ref'[\s\S]*'refs\/heads\/main'/.test(src)
+      && !/renameSync\(mainLockPath, mainRef\)/.test(src)
+      && !/\bgit\(\[\s*'merge'\s*,\s*'--ff-only'/.test(src),
+      '更新使用 Git update-ref 显式 main CAS + 两树安全转换,不手写 loose ref 或 merge');
+    ok(/rev-list['",\s]+'--left-right'[\s\S]*\$\{beforeSha\}\.\.\.\$\{upstreamSha\}/.test(src)
+      && /merge-base['",\s]+'--is-ancestor'[\s\S]*beforeSha[\s\S]*upstreamSha/.test(src)
+      && !/HEAD\.\.\.origin\/main/.test(src)
+      && !/behind\.ok \? Number\([^)]*\) : 0/.test(src),
+      'ahead/behind 使用捕获的 before/upstream SHA,并显式验证快进祖先关系');
   }
 
   console.log('\n== 2. 干净且落后 → 只快进到上游顶端 ==');
@@ -186,10 +202,11 @@ try {
     const r = await probe(f.work);
     ok(r.code === 0, '包装器正常退出', `code=${r.code} err=${r.err.slice(0, 150)}`);
     ok(/relay-mcp-fixture/.test(r.out) && /ff-new/.test(r.out), '经包装器启动更新后的 MCP 应答 initialize', r.out.slice(0, 150));
-    ok(head(f.work) === upstreamTip, 'HEAD 被只快进到上游顶端(merge 真的发生且只快进)',
+    ok(head(f.work) === upstreamTip, 'main 被 CAS 更新到上游顶端(真实前移)',
       `before=${before.slice(0, 7)} tip=${upstreamTip.slice(0, 7)} now=${head(f.work).slice(0, 7)}`);
     ok(status(f.work) === '', '成功合并后工作树干净');
     ok(!existsSync(path.join(f.work, '.git', 'relay-autoupdate.lock')), '成功合并后更新锁已释放');
+    ok(!existsSync(path.join(f.work, '.git', 'relay-autoupdate-transaction.json')), '成功合并后事务 journal 已释放');
     ok(!/^\[relay-autoupdate\]/m.test(r.out), 'git/更新日志没有污染 MCP stdout');
   }
 
@@ -236,21 +253,18 @@ try {
     }
   }
 
-  console.log('\n== 5. ref 更新失败留下混合树 → 拒绝启动 MCP ==');
+  console.log('\n== 5. ref lock 被占用 → 写入前拒绝且有效工作树不动 ==');
   {
     const f = makeFixture('mixed');
     const before = head(f.work);
     bumpOrigin(f, 'mixed-new');
     mkdirSync(path.join(f.work, '.git', 'refs', 'heads'), { recursive: true });
-    // 真实 git ff 会先写 index/工作树,再尝试更新 refs/heads/main。
     writeFileSync(path.join(f.work, '.git', 'refs', 'heads', 'main.lock'), 'blocked\n');
     const r = await probe(f.work, { scriptPath: WRAPPER_SRC, args: [f.work] });
-    ok(r.code === 2, '混合树被判定为未知状态,包装器 exit 2', `code=${r.code} err=${r.err.slice(0, 250)}`);
-    ok(!/relay-mcp-fixture/.test(r.out), '拒绝从混合树启动 MCP(没有 initialize 应答)');
-    ok(head(f.work) === before, 'ref 更新失败后 HEAD 仍是 before');
-    ok(status(f.work) !== '', '夹具确实制造了工作树/index 与 HEAD 不一致');
-    ok(/状态未知|混合树/.test(r.err), '报错明确说明不能从可疑树启动', r.err.slice(0, 250));
-    ok(!/已更新|已是最新/.test(logOf(f)), '混合树失败没有写成功状态');
+    ok(r.code === 0 && /relay-mcp-fixture/.test(r.out), 'ref lock 占用时仍启动当前版本', `code=${r.code} err=${r.err.slice(0, 250)}`);
+    ok(head(f.work) === before && status(f.work) === '', 'ref lock 在现实写入前就阻止更新,不产生混合树');
+    ok(/main CAS 更新被拒|main\.lock/.test(logOf(f)) && !/已更新|已是最新/.test(logOf(f)),
+      'ref lock 争用记为 fail,不写成功状态');
   }
 
   console.log('\n== 6. 并发两个 launcher → 有界等锁后启动当前版本 ==');
@@ -349,20 +363,22 @@ if (args.includes('symbolic-ref')) {
     ok(head(other.work) === otherBefore && status(other.work) === '', '另一个仓库的 HEAD/index 没有被污染环境改写');
   }
 
-  console.log('\n== 9. merge 返回成功但 HEAD 未到 origin/main → 不能 finish(ok) ==');
+  console.log('\n== 9. main CAS 成功但工作树同步失败 → 不能 finish(ok) ==');
   {
     const f = makeFixture('fake-success');
     const before = head(f.work);
     bumpOrigin(f, 'not-merged');
-    const fakeGit = writeShim(f.root, 'git-fake-merge.mjs', `
-if (args.includes('merge')) process.exit(0);`);
+    const fakeGit = writeShim(f.root, 'git-fake-read-tree.mjs', `
+if (args.includes('read-tree')) process.exit(0);`);
     const r = await probe(f.work, {
       scriptPath: WRAPPER_SRC, args: [f.work], env: { GIT_BIN: fakeGit },
     });
     ok(r.code === 2, 'HEAD != origin/main 时拒绝启动', `code=${r.code} err=${r.err.slice(0, 200)}`);
     ok(!/relay-mcp-fixture/.test(r.out), '假成功没有启动 MCP');
-    ok(head(f.work) === before, '假成功场景 HEAD 保持原样');
-    ok(failedCheck(f) && !/已更新/.test(logOf(f)), 'after 校验失败没有写 ok');
+    ok(head(f.work) !== before, 'main ref 已 CAS 前移,错误只出现在后续工作树复核');
+    ok(status(f.work) !== '', '夹具保留可识别的混合树,供人工恢复');
+    ok(readLauncherState(f.work).lastResult !== 'ok' && !/已更新/.test(logOf(f)),
+      'after 校验失败没有写 ok');
   }
 
   console.log('\n== 10. 陈旧更新锁可恢复 ==');
@@ -492,7 +508,7 @@ if (args.includes('symbolic-ref')) {
     const before = head(f.work);
     bumpOrigin(f, 'premerge-new');
     const slowRevList = writeShim(f.root, 'git-slow-rev-list.mjs', `
-if (args.includes('HEAD..origin/main')) {
+if (args.some((arg) => String(arg).includes('...'))) {
   Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 3000);
 }`);
     const r = await probe(f.work, {
@@ -524,6 +540,336 @@ if (args.includes('HEAD..origin/main')) {
     ok(head(f.work) === before && existsSync(lock), '未更新且未删除仍新鲜的他人锁');
     ok(/时间预算耗尽/.test(logOf(f)) && readLauncherState(f.work).lastResult === 'fail',
       '等锁耗尽预算记为 fail 并写入冷却');
+  }
+
+  console.log('\n== 17. ahead-only main → skip-diverged,不写 6h success ==');
+  {
+    const f = makeFixture('ahead-only');
+    writeFileSync(path.join(f.work, 'local-only.txt'), 'local\n');
+    commit(f.work, 'local only main');
+    const before = head(f.work);
+    const r = await probe(f.work, { scriptPath: WRAPPER_SRC, args: [f.work] });
+    const log = logOf(f);
+    const state = readLauncherState(f.work);
+    ok(r.code === 0 && /relay-mcp-fixture/.test(r.out), 'ahead-only 仍启动当前 MCP', `code=${r.code}`);
+    ok(head(f.work) === before, 'ahead-only HEAD 不动');
+    ok(/独有提交/.test(log) && !/已是最新/.test(log), 'ahead-only 被标记为本地独有提交,不谎报已最新', log.slice(-300));
+    ok(state.lastResult !== 'ok', 'ahead-only 不写 6h success 冷却', JSON.stringify(state));
+  }
+
+  console.log('\n== 18. 分支守卫在显式 main CAS 前后 → 不得移动 relay 分支 ==');
+  {
+    const f = makeFixture('branch-race');
+    const before = head(f.work);
+    const upstreamTip = bumpOrigin(f, 'race-new');
+    git(f.work, 'branch', 'relay/race', before);
+    const switchGit = writeShim(f.root, 'git-switch-branch.mjs', `
+if (args.includes('--left-right')) {
+  const r = spawnSync(${JSON.stringify(GIT_EXEC)}, ['-C', process.env.AU_WORK, 'checkout', '-q', 'relay/race'], { stdio: 'ignore' });
+  if (r.status !== 0) process.exit(r.status ?? 1);
+}`);
+    const r = await probe(f.work, {
+      scriptPath: WRAPPER_SRC, args: [f.work],
+      env: { GIT_BIN: switchGit, AU_WORK: f.work },
+    });
+    ok(r.code === 0 && /relay-mcp-fixture/.test(r.out), 'rev-list 阶段切分支仍启动当前 MCP', `code=${r.code} err=${r.err.slice(0, 160)}`);
+    ok(git(f.work, 'symbolic-ref', '--short', 'HEAD') === 'relay/race', '夹具在更新检查中途切到 relay/race');
+    ok(head(f.work) === before && git(f.work, 'rev-parse', 'relay/race') === before,
+      '写入前分支复验阻止 relay 分支被快进');
+    ok(git(f.work, 'rev-parse', 'main') === before && upstreamTip !== before,
+      'main 也未被这次被拒绝的更新移动');
+    ok(readLauncherState(f.work).lastResult === 'fail', '分支竞态记 fail,不写 success');
+
+    const f2 = makeFixture('branch-race-final');
+    const before2 = head(f2.work);
+    const upstream2 = bumpOrigin(f2, 'race-final-new');
+    git(f2.work, 'branch', 'relay/race-final', before2);
+    const finalSwitchGit = writeShim(f2.root, 'git-switch-at-read-tree.mjs', `
+if (args.includes('read-tree')) {
+  spawnSync(${JSON.stringify(GIT_EXEC)}, ['-C', process.env.AU_WORK, 'checkout', '-q', 'relay/race-final'], { stdio: 'ignore' });
+}`);
+    const final = await probe(f2.work, {
+      scriptPath: WRAPPER_SRC, args: [f2.work],
+      env: { GIT_BIN: finalSwitchGit, AU_WORK: f2.work },
+    });
+    ok(final.code === 0 && /race-final-new/.test(final.out), '最终写入边界完成 main 更新并启动新版', `code=${final.code} err=${final.err.slice(0, 160)}`);
+    ok(git(f2.work, 'symbolic-ref', '--short', 'HEAD') === 'main', 'HEAD.lock 阻止真实 read-tree 前的切分支');
+    ok(git(f2.work, 'rev-parse', 'relay/race-final') === before2 && head(f2.work) === upstream2,
+      '最终竞态只前移 main,任务分支 SHA 原样不变');
+  }
+
+  console.log('\n== 19. 空/半 JSON 陈旧更新锁可恢复 ==');
+  for (const [tag, content] of [['empty', ''], ['partial', '{"token":"half']]) {
+    const f = makeFixture(`stale-${tag}`);
+    const upstreamTip = bumpOrigin(f, `stale-${tag}-new`);
+    const lock = path.join(f.work, '.git', 'relay-autoupdate.lock');
+    const old = new Date(Date.now() - 120000);
+    writeFileSync(lock, content);
+    utimesSync(lock, old, old);
+    const r = await probe(f.work, { scriptPath: WRAPPER_SRC, args: [f.work] });
+    ok(r.code === 0 && new RegExp(`stale-${tag}-new`).test(r.out), `${tag}: 陈旧损坏锁恢复并启动新版本`, `code=${r.code}`);
+    ok(head(f.work) === upstreamTip && !existsSync(lock), `${tag}: 更新完成且旧锁已 CAS 清除`);
+  }
+
+  console.log('\n== 20. merge 前更新锁被替换 → fail-closed 且不误删新锁 ==');
+  {
+    const f = makeFixture('lock-replaced');
+    const before = head(f.work);
+    bumpOrigin(f, 'replaced-new');
+    const lock = path.join(f.work, '.git', 'relay-autoupdate.lock');
+    const replaceGit = writeShim(f.root, 'git-replace-lock.mjs', `
+if (args.includes('fetch')) {
+  require('node:fs').writeFileSync(process.env.AU_LOCK, JSON.stringify({
+    token: 'replacement-token',
+    pid: process.pid,
+    acquiredAt: Date.now()
+  }));
+}`);
+    const r = await probe(f.work, {
+      scriptPath: WRAPPER_SRC, args: [f.work],
+      env: { GIT_BIN: replaceGit, AU_LOCK: lock },
+    });
+    ok(r.code === 0 && /relay-mcp-fixture/.test(r.out), '锁被替换后仍启动当前 MCP', `code=${r.code}`);
+    ok(head(f.work) === before, '锁 fencing 失败时 HEAD 不动');
+    ok(existsSync(lock) && JSON.parse(readFileSync(lock, 'utf8')).token === 'replacement-token',
+      '旧持有者退出时不删除替换者的同 inode 锁');
+    ok(/更新锁.*替换|更新锁.*丢失/.test(logOf(f)) && readLauncherState(f.work).lastResult !== 'ok',
+      '锁 fencing 失败记 fail,不写 success', logOf(f).slice(-300));
+
+    const f2 = makeFixture('lock-replaced-final');
+    bumpOrigin(f2, 'replaced-final-new');
+    const lock2 = path.join(f2.work, '.git', 'relay-autoupdate.lock');
+    const finalReplaceGit = writeShim(f2.root, 'git-replace-lock-read-tree.mjs', `
+if (args.includes('read-tree')) {
+  require('node:fs').writeFileSync(process.env.AU_LOCK, JSON.stringify({
+    token: 'replacement-final',
+    pid: process.pid,
+    acquiredAt: Date.now()
+  }));
+}`);
+    const final = await probe(f2.work, {
+      scriptPath: WRAPPER_SRC, args: [f2.work],
+      env: { GIT_BIN: finalReplaceGit, AU_LOCK: lock2 },
+    });
+    ok(final.code === 2 && !/relay-mcp-fixture/.test(final.out), '最终写入期间锁被替换 → 拒绝启动 MCP', `code=${final.code}`);
+    ok(existsSync(lock2) && JSON.parse(readFileSync(lock2, 'utf8')).token === 'replacement-final',
+      '最终 fencing 失败不误删替换锁');
+    ok(/更新锁在写操作期间被替换/.test(logOf(f2)) && readLauncherState(f2.work).lastResult !== 'ok',
+      '最终 fencing 失败不写 success');
+  }
+
+  console.log('\n== 21. 上游 ref 在比较途中移动 → 只认已捕获的不可变 SHA ==');
+  {
+    const f = makeFixture('upstream-race');
+    const before = head(f.work);
+    bumpOrigin(f, 'upstream-race-new');
+    const moveUpstreamGit = writeShim(f.root, 'git-move-upstream.mjs', `
+if (args.includes('--left-right')) {
+  const r = spawnSync(${JSON.stringify(GIT_EXEC)}, [
+    '-C', process.env.AU_WORK, 'update-ref', 'refs/remotes/origin/main', process.env.AU_BEFORE
+  ], { stdio: 'ignore' });
+  if (r.status !== 0) process.exit(r.status ?? 1);
+}`);
+    const r = await probe(f.work, {
+      scriptPath: WRAPPER_SRC, args: [f.work],
+      env: { GIT_BIN: moveUpstreamGit, AU_WORK: f.work, AU_BEFORE: before },
+    });
+    ok(r.code === 0 && /relay-mcp-fixture/.test(r.out),
+      'ref 竞态下仍启动未更新的当前版本', `code=${r.code} err=${r.err.slice(0, 160)}`);
+    ok(head(f.work) === before && status(f.work) === '',
+      '比较途中移动 origin/main 不会推进本地 main 或工作树');
+    ok(readLauncherState(f.work).lastResult === 'fail'
+      && /上游.*(?:变化|移动)|origin\/main.*(?:变化|移动)/.test(logOf(f))
+      && !/已是最新/.test(logOf(f)),
+      '上游 ref 移动按 fail-closed 处理,不写“已是最新”',
+      JSON.stringify(readLauncherState(f.work)) + ' ' + logOf(f).slice(-300));
+  }
+
+  console.log('\n== 22. 工作树同步使用 Git 合并语义 → 不覆盖并发 tracked edit ==');
+  {
+    const f = makeFixture('local-edit-race');
+    const before = head(f.work);
+    bumpOrigin(f, 'local-edit-new');
+    const localEdit = path.join(f.work, 'README.md');
+    const editDuringSyncGit = writeShim(f.root, 'git-edit-before-read-tree.mjs', `
+if (args.includes('read-tree')) {
+  require('node:fs').writeFileSync(process.env.AU_EDIT, 'concurrent local edit\\n');
+}`);
+    const r = await probe(f.work, {
+      scriptPath: WRAPPER_SRC, args: [f.work],
+      env: { GIT_BIN: editDuringSyncGit, AU_EDIT: localEdit },
+    });
+    ok(r.code === 2 && !/relay-mcp-fixture/.test(r.out),
+      '同步阶段出现本地修改时必须 fail-closed,不以混合状态启动', `code=${r.code} err=${r.err.slice(0, 200)}`);
+    ok(readFileSync(localEdit, 'utf8') === 'concurrent local edit\n',
+      'Git-native 工作树转换拒绝覆盖并发 tracked edit',
+      readFileSync(localEdit, 'utf8'));
+    ok(head(f.work) === before && git(f.work, 'rev-parse', 'main') === before,
+      '同步失败后 main ref 回滚到更新前 SHA');
+    ok(readLauncherState(f.work).lastResult !== 'ok'
+      && /工作树|本地修改|read-tree/.test(logOf(f)),
+      '同步拒绝记 fail,不写 success', logOf(f).slice(-300));
+  }
+
+  console.log('\n== 23. main ref 已发布但工作树未同步时进程被 SIGKILL → 下次拒绝混合树 ==');
+  {
+    const f = makeFixture('crash-after-ref');
+    const before = head(f.work);
+    const upstreamTip = bumpOrigin(f, 'crash-after-ref-new');
+    const crashAtSyncGit = writeShim(f.root, 'git-crash-before-read-tree.mjs', `
+if (args.includes('read-tree')) {
+  process.kill(process.ppid, 'SIGKILL');
+  process.exit(0);
+}`);
+    const first = await probe(f.work, {
+      scriptPath: WRAPPER_SRC, args: [f.work], timeoutMs: 10000,
+      env: { GIT_BIN: crashAtSyncGit },
+    });
+    ok(first.code !== 0 && !/relay-mcp-fixture/.test(first.out),
+      'ref 发布后、工作树同步前被 SIGKILL,本次不启动 MCP',
+      `code=${first.code} out=${first.out.slice(0, 100)} err=${first.err.slice(0, 120)}`);
+    ok(head(f.work) === upstreamTip && status(f.work) !== '',
+      '夹具形成 HEAD 已前移但工作树仍旧的混合状态');
+
+    const second = await probe(f.work, { scriptPath: WRAPPER_SRC, args: [f.work] });
+    ok(second.code === 2 && !/relay-mcp-fixture/.test(second.out),
+      '下次启动识别未完成事务并拒绝从混合树启动',
+      `code=${second.code} err=${second.err.slice(0, 200)}`);
+    ok(/事务|transaction|工作树|index/.test(logOf(f)),
+      '拒绝原因点名未完成自更新事务', logOf(f).slice(-400));
+  }
+
+  console.log('\n== 24. ref 与工作树均已同步但 journal 未清 → 下次恢复后启动新版 ==');
+  {
+    const f = makeFixture('crash-after-sync');
+    bumpOrigin(f, 'crash-after-sync-new');
+    const marker = path.join(f.root, 'read-tree-complete');
+    const crashAfterSyncGit = writeShim(f.root, 'git-crash-after-read-tree.mjs', `
+const fs = require('node:fs');
+if (args.includes('read-tree')) fs.writeFileSync(process.env.AU_SYNC_MARKER, 'done');
+if (fs.existsSync(process.env.AU_SYNC_MARKER)
+    && args.includes('rev-parse') && args.includes('HEAD')) {
+  process.kill(process.ppid, 'SIGKILL');
+  process.exit(0);
+}`);
+    const first = await probe(f.work, {
+      scriptPath: WRAPPER_SRC, args: [f.work], timeoutMs: 10000,
+      env: { GIT_BIN: crashAfterSyncGit, AU_SYNC_MARKER: marker },
+    });
+    ok(first.code !== 0 && !/relay-mcp-fixture/.test(first.out),
+      '工作树同步后、journal 清理前被 SIGKILL,本次不启动 MCP');
+    ok(status(f.work) === '', '强制终止时 HEAD/index/worktree 已经一致');
+
+    const second = await probe(f.work, { scriptPath: WRAPPER_SRC, args: [f.work] });
+    ok(second.code === 0 && /crash-after-sync-new/.test(second.out),
+      '端点一致的未清 journal 可安全恢复并启动新版', `code=${second.code} err=${second.err.slice(0, 160)}`);
+    ok(!existsSync(path.join(f.work, '.git', 'relay-autoupdate-transaction.json')),
+      '恢复后 journal 已清理');
+  }
+
+  console.log('\n== 25. HEAD 的 ABA 回切不能掩护本地独有提交 ==');
+  {
+    const f = makeFixture('head-aba');
+    const common = head(f.work);
+    const upstreamTip = bumpOrigin(f, 'head-aba-upstream');
+    writeFileSync(path.join(f.work, 'local-only-aba.txt'), 'local only\n');
+    commit(f.work, 'local-only ABA commit');
+    const localTip = head(f.work);
+    const abaGit = writeShim(f.root, 'git-head-aba.mjs', `
+if (args.includes('--left-right')) {
+  const switched = spawnSync(${JSON.stringify(GIT_EXEC)}, [
+    '-C', process.env.AU_WORK, 'update-ref', 'refs/heads/main', process.env.AU_COMMON
+  ], { stdio: 'ignore' });
+  if (switched.status !== 0) process.exit(switched.status ?? 1);
+  const counted = spawnSync(${JSON.stringify(GIT_EXEC)}, args, { stdio: 'inherit' });
+  const restored = spawnSync(${JSON.stringify(GIT_EXEC)}, [
+    '-C', process.env.AU_WORK, 'update-ref', 'refs/heads/main', process.env.AU_LOCAL
+  ], { stdio: 'ignore' });
+  if (restored.status !== 0) process.exit(restored.status ?? 1);
+  process.exit(counted.status ?? 1);
+}`);
+    const r = await probe(f.work, {
+      scriptPath: WRAPPER_SRC, args: [f.work],
+      env: {
+        GIT_BIN: abaGit, AU_WORK: f.work, AU_COMMON: common,
+        AU_LOCAL: localTip,
+      },
+    });
+    ok(r.code === 0 && /relay-mcp-fixture/.test(r.out),
+      'HEAD ABA 期间仍启动本地当前版本', `code=${r.code} err=${r.err.slice(0, 160)}`);
+    ok(head(f.work) === localTip && readFileSync(path.join(f.work, 'local-only-aba.txt'), 'utf8') === 'local only\n',
+      'ahead/behind 以捕获的 before SHA 比较,本地提交未被覆盖');
+    ok(git(f.work, 'rev-parse', 'main') === localTip && upstreamTip !== localTip,
+      'ABA 回切不能把上游快进当作合法操作');
+    ok(readLauncherState(f.work).lastResult !== 'ok'
+      && /独有提交/.test(logOf(f)),
+      'ABA 场景按 diverged fail-closed', logOf(f).slice(-300));
+  }
+
+  console.log('\n== 26. journal 前置:ref CAS 执行前被 SIGKILL → 下次可恢复 ==');
+  {
+    const f = makeFixture('pre-ref-crash');
+    const before = head(f.work);
+    bumpOrigin(f, 'pre-ref-new');
+    const headLock = path.join(f.work, '.git', 'HEAD.lock');
+    const transaction = path.join(f.work, '.git', 'relay-autoupdate-transaction.json');
+    const crashBeforeRefGit = writeShim(f.root, 'git-crash-before-ref-update.mjs', `
+if (args.includes('update-ref')) {
+  process.kill(process.ppid, 'SIGKILL');
+  process.exit(0);
+}`);
+    const first = await probe(f.work, {
+      scriptPath: WRAPPER_SRC, args: [f.work], timeoutMs: 10000,
+      env: { GIT_BIN: crashBeforeRefGit },
+    });
+    ok(first.code !== 0, 'ref CAS 前强杀,本次不启动 MCP', `code=${first.code}`);
+    ok(existsSync(transaction) && !existsSync(headLock),
+      '强杀现场留下 journal,但尚未创建任何 Git guard');
+
+    const second = await probe(f.work, { scriptPath: WRAPPER_SRC, args: [f.work] });
+    ok(second.code === 0 && /relay-mcp-fixture/.test(second.out),
+      '前置 journal 让下一次启动识别未发布端点并继续',
+      `code=${second.code} err=${second.err.slice(0, 180)}`);
+    ok(head(f.work) === before && !existsSync(headLock),
+      '未发布 ref 的中断恢复到 before 端点且没有 guard 泄漏');
+    ok(!existsSync(path.join(f.work, '.git', 'relay-autoupdate.lock'))
+      && !existsSync(path.join(f.work, '.git', 'relay-autoupdate-transaction.json')),
+      '恢复后更新锁与事务 journal 均清理');
+  }
+
+  console.log('\n== 27. SHA-256 对象格式仓库同样可自更新 ==');
+  {
+    const f = makeFixture('sha256', { objectFormat: 'sha256' });
+    expect(git(f.work, 'rev-parse', '--show-object-format') === 'sha256',
+      'Git 支持 SHA-256 fixture');
+    const upstreamTip = bumpOrigin(f, 'sha256-new');
+    expect(upstreamTip.length === 64, `SHA-256 tip 长度=${upstreamTip.length}`);
+    const r = await probe(f.work, { scriptPath: WRAPPER_SRC, args: [f.work] });
+    ok(r.code === 0 && /sha256-new/.test(r.out),
+      'SHA-256 仓库完成更新并启动新版', `code=${r.code} err=${r.err.slice(0, 180)}`);
+    ok(head(f.work) === upstreamTip && upstreamTip.length === 64,
+      'SHA-256 main 被更新到 64 位上游 SHA');
+  }
+
+  console.log('\n== 28. reftable ref 后端由 Git update-ref 正常发布 ==');
+  {
+    const probeDir = mkTmp('reftable-probe');
+    const support = spawnSync(GIT_EXEC, ['init', '--quiet', '--ref-format=reftable', probeDir], {
+      encoding: 'utf8',
+      env: { ...process.env, HOME: TEST_HOME, USERPROFILE: TEST_HOME },
+    });
+    if (support.status === 0) {
+      const f = makeFixture('reftable', { refFormat: 'reftable' });
+      expect(git(f.work, 'rev-parse', '--show-ref-format') === 'reftable', 'fixture uses reftable');
+      const upstreamTip = bumpOrigin(f, 'reftable-new');
+      const r = await probe(f.work, { scriptPath: WRAPPER_SRC, args: [f.work] });
+      ok(r.code === 0 && /reftable-new/.test(r.out),
+        'reftable 仓库完成更新并启动新版', `code=${r.code} err=${r.err.slice(0, 180)}`);
+      ok(head(f.work) === upstreamTip,
+        'reftable main 通过 Git 原生 update-ref 到达上游');
+    } else {
+      console.log('  - SKIP reftable: 当前 Git 不支持 --ref-format=reftable');
+    }
   }
 } catch (e) {
   fail += 1;

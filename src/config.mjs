@@ -39,14 +39,25 @@ export const KNOWN_MANIFEST_KEYS = Object.freeze([
 ]);
 export const KNOWN_NESTED_KEYS = Object.freeze({
   worktree: ['enabled', 'cacheDir', 'ttlHours', 'autoCleanup'],
-  facts: ['enabled', 'since', 'strict'],
+  facts: ['enabled', 'since', 'baselineSha', 'strict'],
   logBoundary: ['strict'],
   structure: ['strict'],
   acceptance: ['commands', 'timeoutMs'],
   rescue: ['sources', 'maxAgeDays', 'maxBytes', 'profiles', 'autoLaunch'],
 });
+export const KNOWN_DEEP_KEYS = Object.freeze({
+  'rescue.autoLaunch': ['enabled', 'command', 'cwd', 'timeoutMs', 'maxOutputBytes'],
+});
+export const KNOWN_ARRAY_OBJECT_KEYS = Object.freeze({
+  'rescue.sources': ['profile', 'root'],
+  'rescue.profiles': ['id', 'title', 'kind', 'roots', 'filePattern', 'metaFile', 'fieldMap', 'tables', 'session', 'message', 'part', 'maxRows'],
+  'rescue.profiles.tables': ['session', 'message', 'part'],
+  'rescue.profiles.session': ['id', 'directory', 'parentId', 'title'],
+  'rescue.profiles.message': ['sessionId', 'data', 'sequence', 'id'],
+  'rescue.profiles.part': ['sessionId', 'messageId', 'data', 'sequence', 'id'],
+});
 
-// 收集 manifest 里的未知键(顶层 + 四个已知对象内)。纯函数,不做 I/O。
+// 收集 manifest 里的未知键(顶层 + 已知对象层级)。纯函数,不做 I/O。
 export const collectUnknownManifestKeys = (m) => {
   const unknown = [];
   if (!m || typeof m !== 'object' || Array.isArray(m)) return unknown;
@@ -55,6 +66,39 @@ export const collectUnknownManifestKeys = (m) => {
     const obj = m[parent];
     if (obj && typeof obj === 'object' && !Array.isArray(obj)) {
       for (const k of Object.keys(obj)) if (!keys.includes(k)) unknown.push(`${parent}.${k}`);
+    }
+  }
+  for (const [parent, keys] of Object.entries(KNOWN_DEEP_KEYS)) {
+    const obj = parent.split('.').reduce((cur, key) => (
+      cur && typeof cur === 'object' && !Array.isArray(cur) ? cur[key] : null
+    ), m);
+    if (obj && typeof obj === 'object' && !Array.isArray(obj)) {
+      for (const k of Object.keys(obj)) if (!keys.includes(k)) unknown.push(`${parent}.${k}`);
+    }
+  }
+  const collectArrayObjects = (arr, prefix, keys) => {
+    if (!Array.isArray(arr)) return;
+    for (let i = 0; i < arr.length; i += 1) {
+      const obj = arr[i];
+      if (!obj || typeof obj !== 'object' || Array.isArray(obj)) continue;
+      for (const k of Object.keys(obj)) if (!keys.includes(k)) unknown.push(`${prefix}[${i}].${k}`);
+    }
+  };
+  const rescue = m.rescue && typeof m.rescue === 'object' && !Array.isArray(m.rescue) ? m.rescue : null;
+  collectArrayObjects(rescue?.sources, 'rescue.sources', KNOWN_ARRAY_OBJECT_KEYS['rescue.sources']);
+  if (Array.isArray(rescue?.profiles)) {
+    collectArrayObjects(rescue.profiles, 'rescue.profiles', KNOWN_ARRAY_OBJECT_KEYS['rescue.profiles']);
+    for (let i = 0; i < rescue.profiles.length; i += 1) {
+      const spec = rescue.profiles[i];
+      if (!spec || typeof spec !== 'object' || Array.isArray(spec)) continue;
+      for (const nested of ['tables', 'session', 'message', 'part']) {
+        const obj = spec[nested];
+        if (!obj || typeof obj !== 'object' || Array.isArray(obj)) continue;
+        const keys = KNOWN_ARRAY_OBJECT_KEYS[`rescue.profiles.${nested}`];
+        for (const k of Object.keys(obj)) {
+          if (!keys.includes(k)) unknown.push(`rescue.profiles[${i}].${nested}.${k}`);
+        }
+      }
     }
   }
   return unknown.sort();
@@ -187,8 +231,8 @@ export const readManifestConfig = async (root, { manifest: preloaded } = {}) => 
     facts: {
       enabled: !!(m && m.facts && m.facts.enabled === true),
       since: m && m.facts && typeof m.facts.since === 'string' && m.facts.since.trim() ? m.facts.since.trim() : null,
-      // 已废弃(T023 起 R10 不再读取):保留解析仅为兼容旧 manifest,不产生任何行为;计划 v2.0 移除。
-      strict: !!(m && m.facts && m.facts.strict === true),
+      baselineSha: m && m.facts && typeof m.facts.baselineSha === 'string' && /^[0-9a-f]{40}$/.test(m.facts.baselineSha)
+        ? m.facts.baselineSha : null,
     },
     // LOG 边界(T024/R12):活跃区行数/完成条目数超限 → WARN;strict 同 facts.strict 风格可升 ERROR。
     // 阈值固定(150 行 / 20 完成条目),不做可配置——避免"把阈值调大"成为消音手段。

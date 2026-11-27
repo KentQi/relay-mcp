@@ -169,6 +169,46 @@ try {
     rmSync(outside, { recursive: true, force: true });
   } finally { rmSync(tmp3, { recursive: true, force: true }); }
 
+  console.log('\n== 相同正文的两次合法归档不能把第二次误判为半写重试 ==');
+  {
+    const dupRoot = mkdtempSync(path.join(tmpdir(), 'relay-archive-duplicate-'));
+    try {
+      run(dupRoot, 'relay_init', { name: 'duplicate history' });
+      const oneEntry = '## 2026-01-03 10:00 | model=x | task=维护\n- 摘要: repeated body\n';
+      const sameLog = ['# 会话日志(最新在上)', '', ...Array.from({ length: 10 }, () => oneEntry)].join('\n');
+      writeFileSync(path.join(dupRoot, 'LOG.md'), sameLog);
+      const first = run(dupRoot, 'relay_archive_log', { confirm: true, keep: 3 });
+      ok(first.status === 0, '相同正文首次归档成功', out(first).slice(0, 300));
+      const live1 = readFileSync(path.join(dupRoot, 'LOG.md'), 'utf8');
+      const rel1 = pointerOf(live1);
+      const archive1 = readFileSync(path.join(dupRoot, rel1), 'utf8');
+      const secondSource = live1.replace(/^(# 会话日志\(最新在上\)\n\n)/, `$1${Array.from({ length: 7 }, () => oneEntry).join('')}`);
+      writeFileSync(path.join(dupRoot, 'LOG.md'), secondSource);
+      const beforeSecond = entryCount(secondSource) + entryCount(archive1);
+      const second = run(dupRoot, 'relay_archive_log', { confirm: true, keep: 3 });
+      ok(second.status === 0 && /实际追加 7 条/.test(out(second)), '第二次相同正文仍实际追加,不谎报幂等', out(second).slice(0, 500));
+      const live2 = readFileSync(path.join(dupRoot, 'LOG.md'), 'utf8');
+      const rel2 = pointerOf(live2);
+      const archive2 = readFileSync(path.join(dupRoot, rel2), 'utf8');
+      ok(entryCount(live2) + entryCount(archive2) === beforeSecond, '相同正文两次归档条目总数守恒',
+        `${beforeSecond} vs ${entryCount(live2)}+${entryCount(archive2)}`);
+    } finally { rmSync(dupRoot, { recursive: true, force: true }); }
+  }
+
+  console.log('\n== 归档保留第一个条目之前的人工标题与说明 ==');
+  {
+    const preRoot = mkdtempSync(path.join(tmpdir(), 'relay-archive-preamble-'));
+    try {
+      run(preRoot, 'relay_init', { name: 'archive preamble' });
+      const custom = ['# 自定义 LOG 标题', '', '> 必须保留的人工说明: 这个仓库把 LOG 用于审计', '', makeLog(10).split('\n').slice(2).join('\n')].join('\n');
+      writeFileSync(path.join(preRoot, 'LOG.md'), custom);
+      const ar = run(preRoot, 'relay_archive_log', { confirm: true, keep: 3 });
+      ok(ar.status === 0, '带人工前言归档成功', out(ar).slice(0, 300));
+      const after = readFileSync(path.join(preRoot, 'LOG.md'), 'utf8');
+      ok(/^# 自定义 LOG 标题/m.test(after) && /必须保留的人工说明/.test(after), '人工 H1 与说明原样保留', after.slice(0, 300));
+    } finally { rmSync(preRoot, { recursive: true, force: true }); }
+  }
+
   console.log('\n== 幂等:低于保留条件 → no-op ==');
   writeFileSync(logPath, ['# 会话日志(最新在上)', '', '## 2026-01-01 10:00 | model=x | task=维护', '- 摘要: only one', ''].join('\n'));
   const smallLog = readFileSync(logPath, 'utf8');

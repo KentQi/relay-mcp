@@ -240,9 +240,3 @@ export const recomputeCommitStats = async (root, parsed, {
   // 回带独立定位到的 sha/base,供 R10 做字段对账(不依赖事实行自报值)。
   return { ...stat, sha, base };
 };
-
-/** @internal 零调用兼容导出:不属于公共 API,保留以避免包外 import 断裂;计划 v2.0 删除。 */
-export const recomputeCommitFileCount = async (root, parsed, opts = {}) => {
-  const stat = await recomputeCommitStats(root, parsed, opts);
-  return stat ? stat.files : null;
-};

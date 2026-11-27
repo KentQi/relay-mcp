@@ -1,6 +1,6 @@
 # relay-mcp 接口契约
 
-> 注:本文档是开源前并行开发的内部 memo("W1-W4"为当时的专家分工编号),保留作为设计记录;绝对路径已脱敏为占位符。
+> 注:本文档是开源前并行开发的内部设计 memo,保留作为设计记录;绝对路径已脱敏为占位符。
 > 2026-11-27 更新:Node 下界已上移至 >=22;npm 分发已冻结(`package.json` `private: true`,安装器/打包面已移除);D8/R12 证据面收窄至 `docs/archive/LOG-*.md`;R11 密钥扫描保持 `docs/archive/*.md` 全量(单层 `.md`,安全面不随证据面收窄)。以下历史段落保留原样,现行口径以各日期补充契约为准。
 
 接力棒 MCP:让任意模型(Claude/Codex/Gemini/Cursor/ZCode…)在任意项目上接力开发。
@@ -28,7 +28,7 @@
 
 以下为修复轮补充的现行语义,覆盖上文同名字段的早期表述:
 
-- **出场双提交**:绿闸(verify 全量 + 验收执行门)通过后,executionRoot 提交任务分支代码(`relay/T###`,SHA₁);成功后 controlRoot **只** `git add -- TASKS.md LOG.md` 并提交(SHA₂,提交信息含 `T### 完成`)。输出两个 SHA;代码提交或控制面提交任一失败 → isError、TASKS/LOG 不改完成状态、保留认领锁,修复后重跑补交。`autoCommit:false` 明确"控制面未提交"。executionRoot 内出现 TASKS/LOG 改动时拒绝/排除,协议文件只由 controlRoot 写。
+- **出场双提交**:绿闸(verify 全量 + 验收执行门)通过后,executionRoot 提交任务分支代码(`relay/T###`,SHA₁);成功后 controlRoot **只** `git add -- TASKS.md LOG.md` 并提交(SHA₂,提交信息含 `T### 完成`)。输出两个 SHA;代码提交或控制面提交任一失败 → isError、TASKS/LOG 不改完成状态、保留认领锁,修复后重跑补交。受管完成遇到 `autoCommit:false` 会在写协议面前 fail-closed;该配置只可用于无 `done_task` 的维护出场。executionRoot 内出现 TASKS/LOG 改动时拒绝,协议文件只由 controlRoot 写。
 - **双根 verify / 成对证据**:受管 worktree 中 controlRoot 跑全量 R 系列,executionRoot 跑代码向检查(R1/R2/R3/R4/R8;跳过 R7/R9/R10/R11/R12 以免读任务分支里的旧协议副本);两侧 ERROR 合并阻断。managed 完成额外校验四项成对证据:任务分支代码提交、controlRoot 完成提交(消息含 `T### 完成`)、controlRoot 的 TASKS/LOG 已提交干净、LOG 记录 branch+代码 SHA;任一缺失 → isError、不落完成状态、可重跑补交。R5/R6 仍按 controlRoot 历史计算(任务分支提交不进入其窗口),跨分支评估留待后续。
 - **根错配 fail-closed(严格)**:任务在 registry 中仍有未完成记录时,从 controlRoot 完成出场**一律 isError**「根错配」并提示在 executionRoot 出场;不再有"干净空树可单根完成"的兼容例外。注册表缺失/损坏/记录丢失时,用 `git worktree list` 反查 `relay/<task>` 是否仍被某 worktree checkout,并检查受管缓存路径 `.relay/worktrees/<task>` / 残留记录路径是否存在——命中同样拒绝(给出重建登记或 executionRoot 出场的修复指令);分支单独存在不视为痕迹。managed 出场 HEAD==baseSha 且无改动 → 拒绝伪 SHA。未登记 linked worktree 的完成出场 fail-closed,维护出场仅告警。
 - **未合并分支可见性与人工合并**:任务分支验收通过 ≠ 已合并;relay 不自动 merge/rebase/push、不删分支。claim/session_start/cleanup 输出未合并 `relay/T###` 清单;人工流程 `git log <控制面分支>..relay/T###` → `git merge --no-ff relay/T###` → 可选 `git branch -d`。
@@ -39,8 +39,10 @@
 - **AGENTS.md 迁移**:R1 无条件要求 AGENTS.md 存在且首行带 `<!-- relay:generated`。缺失 → `relay_sync` 重建;已存在无标记 → `relay_onboard`(备份 + 原正文包进 user-rules)、manifest `entryFilesTakeover:true` 后 `relay_sync`、或手工加标记;verify/sync 输出给出上述可执行选项,不再让修复指令空转。
 - **worktree 配置真值表**:`enabled` 只认 JSON 布尔 `true`(字符串 `"true"`/数字 1 静默按 false);`cacheDir` 只允许 controlRoot 内相对路径(绝对路径、`..`、盘符、控制字符、`.git` 前缀非法,在任何目录创建之前校验);`ttlHours` 非有限数/负数回退 24;`autoCleanup` 仅显式布尔 false 关闭;未知/拼错字段静默忽略(解析行为不变,但 v1.7.0 起 `relay_doctor` 会点名并给最近似键建议);单次 `worktree:true/false` 覆盖配置。无可用 HEAD/git 时 claim 降级为单根并 WARN,不硬失败。
 - **registry 恢复**:`.relay/worktrees.json` 损坏 → 完成出场/claim fail-closed,提示备份或删除该运行时注册表(不猜测受管状态);注册表缺失且目录是 linked worktree → 完成出场拒绝,可回到 controlRoot 重新 `relay_claim {worktree:true}` 重建登记;cleanup 对未登记目录只报告不删,注册表损坏时输出恢复指引。
-- **内容 CAS(T002)**:`writeProtocolFile` 支持 `expectedHash`——写入前重读磁盘比对内容哈希,不符则 **fail-closed(不写)**;claim / session_end 在读取 TASKS/LOG 时记录哈希,写前对两个文件同时预检,任一被外部改过就整体拒绝。锁只约束守规矩的 relay 进程(人类手改、旧版本进程、TTL 接管窗口都能绕过),CAS 补上「文件还是不是我读的那份」这一维,两者互补。
+- **内容 CAS(T002)**:`writeProtocolFile` 支持 `expectedHash`——初始比对后,fencing 与发布前再复核内容及 inode/mtime/size,不符则 **fail-closed(不写)**;claim / session_end 在读取 TASKS/LOG 时记录哈希,写前对两个文件同时预检,任一被外部改过就整体拒绝。锁只约束守规矩的 relay 进程(人类手改、旧版本进程、TTL 接管窗口都能绕过),CAS 补上「文件还是不是我读的那份」这一维,两者互补。便携式 Node 没有原子的内容 CAS,最终 `rename` 前仍有不可消除的极窄抢占窗口。
 - **锁心跳与崩溃恢复(两把锁语义不同)**:仓库写锁 `.relay/relay.lock` 持锁期间约 20s 心跳续租 + 写前 fencing 校验,长 cleanup/出场不会被 120s stale 规则误判,写入前发现被接管则拒绝;任务认领锁 `.relay/claims/T###.lock` **刻意关闭心跳**,保留 240min TTL 崩溃恢复语义(agent 崩溃后到期可被其他模型接管,不因 server 进程存活而永久占用)。锁协议为 JSON v2(兼容旧文本),model 等字段的换行/控制字符由输入净化拒收,防注入不依赖心跳。
+- **锁释放二次 CAS**:释放先按 token 认领,再重读锁内容并核对 dev/inode/size/mtime;第二次复核发现替换或改写时保留 replacement holder 的锁并返回失败。便携式 Node 没有「按 inode 条件 unlink」系统调用,最终 lstat→unlink 仍有不可消除的极窄窗口,因此该检查只能收窄、不能宣称数学上原子的删除。
+- **自更新事务(T073)**:launcher 在 `fetch` 后立即捕获不可变 before/upstream SHA,`rev-list` 与祖先检查都直接引用二者;发布 `refs/heads/main` 前写 `relay-autoupdate-transaction.json`,用 `git update-ref refs/heads/main <upstream> <before>` 做 Git 原生原子 CAS(保留 reflog、文件权限并支持 files/reftable 后端),再以 `HEAD.lock` 阻断 checkout 并用 `read-tree -m -u <before> <upstream>` 做两树转换,拒绝覆盖 tracked/untracked 冲突。SHA-1 与 SHA-256 仓库均适用。任意 phase 被 SIGKILL 后,下一次启动先于节流恢复 journal:只有 HEAD/main/index/worktree 完整落在 `before` 或 `upstream` 端点才可继续,混合树直接拒绝启动。
 - **尚未提供**:claim 无 abort/release,无按任务查询 status 的独立工具,无 sessionId;可用恢复 = 认领锁 240min TTL 到期接管(可传 ttl_minutes)/ relay_session_end 出场释放 / relay_worktree_cleanup。并发会话必须使用不同 model 标识,同名 model 无法区分持有者。
 
 ## 目录与文件归属( exclusive,谁的东西谁写,别人不碰)
@@ -48,8 +50,8 @@
 ```
 relay-mcp/
 ├── CONTRACT.md            # 本文件(已写好,只读)
-├── README.md              # W1
-├── templates/             # W1(脚手架模板,运行时被引擎读取;含 presets/ 代码骨架)
+├── README.md              # 使用说明
+├── templates/             # 脚手架模板(运行时被引擎读取;含 presets/ 代码骨架)
 │   ├── START.md           # 引导扇区(<=1页):跑 verify→读 TASKS 顶部→按协议干
 │   ├── SPEC.md            # 意图+可验证验收标准(占位骨架)
 │   ├── DECISIONS.md       # 追加式决策日志(骨架+1条例子)
@@ -66,29 +68,29 @@ relay-mcp/
 │       ├── archive/.gitkeep
 │       └── templates/     # 五件套文档模板(带 YAML frontmatter: title/version/created/status)
 ├── src/
-│   ├── index.mjs          # W2:入口,启动 stdio server
-│   ├── rpc.mjs            # W2:JSON-RPC stdio 循环(MCP 子集)
-│   ├── contract.mjs       # W2:工具/资源/prompt 定义表 + dispatch
-│   ├── cli.mjs            # W2:CLI(relay verify --root X),供 verify.sh 与 CI 调用
-│   ├── util.mjs           # W2:fs/git 公共助手
+│   ├── index.mjs          # 入口,启动 stdio server
+│   ├── rpc.mjs            # JSON-RPC stdio 循环(MCP 子集)
+│   ├── contract.mjs       # 工具/资源/prompt 定义表 + dispatch
+│   ├── cli.mjs            # CLI(relay verify --root X),供 verify.sh 与 CI 调用
+│   ├── util.mjs           # fs/git/锁公共助手
 │   └── engines/
-│       ├── bootstrap.mjs  # W3:relay_init / relay_onboard
-│       └── sync.mjs       # W3:relay_sync + 入口文件生成(供 init/onboard 复用)
-│       ├── verify.mjs     # W4:relay_verify + 全部检查器(R4 豁免 user-rules 保留区)
+│       ├── bootstrap.mjs  # relay_init / relay_onboard
+│       └── sync.mjs       # relay_sync + 入口文件生成(供 init/onboard 复用)
+│       ├── verify.mjs     # relay_verify + 全部检查器(R4 豁免 user-rules 保留区)
 │       ├── restructure.mjs # 老项目目录标准化(干跑→confirm 执行)
-│       └── session.mjs    # W4:relay_session_start / relay_session_end / relay_claim
+│       └── session.mjs    # relay_session_start / relay_session_end / relay_claim
 └── scripts/
     └── smoke.mjs          # 集成者写(不属于任何专家)
 ```
 
-## W2 必须导出的公共接口(其余专家 import 自这些文件)
+## 必须导出的公共接口(各引擎 import 自这些文件)
 
 `src/util.mjs`:
 ```js
 export const templatesDir = () => /* relay-mcp/templates 绝对路径,基于 import.meta.url 向上一级再进 templates */
 export const readFileSafe = async (p, fallback = null) => /* 读文件,不存在返回 fallback */
 export const writeFileIfAbsent = async (p, content) => /* 已存在则返回 false 不覆盖,成功返回 true */
-export const backupFile = async (p) => /* 存在则改名 <p>.relay-bak-<yyyyMMddHHmmss>,返回新路径或 null;备份文件由 .gitignore 基线忽略(人工恢复后删除) */
+export const backupFile = async (p) => /* 存在则改名 <p>.relay-bak-<yyyyMMddHHmmss>(-序号),返回新路径或 null;每个目标最多保留 20 份,备份由 .gitignore 基线忽略 */
 export const isGitRepo = (root) => boolean
 export const gitRun = async (root, ...args) => /* execFile('git',['-C',root,...args]) 包裹,返回 {ok,stdout,stderr};ok=exit 0 */
 export const ensureDir = async (p) => /* recursive mkdir */
@@ -107,25 +109,25 @@ export const startServer = async ({ onInit, onMethod }) => {
 }
 ```
 
-`src/contract.mjs` 导出 `TOOLS`(数组,每项 `{name, description, inputSchema}`)、`RESOURCES`、`PROMPTS`、`dispatch(name, args)`(async → MCP 工具结果 `{content:[{type:'text',text}], isError?:bool}`;未知工具 → isError true + 提示)。**工具实现只做参数默认值补齐,然后调 W3/W4 引擎。**
+`src/contract.mjs` 导出 `TOOLS`(数组,每项 `{name, description, inputSchema}`)、`RESOURCES`、`PROMPTS`、`dispatch(name, args)`(async → MCP 工具结果 `{content:[{type:'text',text}], isError?:bool}`;未知工具 → isError true + 提示)。**工具实现只做参数默认值补齐,然后调用对应引擎。**
 
 工具清单(description 必须写清协议,让陌生模型看描述就会用;英文,简洁):
 
 | name | inputSchema | 职责(引擎) |
 |---|---|---|
-| `relay_init` | `{root:string(cwd默认), name:string?, preset:string?(默认 node), force:bool?}` | 0→1 建仓:实例化全部模板+**preset 代码骨架(src/tests/package.json,模板在 templates/presets/)**+git init+首提交(W3) |
-| `relay_onboard` | `{root:string}` | 老项目接入:扫描→非破坏合并(备份不删除)→装核心件+verify+入口(W3) |
-| `relay_sync` | `{root:string}` | 重生成入口文件,报告漂移(W3) |
-| `relay_session_start` | `{root:string}` | 入场简报:读五件+对账 git+verify 快检+建议首个动作(W4) |
-| `relay_session_end` | `{root, model:string, summary:string, done_task:string?(如T003), done_tasks:string[]?, blocked:string?, next:{title, acceptance:string, notes:string?}?, negative_results:string[]?}` | 出场:绿闸→更新 TASKS/LOG→git 提交(W4) |
-| `relay_verify` | `{root, full:bool?}` | 运行全部检查,返回逐条 pass/fail+修复指令(W4) |
+| `relay_init` | `{root:string(cwd默认), name:string?, preset:string?(默认 node), force:bool?}` | 0→1 建仓:实例化全部模板+**preset 代码骨架(src/tests/package.json,模板在 templates/presets/)**+git init+首提交 |
+| `relay_onboard` | `{root:string}` | 老项目接入:扫描→非破坏合并(目标不删除;备份最多保留 20 份)→装核心件+verify+入口 |
+| `relay_sync` | `{root:string}` | 重生成入口文件,报告漂移 |
+| `relay_session_start` | `{root:string}` | 入场简报:读五件+对账 git+verify 快检+建议首个动作 |
+| `relay_session_end` | `{root, model:string, summary:string, done_task:string?(如T003), done_tasks:string[]?, blocked:string?, next:{title, acceptance:string, notes:string?}?, negative_results:string[]?}` | 出场:绿闸→更新 TASKS/LOG→git 提交 |
+| `relay_verify` | `{root, full:bool?}` | 运行全部检查,返回逐条 pass/fail+修复指令 |
 | `relay_restructure` | `{root, confirm:bool?}` | 老项目目录标准化:干跑出方案→confirm 执行(git mv+白名单修宪+DECISIONS/LOG/TASKS 记录)(restructure.mjs) |
-| `relay_claim` | `{root, task:string, model:string}` | 并行模式:认领任务,标注 model+时间(W4) |
+| `relay_claim` | `{root, task:string, model:string}` | 并行模式:认领任务,标注 model+时间 |
 | `relay_rules` | `{}` | 返回规则 ID 表(哪些可机检、执法点在哪) |
 
 `src/cli.mjs`:`node src/cli.mjs <toolname> [--root path] [--json k=v ...]`(npm 冻结后无 bin;历史 `relay` 命令已移除)→ 复用 dispatch,人类可读输出;`--help`/`--version` 退出 0;`verify.sh` 与 CI 走它。
 
-## 仓库文件格式(跨专家一致性关键,W1 模板与 W4 解析器必须完全对齐)
+## 仓库文件格式(模板与解析器必须完全对齐)
 
 ### TASKS.md(最新在上)
 ```md
@@ -176,7 +178,7 @@ export const startServer = async ({ onInit, onMethod }) => {
 
 模板即唯一真相:`templates/verify.sh`(要点:RELAY_HOME 环境变量优先 → 实例化时固化的 `__RELAY_HOME__` 兜底 → 找不到引擎时输出明确修复指引并 exit 2)。此处不复制脚本内容,防止契约与模板各自漂移。
 
-## 检查器规则表(relay_verify 实现,W4;错误文本必须以 `修复:` 开头给可执行指令)
+## 检查器规则表(relay_verify 实现;错误文本必须以 `修复:` 开头给可执行指令)
 
 | ID | 规则 | 机制 |
 |---|---|---|
@@ -201,12 +203,12 @@ export const startServer = async ({ onInit, onMethod }) => {
 
 - 仓库级写锁:`.relay/relay.lock`(O_EXCL、JSON v2 token)序列化受管写路径;持锁期间约 20s 心跳续租,写入前以 token 做 fencing 复核,长 cleanup/出场不会被 120s stale 规则误判,发现锁被接管即拒绝。任务认领锁 `.relay/claims/T###.lock` 刻意不心跳,240min TTL 由锁内 `acquiredAt` 判定;两者语义不同。
 
-- 非破坏:onboard 对已存在文件一律 `backupFile` 后再写,永不删除用户文件;init 若 START.md 已存在且无 force → 拒绝并提示用 relay_onboard
+- 非破坏:onboard 对已存在目标先 `backupFile` 再写,不删除目标;自动备份每个目标最多保留 20 份。init 若 START.md 已存在且无 force → 拒绝并提示用 relay_onboard
 - git 不存在或 commit 失败(无身份配置等)→ 降级:文件照常更新,报告"提交跳过+原因",isError 不置位
 - 所有工具输出:简洁 markdown,中文标签;路径用相对 root 的写法
 - relay_session_end 绿闸:verify 全量通过才允许 `git add -A && git commit -m "relay: session end — <summary 首行>"`;不绿 → isError + 修复清单 + 明确"未提交"
 
-## W1 专属:规范文档改写目标
+## 规范文档改写目标
 
 把 `<claude 配置目录>/CLAUDE-PROJECT-RULES.md`(先读原文)改造为 v3:五公理→三原则(最小充分状态/无信任交接/规范即检查)→仓库文件集(START/SPEC/DECISIONS/TASKS/LOG/verify + docs 五件套**原样保留**)→单源投影注入(入口文件生成,CI 零 diff)→六步会话协议→规则 ID 表(同上 R 系列)→人类四件事(验收标准/仲裁阻塞/抽查/批准护栏修改)→三场景使用(0→1 用 relay_init;1→10/10→100 用 relay_onboard;日常用 session_start/end)→失效模式表→自检清单。≤220 行,注明"本规范的可执行形式 = relay-mcp"。
 ## 2026-11-27 T071 文档一致性修订(规则目标口径)
@@ -249,10 +251,10 @@ export const startServer = async ({ onInit, onMethod }) => {
   - 10.3c managed 分支必须包含配对代码提交。分支合并后删除且该提交仍是 HEAD 的祖先，可继续对账。证据不足时为 WARN。single 只查分支存在性。
   - 10.4 **v1 旧格式只做结构校验 → WARN**:v1 行自带的 base/sha 由被校验方提供,用它算出的「一致」是自证;数字权威仅 v2 机检段,绝不 PASS;
   - 10.5 **无法定位提交 → WARN,永不 PASS**(fail-open 修复:未验证的确信比空白更危险);
-  - 10.6 `facts.enabled` 和 `facts.since` 启用对账。`since` 之前的条目豁免，仍检查范围内最新的完成条目。
+  - 10.6 `facts.enabled` 和 `facts.since` 启用对账。`since` 之前的条目只有在引入提交是 `facts.baselineSha` 的祖先时才豁免，仍检查范围内最新的完成条目。提交时间与标题时间都不作为信任锚。
 - **配置**(`.relay/manifest.json`):
-  `"facts": { "enabled": true, "since": "YYYY-MM-DD HH:mm" }`。
-  `relay_init` / `relay_onboard` 默认写入 `enabled:true` 与启用时刻 `since`;旧项目缺席即旧行为(不写事实行、R10 跳过),`relay_sync` 输出升级提示但不改写 manifest(非破坏)。
+  `"facts": { "enabled": true, "since": "YYYY-MM-DD HH:mm", "baselineSha": "<40-hex|null>" }`。
+  `relay_init` / `relay_onboard` 默认写入 `enabled:true`、启用时刻 `since` 与启用前 HEAD 的 `baselineSha`(空仓库为 `null`);缺 `baselineSha` 的旧项目不会按时间戳猜历史,须在 onboard 或人工升级时补拓扑锚点。
 - **为何拆段而不是全对账**:验收结果/verify 汇总/耗时是写时快照,检查时点重算不出;强行全对账只能产假绿或死锁。机检段必须可复算,叙述段显式不构成证据。
 - **冒烟**:`scripts/smoke-facts.mjs` 覆盖 v2 写入、机检段篡改、叙述段不误红、伪造 sha、managed ±、升级 SKIP、CONTRACT 一致性,已接入 `npm test` 链。
 ## 2026-11-01 T015 补充契约(简报有界化 / 预算告警)
@@ -389,7 +391,7 @@ export const startServer = async ({ onInit, onMethod }) => {
 - **不打包可执行文件**:stdio command 用裸 `node`(客户端按平台搜索解析);不引入 `./bin` 包装,避免 Windows 可执行位/解释器差异(规范 §7.2.1 允许裸名;若将来打包可执行文件则必须改插件相对 command)。
 - **技能合规**:`skills/` 的马上级子目录含 `SKILL.md` 才算 skill;frontmatter 仅 name/description/license/compatibility/metadata/allowed-tools,name 必须等于目录名、≤64 且小写连字符,description 1–1024;不递归搜索更深层。
 - **失败隔离**(规范 §6.2/§7.2.2):manifest 除未知顶层字段/非对象 extensions 外任一 schema 违规 → 拒绝整个插件;mcp.json 无效只禁用 MCP;单个 server/skill 无效只跳过该组件,其他组件继续加载。
-- **校验器**:`scripts/validate-plugin.mjs`(零依赖)按规范做静态校验(manifest 闭集/MCP 变体与占位符/skills frontmatter/realpath 不逃出插件根),`node scripts/validate-plugin.mjs` 退出码 0/1;`scripts/smoke-plugin.mjs`(43–44 断言,含规范负例与真实 initialize/tools/list 握手;无符号链接特权的 Windows 显式跳过 1 条)接入 `npm test`。
+- **校验器**:`scripts/validate-plugin.mjs`(零依赖)按规范做静态校验(manifest 闭集/MCP 变体与占位符/skills frontmatter/realpath 不逃出插件根),`node scripts/validate-plugin.mjs` 退出码 0/1;`scripts/smoke-plugin.mjs`(51 断言,含规范负例与真实 initialize/tools/list 握手;无符号链接特权的 Windows 显式跳过 1 条)接入 `npm test`。
 - **打包面**:`package.json files` 加入 `plugin.json` / `mcp.json` / `skills/` / `scripts/validate-plugin.mjs`;`smoke-pack` 断言插件文件进包、开发文档不进包。
 - **修宪**:`.relay/manifest.json allowedTopLevel` 增加 `plugin.json` / `mcp.json` / `skills`(受保护路径,单独提交,人类可审计)。
 ## 2026-11-09 外部质量门白名单契约(acceptance.commands)
@@ -406,8 +408,8 @@ export const startServer = async ({ onInit, onMethod }) => {
 
 ## 2026-11-18 Tier 1 清理补充契约
 
-- **`manifest.facts.strict` 已废弃**:自 T023 起 R10 机检段篡改默认 ERROR,不再读取该键;为兼容旧 manifest 仍解析并保留于已知键白名单,但不产生任何行为,简报不再回显。计划 v2.0 移除。
-- **零调用导出标 `@internal`**:`src/engines/facts.mjs` 的 `recomputeCommitFileCount` 与 `src/util.mjs` 的 `lockTiming` 无调用点;保留以避免包外 import 断裂,明确不属于公共 API,计划 v2.0 删除。
+- **`manifest.facts.strict` 已废弃**:自 T023 起 R10 机检段篡改默认 ERROR,当前代码不再读取该键;为兼容旧 manifest 仅保留于已知键白名单,不产生任何行为,简报也不再回显。计划 v2.0 移除。
+- **零调用导出已删除**:`src/engines/facts.mjs` 的 `recomputeCommitFileCount` 与 `src/util.mjs` 的 `lockTiming` 均无调用点,已从兼容面移除。
 - **归档头注**:`docs/archive/LOG-2026-09-11.md` 仅补内容区间与顺序说明(实际覆盖 2026-09-29 ~ 2026-11-02,多次归档拼接、非全局有序),不重命名、不重排、不改历史条目。
 
 ## 2026-11-18 Tier 2 决策

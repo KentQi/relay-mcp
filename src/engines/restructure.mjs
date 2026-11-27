@@ -10,13 +10,13 @@
 // - 移动后 import 路径修复是模型工作,不是机械工作——以任务形式交给下一棒,绿闸验收。
 // 零依赖:仅 node: 内置。
 
-import { readdir, stat, writeFile, lstat } from 'node:fs/promises';
+import { readdir, lstat } from 'node:fs/promises';
 import { randomUUID } from 'node:crypto';
 import { basename, dirname, extname, join, resolve } from 'node:path';
 import {
   acquireRepoLock, assertNoSymlinkComponents, assertNotSymlinkFile, backupFile, ensureDir, findSensitivePaths, gitStatusPaths,
-  gitIdentityArgs, gitRun, isGitRepoAsync, nowIso, readFileSafe, releaseRepoLock, scanSecrets, sha256Hex, stamp,
-  writeFileAtomic, writeProtocolFile,
+  firstLine, gitIdentityArgs, gitRun, isGitRepoAsync, pathExists, readFileSafe, releaseRepoLock, scanSecrets, sha256Hex,
+  stamp, toolError as err, toolOk as ok, writeFileAtomic, writeProtocolFile,
 } from '../util.mjs';
 
 // 与协议写入同一口径:TASKS/LOG 经 writeProtocolFile(CAS+atomic+fencing),
@@ -28,10 +28,6 @@ const assertNoSecrets = (text, label) => {
   }
 };
 import { ensureGitignoreBaseline } from '../config.mjs';
-const ok = (text) => ({ content: [{ type: 'text', text }], isError: false });
-const err = (text) => ({ content: [{ type: 'text', text }], isError: true });
-
-const firstLine = (s) => (String(s || '').trim().split('\n')[0] || '').slice(0, 160);
 
 // ── 分类表(保守:宁可列入人工,不可猜错) ─────────────────────────────
 const KEEP_DIRS = new Set([
@@ -105,10 +101,6 @@ const analyzeTop = async (root) => {
   return { moves, manual, keep };
 };
 
-const exists = async (p) => {
-  try { const st = await stat(p); return st.isFile() || st.isDirectory(); } catch { return false; }
-};
-
 // 写前复核同一把锁:fencing 不能只保护 TASKS/LOG,manifest/DECISIONS/.gitignore 同样在临界区内。
 const writeAtomicWithFence = async (target, content, lock, label) => {
   const fence = async () => {
@@ -125,7 +117,7 @@ const writeAtomicWithFence = async (target, content, lock, label) => {
 const resolveCollisions = async (root, moves, manual) => {
   const out = [];
   for (const m of moves) {
-    if (await exists(join(root, m.to))) {
+    if (await pathExists(join(root, m.to))) {
       manual.push(`${m.from} → ${m.to} 目标已存在,人工处理`);
       continue;
     }
@@ -314,7 +306,7 @@ export const relayRestructure = async (args = {}) => {
     assertNoSecrets(logOut, 'LOG.md');
     const newTop = await readdir(root); // 失败必须向上抛,绝不能以 [] 静默收窄白名单
     const allowed = [...new Set([...(manifest.allowedTopLevel || []), ...newTop])].sort();
-    const manifestOut = { ...manifest, allowedTopLevel: allowed, restructuredAt: nowIso() };
+    const manifestOut = { ...manifest, allowedTopLevel: allowed };
     const manifestText = `${JSON.stringify(manifestOut, null, 2)}\n`;
     assertNoSecrets(manifestText, '.relay/manifest.json');
 

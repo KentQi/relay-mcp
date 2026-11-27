@@ -7,6 +7,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { spawnSync } from 'node:child_process';
+import { backupFile, MAX_BACKUP_FILES } from '../src/util.mjs';
 
 const RELAY = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const PATTERN = '*.relay-bak-*';
@@ -101,6 +102,54 @@ try {
     git(dir, ['add', '-A']);
     const staged = git(dir, ['diff', '--cached', '--name-only']).stdout || '';
     ok(!/relay-bak/.test(staged), '嵌套 .relay 备份未进入暂存区', staged);
+  }
+
+  console.log('\n== 4b. 自动备份保留上限 ==');
+  {
+    const dir = fresh('sync-backup-retention');
+    const target = path.join(dir, 'AGENTS.md');
+    for (let i = 0; i < MAX_BACKUP_FILES + 5; i += 1) {
+      write(target, `backup ${i}\n`);
+      await backupFile(target);
+    }
+    const baks = backupsOf(dir);
+    ok(baks.length === MAX_BACKUP_FILES, `自动备份最多保留 ${MAX_BACKUP_FILES} 份`, `actual=${baks.length}`);
+    ok(baks.some((name) => read(path.join(dir, name)).includes(`backup ${MAX_BACKUP_FILES + 4}`)),
+      '最新备份不会被保留策略删掉');
+  }
+  {
+    const dir = fresh('sync-backup-manual-preserve');
+    const target = path.join(dir, 'AGENTS.md');
+    const manual = [];
+    for (let i = 0; i < MAX_BACKUP_FILES; i += 1) {
+      const p = path.join(dir, `AGENTS.md.relay-bak-manual-${String(i).padStart(2, '0')}`);
+      write(p, `manual ${i}\n`);
+      manual.push(p);
+    }
+    write(target, 'engine backup\n');
+    await backupFile(target);
+    ok(manual.every((p) => existsSync(p)),
+      '备份 retention 只收口引擎生成文件,不删除人工 relay-bak 命名');
+  }
+  console.log('\n== 4c. onboard manifest 原子备份同样受上限约束 ==');
+  {
+    const dir = fresh('onboard-manifest-retention');
+    const manifestPath = path.join(dir, '.relay', 'manifest.json');
+    let allRunsOk = true;
+    let lastFailure = '';
+    for (let i = 0; i < MAX_BACKUP_FILES + 5; i += 1) {
+      const manifest = JSON.parse(read(manifestPath));
+      manifest.projectName = `onboard-retention-${i}`;
+      write(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+      const r = cli('relay_onboard', { root: dir });
+      if (r.status !== 0) {
+        allRunsOk = false;
+        lastFailure = `run ${i + 1}: ${out(r).slice(0, 300)}`;
+      }
+    }
+    ok(allRunsOk, `onboard 连续 ${MAX_BACKUP_FILES + 5} 次 manifest 重写成功`, lastFailure);
+    const baks = readdirSync(path.join(dir, '.relay')).filter((f) => f.startsWith('manifest.json.relay-bak-'));
+    ok(baks.length === MAX_BACKUP_FILES, `manifest 原子备份最多保留 ${MAX_BACKUP_FILES} 份`, `actual=${baks.length}`);
   }
 
   console.log('\n== 5. 引擎模板缺失时不得谎报全部一致 ==');

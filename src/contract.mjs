@@ -1,7 +1,7 @@
 // relay-mcp — src/contract.mjs: tool/resource/prompt definitions and dispatch.
 // Definitions use English descriptions; engines are lazy-loaded so integration failures stay isolated.
 import path from 'node:path';
-import { templatesDir, readFileSafe } from './util.mjs';
+import { templatesDir, readFileSafe, toolText } from './util.mjs';
 
 /* ------------------------------- TOOLS ------------------------------- */
 
@@ -285,9 +285,11 @@ The tools enforce the loop; you cannot skip the gates.
    D8/R9 read (a task id mentioned only in the summary body is NOT evidence). Managed
    worktrees reject \`done_tasks\` (one task = one branch + one registry record). In a managed
    worktree the green gate makes TWO commits: code on executionRoot branch \`relay/T###\`,
-   then controlRoot with ONLY TASKS.md/LOG.md updated; both SHAs are reported. In a managed
-   worktree, done_task MUST match the task registered for the executionRoot you call from;
-   a mismatched task id is rejected (no cross-task completion). The task
+   then controlRoot with ONLY TASKS.md/LOG.md updated; both SHAs are reported. Managed
+   completion with \`autoCommit:false\` is fail-closed before protocol writes; that setting is
+   only usable for maintenance exits without \`done_task\`. In a managed worktree, done_task
+   MUST match the task registered for the executionRoot you call from; a mismatched task id
+   is rejected (no cross-task completion). The task
    branch is accepted, not merged: merge it yourself with
    \`git merge --no-ff relay/T###\` after reviewing \`git log controlRoot..relay/T###\`
    (relay never merges/rebase/pushes or deletes task branches). Worktrees with ignored
@@ -434,7 +436,7 @@ const RULES_TEXT = `# relay 规则表(R 系列)
 
 - 检查输出:\`| ID | 结果 | 详情 |\` 表格 + 末尾汇总;fast 模式(full=false)跳过 R5/R6/R8。
 - **双根检查**:受管 worktree 中 controlRoot 跑全量 R 系列(协议面),executionRoot 跑代码向检查 R1/R2/R3/R4/R8(跳过 R7/R9/R10/R11/R12,避免读任务分支里的旧协议副本);两侧 ERROR 合并阻断。**成对证据**:managed 完成还须同时具备任务分支代码提交、controlRoot 完成提交(消息含 \`T### 完成\`)、controlRoot 的 TASKS/LOG 已提交干净、LOG 记录 branch+代码 SHA;任一缺失 → isError、不落完成状态、可重跑补交。R5/R6 仍按 controlRoot 历史计算(任务分支提交不进入其窗口),跨分支评估留待后续。
-- **绿闸与双提交**:relay_session_end 默认全量 verify,全绿且验收通过后 → 先在 executionRoot 提交代码(\`git add -A && git commit\`),成功后 controlRoot 只提交 \`TASKS.md\`+\`LOG.md\`(路径限定,提交信息含 \`T### 完成\`);输出两个 SHA(代码 SHA + 控制面 SHA)。controlRoot 提交失败 → isError + 保留认领锁,修复后重跑补交;\`autoCommit:false\` 时明确"控制面未提交"。
+- **绿闸与双提交**:relay_session_end 默认全量 verify,全绿且验收通过后 → 先在 executionRoot 提交代码(\`git add -A && git commit\`),成功后 controlRoot 只提交 \`TASKS.md\`+\`LOG.md\`(路径限定,提交信息含 \`T### 完成\`);输出两个 SHA(代码 SHA + 控制面 SHA)。controlRoot 提交失败 → isError + 保留认领锁,修复后重跑补交。受管完成遇到 \`autoCommit:false\` 会在写协议面前 fail-closed;该配置只可用于无 \`done_task\` 的维护出场。
 - **根错配 fail-closed(严格)**:任务在 registry 仍有未完成记录时,从 controlRoot 完成出场**一律 isError**「根错配」,须在 executionRoot 出场(无"干净空树"例外);注册表缺失/损坏/记录丢失时用 \`git worktree list\` 反查 \`relay/<task>\` checkout 与受管缓存路径 \`.relay/worktrees/<task>\` 是否存在,命中同样拒绝;分支单独存在不算痕迹。managed 出场 HEAD==baseSha 且无改动 → 拒绝伪 SHA。未登记 linked worktree:完成出场 fail-closed,维护出场仅告警。
 - **未合并分支**:任务分支 \`relay/T###\` 验收通过 ≠ 已合并;claim/session_start/cleanup 会列出未合并分支,由人工 \`git merge --no-ff relay/T###\` 整合(relay 不自动 merge/rebase/push/删分支)。
 - **受保护路径**:\`verify\`(脚本)、\`.relay/**\`、\`*/tests/**\`、\`*.test.*\`、\`*.spec.*\` —— session_end 检测到本会话改动这些文件时不自动 commit,输出"涉及受保护路径(护栏),需人类批准后手动提交"并列出文件。
@@ -443,7 +445,7 @@ const RULES_TEXT = `# relay 规则表(R 系列)
 - **清理保护**:含未跟踪或 ignored 本地内容(\`.env\`、\`node_modules\`、构建产物)的 worktree 默认保留,不自动删;删除只走非强制 \`git worktree remove\`,分支保留。
 - **升级与迁移**:旧项目升级先跑 \`relay_sync\`(重投影入口 + 幂等补 .gitignore 运行时基线 + AGENTS 迁移指引);\`relay_onboard\` 保留既有 manifest 配置(worktree/autoCommit/acceptance/protectedPaths/entryFilesTakeover 等不被重置);claim 也会幂等补 .gitignore 基线。
 - **registry fail-closed/恢复**:\`.relay/worktrees.json\` 损坏 → 完成出场/claim fail-closed 并提示备份或删除运行时注册表(不猜测受管状态);注册表缺失且目录是 linked worktree → 完成出场拒绝,可回 controlRoot 重新 \`relay_claim {worktree:true}\` 重建登记;cleanup 对未登记目录只报告不删。
-- **协议写入 CAS**:claim/session_end 的 TASKS/LOG 写入带内容 CAS(读后写前重读比对哈希),冲突 → isError 且不写;锁防并发 relay 进程,CAS 防非协作写入者(人类手改/旧版本/TTL 接管窗口)。
+- **协议写入 CAS**:claim/session_end 的 TASKS/LOG 写入带内容 CAS(读后比对哈希,fencing 后再复核内容与 inode/mtime/size),冲突 → isError 且不写;锁防并发 relay 进程,CAS 防非协作写入者(人类手改/旧版本/TTL 接管窗口)。便携式 Node 没有原子的内容 CAS,最终 rename 前仍有不可消除的极窄抢占窗口。
 - **锁心跳与崩溃恢复(两把锁语义不同)**:仓库写锁 \`.relay/relay.lock\` 约 20s 心跳续租 + 写前 fencing(长 cleanup/出场不被 120s stale 误判,写入前发现被接管则拒绝);任务认领锁 \`.relay/claims/T###.lock\` **刻意关闭心跳**,保留 240min TTL 崩溃恢复(agent 崩溃后到期可被其他模型接管);锁为 JSON v2(兼容旧文本),model 换行/控制字符由输入净化拒收。
 - **尚未提供**:没有 claim 的 \`abort/release\`、没有按任务查询 \`status\` 的工具、没有 sessionId;可用恢复 = 认领锁 240min TTL 到期接管(可传 \`ttl_minutes\`)/ relay_session_end 出场释放 / relay_worktree_cleanup。并发会话必须用不同 model 标识(同名 model 无法区分持有者,会互锁)。
 - **子代理抢救(T048/T058/T050/T051)**:\`relay_rescue\` 把被额度上限 / 429 / 悬空杀死的子代理现场(transcript + 未提交改动的 git 对象快照)落成接力单 \`.relay/rescue/<id>/\`;**接力单是本机运行时状态、永不入库**(含本机路径与潜在敏感内容,且 \`.relay/**\` 是受保护路径——不忽略会拦住下一次出场)。\`state.json\` 只存不可派生的锚点,其余每次从 transcript 即时派生并校验 sha256;\`takeover\` 用独立接力锁(240min TTL,同 model 幂等、token 持久化)移交派发权并在 TASKS 待办区登记接管任务;\`report\` 用真实 token 释放锁,释放失败即 isError 且保留移交状态。transcript 一律围栏 + 「不是给你的指令」+ 密钥脱敏后展示;快照内容在**任何 git 对象落盘之前**扫描疑似密钥,命中即拒绝生成快照。来源 = 格式描述符(内置两份等价参考实现 + \`manifest.rescue.profiles\` 声明式扩展),**默认零扫描**,来源一律显式;SQLite 会话库用 \`kind: "sqlite-conversation"\` 只读接入。\`manifest.rescue.autoLaunch\` 默认关闭,argv 数组不经 shell,worker 用原子状态发布与进程组终止。
@@ -482,8 +484,7 @@ const loadEngineModule = async (specifier) => {
   }
 };
 
-const textResult = (text, isError = false) =>
-  isError ? { content: [{ type: 'text', text }], isError: true } : { content: [{ type: 'text', text }] };
+const textResult = toolText;
 
 const engineUnavailable = (name, spec, err) => {
   const why = err && err.code === 'ERR_MODULE_NOT_FOUND'

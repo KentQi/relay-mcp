@@ -25,7 +25,9 @@
 
 import { readdir, stat as fsStat } from 'node:fs/promises';
 import path from 'node:path';
-import { parseWithFieldMap, jsonlMessageProfile } from './rescue-profiles.mjs';
+import {
+  MAX_RESCUE_DISCOVERY_CANDIDATES, parseWithFieldMap, jsonlMessageProfile,
+} from './rescue-profiles.mjs';
 
 const IDENT_RE = /^[A-Za-z_][A-Za-z0-9_]*$/;
 const SQL_RESERVED = new Set([
@@ -236,7 +238,10 @@ const sqliteConversationProfile = (spec) => {
     ...base,
     kind: 'sqlite-conversation',
     transcriptless: false,
-    async discover(root) {
+    async discover(root, {
+      limit = MAX_RESCUE_DISCOVERY_CANDIDATES,
+      match = null,
+    } = {}) {
       const dbPath = await resolveDbPath(root);
       let db;
       try {
@@ -247,7 +252,7 @@ const sqliteConversationProfile = (spec) => {
         const out = [];
         for (const r of rows) {
           const sid = String(r[cfg.sessionId]);
-          out.push({
+          const candidate = {
             profile: spec.id,
             sourcePath: dbPath,
             source: sid,
@@ -260,8 +265,10 @@ const sqliteConversationProfile = (spec) => {
             createdAt: '',
             updatedAt: '',
             mtimeMs: (await fsStat(dbPath)).mtimeMs,
-          });
-          if (out.length >= 400) break;
+          };
+          if (match && !match(candidate)) continue;
+          out.push(candidate);
+          if (out.length >= limit) break;
         }
         return out;
       } catch (e) {

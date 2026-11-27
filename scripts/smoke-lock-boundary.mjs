@@ -6,7 +6,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
-import { acquireFileLock, claimLockExpiry, releaseFileLock } from '../src/util.mjs';
+import { acquireFileLock, claimLockExpiry, releaseFileLock, sha256Hex, writeFileAtomic } from '../src/util.mjs';
 
 const RELAY = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const CLI = path.join(RELAY, 'src/cli.mjs');
@@ -21,7 +21,17 @@ const run = (tool, args, env = {}) => spawnSync(process.execPath, [CLI, tool, '-
   encoding: 'utf8', timeout: 10000, env: { ...process.env, ...env },
 });
 let pass = 0;
+let failures = 0;
 const check = (name, fn) => { fn(); pass++; console.log(`  ✓ ${name}`); };
+const sleep = (ms) => new Promise((done) => setTimeout(done, ms));
+const waitForFile = async (file, timeoutMs = 2000) => {
+  const until = Date.now() + timeoutMs;
+  while (Date.now() < until) {
+    if (existsSync(file)) return true;
+    await sleep(10);
+  }
+  return existsSync(file);
+};
 
 try {
   console.log('== acquiredAt 精确毫秒与 TTL 覆盖 ==');
@@ -86,6 +96,63 @@ try {
   }
   check('EACCES 直接拒绝,不无限 continue', () => {});
 
+  console.log('\n== 内容 CAS 发布前复核 ==');
+  {
+    const root = mk();
+    const target = path.join(root, 'TASKS.md');
+    writeFileSync(target, 'expected\n');
+    await assert.rejects(
+      writeFileAtomic(target, 'replacement\n', {
+        expectedHash: sha256Hex('expected\n'),
+        fencing: async () => {
+          writeFileSync(target, 'intruder\n');
+          return { ok: true };
+        },
+      }),
+      (e) => e?.code === 'RELAY_CONFLICT',
+    );
+    assert.equal(readFileSync(target, 'utf8'), 'intruder\n');
+  }
+  check('fencing 期间外部改文件 → rename 前拒绝且保留对方内容', () => {});
+
+  console.log('\n== 锁释放的内容/身份 CAS ==');
+  {
+    const root = mk();
+    const rel = '.relay/claims/T903.lock';
+    const target = path.join(root, rel);
+    const lock = await acquireFileLock(root, rel, 'owner', { heartbeat: false });
+    const signal = path.join(root, 'release-read.signal');
+    const go = path.join(root, 'release-read.go');
+    process.env.RELAY_TEST_HOOKS = '1';
+    process.env.RELAY_TEST_RELEASE_LOCK_SIGNAL = signal;
+    process.env.RELAY_TEST_RELEASE_LOCK_GO = go;
+    let signalled = false;
+    try {
+      const pending = releaseFileLock(root, rel, lock.token, '任务锁');
+      signalled = await waitForFile(signal);
+      writeFileSync(target, JSON.stringify({
+        version: 2,
+        holder: 'replacement',
+        token: 'replacement-token',
+        acquiredAt: new Date().toISOString(),
+      }) + '\n');
+      writeFileSync(go, 'go\n');
+      const verdict = await pending;
+      assert.equal(signalled, true, '释放流程必须提供第二次身份复核屏障');
+      assert.equal(verdict.ok, false, 'token 所有权在屏障后变化时释放必须失败');
+      assert.equal(JSON.parse(readFileSync(target, 'utf8')).token, 'replacement-token', '替换持有者的锁不得被删');
+      pass++;
+      console.log('  ✓ 第二次复核屏障后替换锁 → 不误删 replacement holder');
+    } catch (error) {
+      failures++;
+      console.log(`  ✗ FAIL 第二次复核屏障后替换锁 — ${error?.message || error}`);
+    } finally {
+      delete process.env.RELAY_TEST_HOOKS;
+      delete process.env.RELAY_TEST_RELEASE_LOCK_SIGNAL;
+      delete process.env.RELAY_TEST_RELEASE_LOCK_GO;
+    }
+  }
+
   console.log('\n== 无待办占位行不可认领 ==');
   {
     const root = mk();
@@ -99,7 +166,8 @@ try {
     assert.equal(existsSync(path.join(root, '.relay/claims/T070.lock')), false);
   }
   check('claim 拒绝占位行且不创建认领锁', () => {});
-  console.log(`\n结果: ${pass} 通过 / 0 失败`);
+  console.log(`\n结果: ${pass} 通过 / ${failures} 失败`);
+  if (failures) process.exitCode = 1;
 } finally {
   for (const root of roots) rmSync(root, { recursive: true, force: true });
 }

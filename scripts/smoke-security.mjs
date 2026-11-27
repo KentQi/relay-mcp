@@ -44,6 +44,15 @@ try {
     const r2 = run(root2, 'relay_onboard', {});
     ok(r2.status === 1 && /符号链接|拒绝/.test(out(r2)), 'onboard:.relay 是符号链接 → 拒绝', out(r2).slice(0, 300));
     ok(!existsSync(path.join(outside2, 'manifest.json')), 'onboard:仓库外未出现 manifest');
+    if (process.platform !== 'win32') {
+      const root3 = fresh();
+      const outside3 = path.join(base, 'outside-verify');
+      rmSync(outside3, { force: true });
+      symlinkSync(outside3, path.join(root3, 'verify'), 'file');
+      const r3 = run(root3, 'relay_onboard', {});
+      ok(r3.status === 1 && /符号链接|拒绝/.test(out(r3)), 'onboard:悬空 verify symlink → 拒绝', out(r3).slice(0, 300));
+      ok(!existsSync(outside3), 'onboard:仓库外 verify 未被创建');
+    }
   }
 
   console.log('\n== P0-2 项目名注入 / 密钥进 git 历史 ==');
@@ -215,6 +224,35 @@ try {
     ok(e1.status === 0 && e2.status === 0, '两次维护出场均成功', `${out(e1).slice(0, 120)} | ${out(e2).slice(0, 120)}`);
     ok(!/git commit 失败/.test(out(e2)), '第二次出场不再降级报 git commit 失败');
     ok(readFileSync(path.join(root, 'LOG.md'), 'utf8') !== logAfter1, '维护出场照常写入 LOG');
+  }
+  console.log('\n== P0 failure mark 不得符号链接写穿 ==');
+  if (process.platform !== 'win32') {
+    const root = fresh();
+    run(root, 'relay_init', { name: 'failure-mark' });
+    run(root, 'relay_claim', { root, task: 'T003', model: 'failure-mark', worktree: false });
+    mkdirSync(path.join(root, 'rogue'));
+    const outside = path.join(base, 'outside-failure-mark.json');
+    writeFileSync(outside, 'outside-sentinel\n');
+    symlinkSync(outside, path.join(root, '.relay', 'last-failure.json'), 'file');
+    const ended = run(root, 'relay_session_end', { root, model: 'failure-mark', summary: '触发失败标记', done_task: 'T003' });
+    ok(ended.status === 1 && /last-failure|符号链接|拒绝/.test(out(ended)), 'failure mark symlink → 出场 fail-closed', out(ended).slice(0, 500));
+    ok(readFileSync(outside, 'utf8') === 'outside-sentinel\n', '仓库外 failure mark 目标逐字节未变');
+  }
+  console.log('\n== P0 commit hook 切换 .relay 后,成功清理不得删仓库外文件 ==');
+  if (process.platform !== 'win32') {
+    const root = fresh();
+    run(root, 'relay_init', { name: 'failure-clean-swap' });
+    const outsideDir = path.join(base, 'failure-clean-swap-outside');
+    mkdirSync(outsideDir);
+    const outside = path.join(outsideDir, 'last-failure.json');
+    writeFileSync(outside, 'outside-cleanup-sentinel\n');
+    writeFileSync(path.join(root, '.relay', 'last-failure.json'), '{}\n');
+    const hook = path.join(root, '.git', 'hooks', 'pre-commit');
+    writeFileSync(hook, `#!/bin/sh\nmv .relay .relay-real || exit 1\nln -s ${JSON.stringify(outsideDir)} .relay || exit 1\n`, { mode: 0o755 });
+    const ended = run(root, 'relay_session_end', { root, model: 'failure-clean-swap', summary: '成功提交后切换 .relay' });
+    ok(ended.status === 0, '成功出场本身完成(清理防线不改变出场语义)', out(ended).slice(0, 500));
+    ok(readFileSync(outside, 'utf8') === 'outside-cleanup-sentinel\n',
+      'pre-commit 切换 .relay 为外部符号链接后,失败标记清理未删除仓库外哨兵');
   }
   console.log('\n== P2 bare 仓库 init 直接拒绝 ==');
   {

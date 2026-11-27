@@ -81,6 +81,36 @@ try {
       'D2 WARN 点名未知键并建议 worktree.enabled', out(du).slice(0, 400));
     writeFileSync(mfPath, mfBackup);
   }
+  console.log('\n== fixture 2b2:三级对象未知键 → D2 WARN + 精确建议 ==');
+  {
+    const mfUnknown = JSON.parse(mfBackup);
+    mfUnknown.rescue = {
+      ...(mfUnknown.rescue || {}),
+      autoLaunch: { enabled: false, enabel: true },
+    };
+    writeFileSync(mfPath, JSON.stringify(mfUnknown, null, 2) + '\n');
+    const du = cli('relay_doctor', {});
+    ok(/D2[^\n]*WARN/.test(out(du)) && /rescue\.autoLaunch\.enabel/.test(out(du))
+      && /rescue\.autoLaunch\.enabled/.test(out(du)), 'D2 点名 rescue.autoLaunch.enabel 并建议 enabled', out(du).slice(0, 500));
+    writeFileSync(mfPath, mfBackup);
+  }
+  console.log('\n== fixture 2b3:数组对象未知键 → D2 WARN + 精确建议 ==');
+  {
+    const mfUnknown = JSON.parse(mfBackup);
+    mfUnknown.rescue = {
+      ...(mfUnknown.rescue || {}),
+      sources: [{ profile: 'jsonl-agent', rooot: '/tmp/example' }],
+      profiles: [{ id: 'custom', kind: 'jsonl-message', filePattern: 'x', extraField: true }],
+    };
+    writeFileSync(mfPath, JSON.stringify(mfUnknown, null, 2) + '\n');
+    const du = cli('relay_doctor', {});
+    ok(/D2[^\n]*WARN/.test(out(du))
+      && /rescue\.sources\[0\]\.rooot/.test(out(du))
+      && /rescue\.sources\[0\]\.root/.test(out(du))
+      && /rescue\.profiles\[0\]\.extraField/.test(out(du)),
+    'D2 检查 rescue.sources/profiles 数组对象并给精确路径', out(du).slice(0, 800));
+    writeFileSync(mfPath, mfBackup);
+  }
 
   console.log('\n== fixture 2c:D8 完成状态收敛(TASKS [x] 无 LOG 完成条目)==');
   {

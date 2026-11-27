@@ -1,8 +1,11 @@
-// relay-mcp — W4 验证引擎:R 系列检查器(R1–R13)与 relay_verify。
+// relay-mcp — 验证引擎:R 系列检查器(R1–R13)与 relay_verify。
 // 依据 CONTRACT.md「检查器规则表」「仓库文件格式」「安全与降级」。
 // TASKS 任务行与 LOG 条目标题的正则与契约逐字符一致,绝不改动;
 // 每条非 PASS 结果都附一条以「修复:」开头的可执行指令。
-import { readFileSafe, isGitRepoAsync, gitRun, scanSecrets, formatSecretHits, SECRET_OK_MARKER, assertNoSymlinkComponents } from '../util.mjs';
+import {
+  readTextOrNull as readText, isGitRepoAsync, gitRun, scanSecrets, formatSecretHits, SECRET_OK_MARKER,
+  assertNoSymlinkComponents,
+} from '../util.mjs';
 import { FACT_LINE_RE, parseFactLine, recomputeCommitStats } from './facts.mjs';
 import { readManifestConfig, underRoots, matchesIgnore, DEFAULT_CODE_ROOTS, DEFAULT_DOCS_ROOTS } from '../config.mjs';
 import { readdir, lstat, realpath } from 'node:fs/promises';
@@ -21,16 +24,14 @@ const pass = (id, detail) => ({ id, result: 'PASS', detail, fix: null });
 const bad = (id, result, detail, fix) => ({ id, result, detail, fix: `修复: ${fix}` });
 const skip = (id, detail, fix) => ({ id, result: 'SKIP', detail, fix: fix ? `修复: ${fix}` : null });
 
-const readText = async (p) => {
-  const t = await readFileSafe(p, null);
-  return typeof t === 'string' ? t : null;
-};
-
 // —— 单轮 verify 的读取/子进程快照(T022) ——
 // 一次 runChecks 只读一次 LOG.md / TASKS.md / manifest.json,只起必要数量的 git 子进程;
 // R7/R9/R10/R11/R12 全部消费同一份快照,避免「同一条日志在两条规则下看到不同版本」。
-const collectMeta = async (root) => {
-  const cfg = await readManifestConfig(root);
+const collectMeta = async (root, preloadedManifest = undefined) => {
+  const cfg = await readManifestConfig(
+    root,
+    preloadedManifest === undefined ? {} : { manifest: preloadedManifest },
+  );
   return { manifest: cfg.manifest, cfg };
 };
 
@@ -56,19 +57,27 @@ const collectGit = async (root, { commits = true } = {}) => {
   // 改用 NUL 作**记录前缀**:文件名不可能含 NUL,因此每个 NUL 之后的第一个行必然是提交头,
   // 路径只可能落在该 chunk 的后续行——文件名再也无法伪造提交边界。
   // 头格式 = sha \t parents(空格分隔) \t subject:%P 让 R5 能识别 merge 提交(N2 复审)。
-  const log = await gitRun(root, '-c', 'core.quotePath=false', 'log', '-20', '--name-only', '--pretty=format:%x00%H%x09%P%x09%s');
+  // 双 NUL 作为提交记录边界,NUL 作为路径边界。文件名可以含换行、制表符、引号、
+  // 甚至字面 `\0` 转义序列,但不能含真实 NUL,因此这里不需要也不允许解析 Git C-quote。
+  const log = await gitRun(root, '-c', 'core.quotePath=false', 'log', '-20', '--name-only', '-z',
+    '--pretty=format:%x00%x00%H%x00%P%x00%s%x00');
   if (log.ok) {
-    for (const chunk of log.stdout.split('\0')) {
-      const rows = chunk.replace(/\r\n/g, '\n').split('\n');
-      const header = rows.shift() || '';
-      const hm = header.match(/^([0-9a-f]{40})\t([0-9a-f ]*)\t(.*)$/);
-      if (!hm) continue; // 空 chunk / 非提交头行(理论上不存在)
-      const cur = { sha: hm[1], parents: hm[2].trim() ? hm[2].trim().split(' ') : [], subject: hm[3], files: [] };
-      for (const row of rows) {
-        const line = row.trim();
-        if (line) cur.files.push(line);
-      }
-      ctx.commits.push(cur);
+    for (const record of log.stdout.split('\0\0')) {
+      if (!record) continue;
+      const fields = record.split('\0');
+      const sha = fields[0] || '';
+      const parents = fields[1] || '';
+      const subject = fields[2] || '';
+      if (!/^[0-9a-f]{40}$/.test(sha)) continue;
+      const files = fields.slice(3)
+        .map((file, i) => (i === 0 && file.startsWith('\n') ? file.slice(1) : file))
+        .filter(Boolean);
+      ctx.commits.push({
+        sha,
+        parents: parents.trim() ? parents.trim().split(' ') : [],
+        subject,
+        files,
+      });
     }
   }
   return ctx;
@@ -85,10 +94,21 @@ const collectSnapshot = async (root, preloadedMeta = null, preloadedTexts = null
   return { ...meta, logText, tasksText, git };
 };
 
+// 协议文本的 HTML 注释在模板里用于示例,不参与任何证据判定。R11 仍直接扫描原文。
+const HTML_COMMENT_BLOCK_RE = /<!--[\s\S]*?-->/g;
+export const LOG_ARCHIVE_POINTER_RE = /^\s*<!--\s*relay:log-archive:\s*(\S+)\s*-->\s*$/;
+export const stripHtmlComments = (text) => String(text ?? '').replace(HTML_COMMENT_BLOCK_RE, '');
+export const stripHtmlCommentsKeepLines = (text) =>
+  String(text ?? '').replace(HTML_COMMENT_BLOCK_RE, (block) => block.replace(/[^\n]/g, ''));
+export const stripProtocolCommentsKeepLines = (text) =>
+  String(text ?? '').replace(HTML_COMMENT_BLOCK_RE, (block) => (
+    LOG_ARCHIVE_POINTER_RE.test(block) ? block : block.replace(/[^\n]/g, '')
+  ));
+
 // LOG 条目解析(最新在上:文件顺序即时间倒序)
 export const parseLogEntries = (text) => {
   const out = [];
-  for (const line of String(text ?? '').replace(/\r\n/g, '\n').split('\n')) {
+  for (const line of stripHtmlCommentsKeepLines(text).replace(/\r\n/g, '\n').split('\n')) {
     const m = line.match(LOG_TITLE_RE);
     if (m) out.push({ time: m[1], model: m[2], task: m[3] });
   }
@@ -317,7 +337,7 @@ const taskIdOfEntry = (entry) => (String(entry?.task || '').match(/^T\d+/) || ['
 const WORKTREE_PAIR_RE = /^- worktree: branch=(relay\/T\d+); sha=([0-9a-f]{40});/;
 
 export const completionWorktreePair = (logText, taskId) => {
-  const blocks = String(logText ?? '').split(/\r?\n(?=## )/).map((block) => block.split(/\r?\n/));
+  const blocks = stripHtmlComments(logText).split(/\r?\n(?=## )/).map((block) => block.split(/\r?\n/));
   const entries = blocks.filter(([heading]) => heading.match(LOG_TITLE_RE)?.[3]?.trim() === `${taskId} 完成`);
   if (entries.length !== 1) return null;
   const pairs = entries[0].slice(1).filter((line) => line.startsWith('- worktree:'));
@@ -470,7 +490,7 @@ const branchContainsSha = async (root, sha, branch) => {
 };
 
 const checkR10 = async (root, cfg, snap) => {
-  const facts = (cfg && cfg.facts) || { enabled: false, since: null, strict: false };
+  const facts = (cfg && cfg.facts) || { enabled: false, since: null };
   if (!facts.enabled) {
     return skip('R10', 'manifest.facts.enabled 未开启,跳过事实对账', '新项目由 relay_init/onboard 开启;旧项目在 .relay/manifest.json 写入 facts.enabled=true 与 facts.since 后生效');
   }
@@ -479,22 +499,38 @@ const checkR10 = async (root, cfg, snap) => {
   }
   const t = snap ? snap.logText : await readText(join(root, 'LOG.md'));
   if (t == null) return skip('R10', 'LOG.md 不存在', '出场会写入首条日志');
-  const lines = t.replace(/\r\n/g, '\n').split('\n');
+  const lines = stripHtmlCommentsKeepLines(t).replace(/\r\n/g, '\n').split('\n');
   // LOG 最新在上。旧条目有兼容豁免,也不能遮住后面仍在对账范围内的完成证据。
   let firstCompletion = null;
-  let entry = null;
-  let start = -1;
+  let firstStart = -1;
   for (let i = 0; i < lines.length; i++) {
     const m = lines[i].match(LOG_TITLE_RE);
     if (!m || !isDoneTaskField(m[3])) continue;
-    firstCompletion ??= m[1];
-    if (m[1] < facts.since) continue;
-    entry = { time: m[1], task: m[3] };
-    start = i;
+    firstCompletion = { time: m[1], task: m[3] };
+    firstStart = i;
     break;
   }
   if (!firstCompletion) return pass('R10', 'LOG 中暂无完成条目,无需事实对账');
-  if (!entry) return skip('R10', `完成条目均早于 facts.since(${facts.since}),跳过(升级兼容)`, null);
+  // 标题与提交时间都可伪造。标题早于 since 时,只有该行在 HEAD 中的引入提交
+  // 是 manifest.facts.baselineSha 的祖先,才属于启用前历史并可跳过。
+  let scoped = firstCompletion.time >= facts.since;
+  if (!scoped && snap?.git?.isRepo) {
+    const blame = await gitRun(root, 'blame', '--line-porcelain', '-L', `${firstStart + 1},${firstStart + 1}`, 'HEAD', '--', 'LOG.md');
+    const introduced = blame.ok ? (blame.stdout.match(/^\^?([0-9a-f]{40})\s+/m) || [])[1] : '';
+    const baseline = /^[0-9a-f]{40}$/.test(facts.baselineSha || '') ? facts.baselineSha : '';
+    const historical = introduced && baseline
+      ? await gitRun(root, 'merge-base', '--is-ancestor', introduced, baseline)
+      : null;
+    // 缺 baseline、未提交或无法证明拓扑先后 → 不享受升级豁免。
+    scoped = !(historical && historical.ok);
+  } else if (!scoped && !snap?.git?.isRepo) {
+    scoped = true;
+  }
+  if (!scoped) {
+    return skip('R10', `最新完成条目早于 facts.since(${facts.since})且是 baselineSha 之前的历史,跳过(升级兼容)`, null);
+  }
+  const entry = firstCompletion;
+  const start = firstStart;
   const end = lines.findIndex((line, i) => i > start && LOG_TITLE_RE.test(line));
   const block = lines.slice(start + 1, end < 0 ? lines.length : end);
   const factIdx = block.findIndex((l) => FACT_LINE_RE.test(l));
@@ -551,12 +587,17 @@ const checkR10 = async (root, cfg, snap) => {
       return bad('R10', 'ERROR', `事实行 branch=${parsed.branch} 与 worktree 成对证据 branch=${pair[1]} 不一致`, repair);
     }
     codeSha = pair[2];
-    const { readWorktreeRegistryState } = await import('./worktree.mjs');
+    const { readWorktreeRegistryState, readWorktreeConfig, managedRecordShapeError } = await import('./worktree.mjs');
     const state = await readWorktreeRegistryState(root);
     if (state.state !== 'ok') return unavailable(`registry=${state.state}`);
     const rows = state.registry.worktrees.filter((row) => row.task === taskId);
     if (rows.length !== 1) return unavailable(`registry 任务 ${taskId} 缺失或不唯一`);
     const record = rows[0];
+    let wtCfg;
+    try { wtCfg = await readWorktreeConfig(root); }
+    catch (e) { return unavailable(`worktree.cacheDir 无法校验:${e?.message || e}`); }
+    const shapeError = managedRecordShapeError(record, wtCfg.cacheDir);
+    if (shapeError) return bad('R10', 'ERROR', `受管注册记录无效:${shapeError}`, repair);
     if (!/^[0-9a-f]{40}$/.test(record.baseSha || '')) return unavailable('registry.baseSha 无效');
     if (record.branch !== parsed.branch) {
       return bad('R10', 'ERROR', 'worktree 成对证据的 branch 与 registry.branch 不一致', repair);
@@ -676,11 +717,11 @@ const checkR11 = async (root, snap) => {
 // 指针必须指向真实存在的 docs/archive/LOG-*.md 才被承认——否则一行字就能把活跃区归零,比调大阈值更容易消音。
 export const R12_MAX_LOG_LINES = 150;
 export const R12_MAX_DONE_ENTRIES = 20;
-export const LOG_ARCHIVE_POINTER_RE = /^\s*<!--\s*relay:log-archive:\s*(\S+)\s*-->\s*$/;
 export const ARCHIVE_REL_RE = /^docs\/archive\/LOG-[^/\\]+\.md$/i;
 export const findArchiveBoundary = async (root, lines) => {
-  for (let i = 0; i < lines.length; i++) {
-    const m = lines[i].match(LOG_ARCHIVE_POINTER_RE);
+  const cleanLines = stripProtocolCommentsKeepLines(lines.join('\n')).split('\n');
+  for (let i = 0; i < cleanLines.length; i++) {
+    const m = cleanLines[i].match(LOG_ARCHIVE_POINTER_RE);
     if (!m) continue;
     const rel = m[1];
     if (!ARCHIVE_REL_RE.test(rel)) continue;
@@ -731,8 +772,6 @@ const checkR12 = async (root, cfg, snap) => {
 // 解析器对不匹配的协议行是静默跳过:拼错的任务行从简报/待办枚举消失,拼错的 LOG 标题从
 // R7/R9/R10 窗口消失——「没有任务」与「任务写错了」不可区分,属于协议面的 fail-open。
 // 误报防线:先剥离 HTML 注释块(模板示例在注释里),再只认第 0 列;缩进行不属协议行。
-const HTML_COMMENT_BLOCK_RE = /<!--[\s\S]*?-->/g;
-const stripHtmlComments = (text) => String(text ?? '').replace(HTML_COMMENT_BLOCK_RE, '');
 const TASK_LINE_LIKE_RE = /^- \[/;
 const TRIM_META_RE = /^.+,\s*\d{4}-\d{2}-\d{2} \d{2}:\d{2}$/;
 const DONE_META_RE = /^\d{4}-\d{2}-\d{2}$/;
@@ -865,7 +904,7 @@ export const relayVerify = async (args = {}) => {
     return { content: [{ type: 'text', text: formatChecks(results, { root: roots.controlRoot, full }) }], isError: hasError };
   }
   // 双根:meta 只解析一次,两套检查共用(manifest 读取次数恒为 1)
-  const meta = await collectMeta(roots.controlRoot);
+  const meta = await collectMeta(roots.controlRoot, roots.manifest);
   const controlResults = await runChecks(roots.controlRoot, { full, meta });
   const taskResults = await runTaskTreeChecks(roots.executionRoot, roots.controlRoot, { meta });
   const hasError = [...controlResults, ...taskResults].some((r) => r.result === 'ERROR');

@@ -3,22 +3,26 @@
 //   1) 只读:不写任何文件、不取仓库写锁、不自动修复(自动修=越 fail-closed,修复指令交给人类/下一个会话)。
 //   2) 每条非 OK 结果都以「修复:」开头,给可执行指令,且只引用 relay 原生命令(绝不输出 rm)。
 //   3) 诊断的是「环境/安装面」漂移,不是仓库规范(R1–R13 归 relay_verify)。
-import { readFileSafe, isGitRepoAsync, gitRun, parseLockContent, claimLockExpiry, templatesDir } from '../util.mjs';
-import { readWorktreeRegistryState, resolveRelayRoots } from './worktree.mjs';
+import {
+  readTextOrNull as readText, isGitRepoAsync, gitRun, parseLockContent, claimLockExpiry, templatesDir,
+} from '../util.mjs';
+import {
+  managedRecordShapeError, readWorktreeConfig, readWorktreeRegistryState, resolveRelayRoots,
+} from './worktree.mjs';
 import { generateEntryFiles } from './sync.mjs';
-import { collectUnknownManifestKeys, KNOWN_MANIFEST_KEYS, KNOWN_NESTED_KEYS } from '../config.mjs';
-import { collectCompletionEvidence, completedTaskIds, findArchiveBoundary, LOG_ARCHIVE_POINTER_RE } from './verify.mjs';
+import {
+  collectUnknownManifestKeys, KNOWN_MANIFEST_KEYS, KNOWN_NESTED_KEYS, KNOWN_DEEP_KEYS, KNOWN_ARRAY_OBJECT_KEYS,
+} from '../config.mjs';
+import {
+  collectCompletionEvidence, completedTaskIds, findArchiveBoundary, LOG_ARCHIVE_POINTER_RE,
+  stripProtocolCommentsKeepLines,
+} from './verify.mjs';
 import { join, resolve, isAbsolute, sep } from 'node:path';
 import { readdir, lstat, stat } from 'node:fs/promises';
 
 const ok = (id, name, detail) => ({ id, name, result: 'OK', detail, fix: null });
 const warn = (id, name, detail, fix) => ({ id, name, result: 'WARN', detail, fix });
 const bad = (id, name, detail, fix) => ({ id, name, result: 'ERROR', detail, fix });
-
-const readText = async (p) => {
-  const t = await readFileSafe(p, null);
-  return typeof t === 'string' ? t : null;
-};
 
 // D1 运行时
 const checkNode = () => {
@@ -39,10 +43,15 @@ const levenshtein = (a, b) => {
   return dp[a.length][b.length];
 };
 const suggestManifestKey = (key) => {
-  const dot = key.indexOf('.');
+  const dot = key.lastIndexOf('.');
   const parent = dot > 0 ? key.slice(0, dot) : '';
   const leaf = dot > 0 ? key.slice(dot + 1) : key;
-  const pool = parent && KNOWN_NESTED_KEYS[parent] ? KNOWN_NESTED_KEYS[parent] : KNOWN_MANIFEST_KEYS;
+  const arrayParent = parent.replace(/\[\d+\]/g, '');
+  const pool = parent && KNOWN_ARRAY_OBJECT_KEYS[arrayParent]
+    ? KNOWN_ARRAY_OBJECT_KEYS[arrayParent]
+    : parent && KNOWN_DEEP_KEYS[parent]
+      ? KNOWN_DEEP_KEYS[parent]
+      : parent && KNOWN_NESTED_KEYS[parent] ? KNOWN_NESTED_KEYS[parent] : KNOWN_MANIFEST_KEYS;
   let best = '';
   let bestD = Infinity;
   for (const c of pool) {
@@ -64,7 +73,7 @@ const checkCompletionConsistency = async (root) => {
   const issues = [];
   if (archiveUnreadable) issues.push('无法完整读取 LOG-* 归档证据');
   const dangling = [];
-  for (const line of String(log ?? '').split('\n')) {
+  for (const line of stripProtocolCommentsKeepLines(log).split('\n')) {
     const pointer = line.match(LOG_ARCHIVE_POINTER_RE);
     if (pointer && await findArchiveBoundary(root, [line]) < 0) dangling.push(pointer[1]);
   }
@@ -191,12 +200,27 @@ const checkWorktrees = async (root) => {
   if (!others.length) return ok('D5', 'worktree', '无额外 worktree');
   const regState = await readWorktreeRegistryState(root);
   const registered = new Set();
+  const malformed = [];
   if (regState.state === 'ok' && regState.registry) {
+    let cacheDir = null;
+    try { cacheDir = (await readWorktreeConfig(root)).cacheDir; } catch { /* D2/D6 会报告 manifest */ }
     for (const w of regState.registry.worktrees || []) {
       // P1-12:注册表存的是**控制根相对路径**(如 .relay/worktrees/T014),必须相对 root 解析;
       // 记录里没有 absPath 字段,旧分支是死代码。
-      if (w && typeof w.path === 'string') registered.add(resolve(root, w.path));
+      if (!w || typeof w.path !== 'string') continue;
+      if (cacheDir) {
+        const error = managedRecordShapeError(w, cacheDir);
+        if (error) {
+          malformed.push(error);
+          continue;
+        }
+      }
+      registered.add(resolve(root, w.path));
     }
+  }
+  if (malformed.length) {
+    return bad('D5', 'worktree', `注册表含 ${malformed.length} 条非法受管记录:${malformed.slice(0, 3).join('; ')}`,
+      '修正 task/path/branch/baseSha/status 使其与 cacheDir/T###、relay/T### 和真实提交一致;来历不明的记录不得参与完成或清理');
   }
   const relayish = others.filter((e) => /refs\/heads\/relay\//.test(e.branch) || e.path.includes(`${'.relay'}/worktrees`));
   const unregistered = relayish.filter((e) => !registered.has(resolve(e.path)));

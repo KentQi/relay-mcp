@@ -48,6 +48,31 @@ try {
   ok(/命中 3 条/.test(out(r4)), 'status 过滤返回 TASKS 中的三条待办');
   const r5 = cli('relay_recall', { limit: 999 });
   ok(r5.status === 0 && /命中 3 条/.test(out(r5)), 'limit 超上限被夹到 50(不报错)');
+  const rBadStatus = cli('relay_recall', { status: 'bogus' });
+  ok(rBadStatus.status === 1 && /非法 status/.test(out(rBadStatus)) && /允许值/.test(out(rBadStatus)),
+    '非法 status → fail-closed,不静默取消过滤', out(rBadStatus).slice(0, 400));
+  const rEmptyStatus = cli('relay_recall', { status: '' });
+  ok(rEmptyStatus.status === 1, '显式空 status 同样拒绝,不伪装成未传');
+
+  console.log('\n== HTML 注释中的伪日志不进入检索 ==');
+  {
+    const saved = readFileSync(logPath, 'utf8');
+    writeFileSync(logPath, `${saved}\n<!--\n## 2026-01-01 00:00 | model=fake | task=T998 完成\n- 摘要: COMMENT-ONLY-EVIDENCE\n-->\n`);
+    const hidden = cli('relay_recall', { query: 'COMMENT-ONLY-EVIDENCE' });
+    ok(hidden.status === 0 && /命中 0 条/.test(out(hidden)), '注释内条目不被 recall 索引', out(hidden).slice(0, 300));
+    writeFileSync(logPath, saved);
+  }
+
+  console.log('\n== HTML 注释中的伪任务不进入检索 ==');
+  {
+    const tasksPath = path.join(tmp, 'TASKS.md');
+    const saved = readFileSync(tasksPath, 'utf8');
+    writeFileSync(tasksPath, `${saved}\n<!--\n- [ ] T998 COMMENT_ONLY_TASK\n  验收: 不应被索引\n-->\n`);
+    const hiddenTask = cli('relay_recall', { query: 'COMMENT_ONLY_TASK' });
+    ok(hiddenTask.status === 0 && /命中 0 条/.test(out(hiddenTask)),
+      '注释内任务行不被 recall 索引', out(hiddenTask).slice(0, 400));
+    writeFileSync(tasksPath, saved);
+  }
 
   console.log('\n== get:全文取回 ==');
   const before = gitStatus();

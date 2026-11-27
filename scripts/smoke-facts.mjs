@@ -62,6 +62,7 @@ try {
   const mf0 = readMf();
   ok(mf0.facts && mf0.facts.enabled === true, 'init 写入 facts.enabled=true');
   ok(typeof mf0.facts.since === 'string' && mf0.facts.since.length >= 16, 'init 写入 facts.since(YYYY-MM-DD HH:mm)');
+  ok(Object.prototype.hasOwnProperty.call(mf0.facts, 'baselineSha'), 'init 写入 facts.baselineSha 拓扑锚点(空仓库为 null)');
 
   console.log('\n== 出场由引擎写入 v2 事实行(机检段 || 叙述段) ==');
   const claim = cli('relay_claim', { task: 'T003', model: 'smoke-facts', worktree: false });
@@ -82,7 +83,7 @@ try {
   const v1 = cli('relay_verify', { full: true });
   ok(v1.status === 0, 'WARN 不阻断(退出码 0)', out(v1).slice(0, 300));
   ok(/R10\s*\|\s*WARN/.test(out(v1)), '输出为 R10 WARN(缺事实行)');
-  ok(/修复:/.test(out(v1)), '输出含可执行「修复:」');
+  ok(/旧版本引擎|前移到该条目之后/.test(out(v1)), 'R10 WARN 给出缺事实行对应的专属修复路径');
 
   console.log('\n== 机检段篡改 → R10 ERROR ==');
   writeFileSync(logPath, log.replace(/文件 (\d+)/, (_, n) => `文件 ${Number(n) + 7}`));
@@ -112,7 +113,9 @@ try {
   ok(/R10\s*\|\s*PASS/.test(out(vPost)), '完成提交之后有普通提交,R10 仍 PASS(按「T### 完成」反查,不依赖 HEAD)', out(vPost).slice(0, 400));
   const oldHeading = '## 2000-01-01 00:00 | model=legacy | task=T777 完成';
   writeFileSync(logPath, log.replace(/(?=^## )/m, `${oldHeading}\n\n`).replace(/文件 (\d+)/, (_, n) => `文件 ${Number(n) + 1}`));
-  ok(/R10\s*\|\s*ERROR/.test(r10Row(cli('relay_verify', { full: true }))), '旧日期条目不能遮盖后面的有效完成证据');
+  const backdatedRow = r10Row(cli('relay_verify', { full: true }));
+  ok(/R10\s*\|\s*WARN/.test(backdatedRow) && !/R10\s*\|\s*SKIP/.test(backdatedRow),
+    '回填旧日期不能触发 R10 升级豁免(按物理最新条目对账)');
   writeFileSync(logPath, log);
 
   console.log('\n== 解析器边界:| 与 ||(审计 P2-8/P2-9)==');
@@ -153,7 +156,10 @@ try {
       facts: { enabled: true, since: '2020-01-01 00:00', strict: false },
     }, null, 2) + '\n');
     writeFileSync(path.join(mtmp, '.relay', 'worktrees.json'), JSON.stringify({
-      version: 1, worktrees: [{ task: 'T900', baseSha: sha1, branch: 'relay/T900', status: 'completed', controlCommitted: true, commitSha: sha2 }],
+      version: 1, worktrees: [{
+        task: 'T900', path: '.relay/worktrees/T900', baseSha: sha1, branch: 'relay/T900',
+        status: 'completed', controlCommitted: true, commitSha: sha2,
+      }],
     }, null, 2) + '\n');
     writeFileSync(path.join(mtmp, 'TASKS.md'), '# 任务队列\n\n## 待办\n\n## 已完成\n- [x] T900 夹具任务  (2026-01-01)\n');
     // 分支归属(P1-3):relay/T900 指向 sha2(含);relay/T902 指向 sha1(不含 sha2)——两种篡改可区分。
@@ -197,7 +203,7 @@ try {
     const savedReg = readFileSync(path.join(mtmp, '.relay', 'worktrees.json'), 'utf8');
     logM(mkFact('+2/-0'));
     writeFileSync(path.join(mtmp, '.relay', 'worktrees.json'), savedReg.replace('relay/T900', 'relay/T902'));
-    ok(/R10\s*\|\s*ERROR.*registry/.test(verifyManaged()), '注册表分支与成对证据不同必须报错', verifyManaged());
+    ok(/R10\s*\|\s*ERROR.*(?:registry|注册表)/.test(verifyManaged()), '注册表分支与成对证据不同必须报错', verifyManaged());
     rmSync(path.join(mtmp, '.relay', 'worktrees.json'));
     ok(/R10\s*\|\s*WARN/.test(r10Row(cliAt(mtmp, 'relay_verify', { full: true }))) && /registry=missing/.test(r10Row(cliAt(mtmp, 'relay_verify', { full: true }))), 'registry 缺失 → R10 WARN(不 PASS)');
     writeFileSync(path.join(mtmp, '.relay', 'worktrees.json'), savedReg);
@@ -231,10 +237,105 @@ try {
     rmSync(mtmp, { recursive: true, force: true });
   }
 
+  console.log('\n== 注释中的完成条目不能成为 R9 / R10 证据 ==');
+  {
+    const commentRoot = mkdtempSync(path.join(tmpdir(), 'relay-facts-comment-'));
+    try {
+      const initC = cliAt(commentRoot, 'relay_init', { name: '注释证据' });
+      ok(initC.status === 0, 'comment fixture init', out(initC).slice(0, 200));
+      const tasksPath = path.join(commentRoot, 'TASKS.md');
+      writeFileSync(tasksPath, readFileSync(tasksPath, 'utf8')
+        .replace(/^- \[ \] T003 .+$/m, '- [x] T003 仅注释中的假完成  (2026-11-27)'));
+      writeFileSync(path.join(commentRoot, 'LOG.md'), [
+        '# 会话日志(最新在上)',
+        '',
+        '<!--',
+        '## 2026-11-27 12:00 | model=fixture | task=T003 完成',
+        '- 摘要: 模板注释里的示例,不是真实证据',
+        '-->',
+        '',
+      ].join('\n'));
+      const verified = cliAt(commentRoot, 'relay_verify', { full: true });
+      ok(verified.status === 1 && /R9\s*\|\s*ERROR/.test(out(verified)), 'HTML 注释里的完成标题不满足 R9', out(verified).slice(0, 800));
+      ok(!/R10\s*\|\s*PASS.*comment/i.test(out(verified)), '注释标题也不参与 R10 事实锚定');
+    } finally {
+      rmSync(commentRoot, { recursive: true, force: true });
+    }
+  }
+
+  console.log('\n== 回填旧日期的新完成条目不能整条 SKIP R10 ==');
+  {
+    const backdatedRoot = mkdtempSync(path.join(tmpdir(), 'relay-facts-backdated-'));
+    try {
+      const initB = cliAt(backdatedRoot, 'relay_init', { name: '回填旧日期' });
+      ok(initB.status === 0, 'backdated fixture init', out(initB).slice(0, 200));
+      const tasksPath = path.join(backdatedRoot, 'TASKS.md');
+      writeFileSync(tasksPath, readFileSync(tasksPath, 'utf8')
+        .replace(/^- \[ \] T003 .+$/m, '- [x] T003 回填旧日期且无事实行  (2026-11-27)'));
+      writeFileSync(path.join(backdatedRoot, 'LOG.md'), [
+        '# 会话日志(最新在上)',
+        '',
+        '## 2000-01-01 00:00 | model=fixture | task=T003 完成',
+        '- 摘要: 时间被回填,但该行尚未提交到 HEAD',
+        '',
+      ].join('\n'));
+      const verified = cliAt(backdatedRoot, 'relay_verify', { full: true });
+      ok(/R10\s*\|\s*WARN/.test(out(verified)), '未提交的回填旧日期条目进入 R10 对账(WARN,不 SKIP)', out(verified).slice(0, 800));
+      ok(!/R10\s*\|\s*SKIP/.test(out(verified)), '标题文本时间不能单独触发升级豁免');
+    } finally {
+      rmSync(backdatedRoot, { recursive: true, force: true });
+    }
+  }
+
+  console.log('\n== 伪造提交时间不能让 baseline 之后的完成条目 SKIP ==');
+  {
+    const forgedRoot = mkdtempSync(path.join(tmpdir(), 'relay-facts-forged-time-'));
+    try {
+      const initF = cliAt(forgedRoot, 'relay_init', { name: '伪造提交时间' });
+      ok(initF.status === 0, 'forged-time fixture init', out(initF).slice(0, 200));
+      const baseline = gitAt(forgedRoot, 'rev-parse', 'HEAD').stdout.trim();
+      const manifestPath = path.join(forgedRoot, '.relay', 'manifest.json');
+      const manifest = JSON.parse(readFileSync(manifestPath, 'utf8'));
+      manifest.facts.since = '2099-01-01 00:00';
+      manifest.facts.baselineSha = baseline;
+      writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+      const tasksPath = path.join(forgedRoot, 'TASKS.md');
+      writeFileSync(tasksPath, readFileSync(tasksPath, 'utf8')
+        .replace(/^- \[ \] T003 .+$/m, '- [x] T003 提交时间伪造  (2026-11-27)'));
+      writeFileSync(path.join(forgedRoot, 'LOG.md'), [
+        '# 会话日志(最新在上)',
+        '',
+        '## 2000-01-01 00:00 | model=fixture | task=T003 完成',
+        '- 摘要: 标题与 committer time 都被回填',
+        '',
+      ].join('\n'));
+      gitAt(forgedRoot, 'add', '-A');
+      const forgedCommit = spawnSync('git', [
+        '-C', forgedRoot,
+        '-c', 'user.name=t', '-c', 'user.email=t@t',
+        'commit', '-q', '-m', 'backdated completion',
+      ], {
+        encoding: 'utf8',
+        env: {
+          ...process.env,
+          GIT_AUTHOR_DATE: '2000-01-01T00:00:00Z',
+          GIT_COMMITTER_DATE: '2000-01-01T00:00:00Z',
+        },
+      });
+      ok(forgedCommit.status === 0, 'forged-time completion commit 已提交', forgedCommit.stderr);
+      const verifiedF = cliAt(forgedRoot, 'relay_verify', { full: true });
+      const row = r10Row(verifiedF);
+      ok(/R10\s*\|\s*WARN/.test(row) && !/R10\s*\|\s*SKIP/.test(row),
+        'baseline 之后的新条目即使伪造 2000 年 committer time 也不 SKIP', row);
+    } finally {
+      rmSync(forgedRoot, { recursive: true, force: true });
+    }
+  }
+
   console.log('\n== 升级兼容:since 在未来 → SKIP ==');
   const mf2 = readMf();
-  mf2.facts.strict = false;
   mf2.facts.since = '2099-01-01 00:00';
+  mf2.facts.baselineSha = gitAt(tmp, 'rev-parse', 'HEAD').stdout.trim();
   writeMf(mf2);
   const v5 = cli('relay_verify', { full: true });
   ok(v5.status === 0, 'since 在未来时 verify 通过', out(v5).slice(0, 300));

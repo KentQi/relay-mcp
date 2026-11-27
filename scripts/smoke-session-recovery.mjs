@@ -190,6 +190,50 @@ try {
   }
   check('managed 代码提交后异常恢复幂等,不重复代码提交', () => {});
 
+  console.log('\n== control 提交后、registry 收尾前崩溃 → HEAD 前进仍可恢复 ==');
+  {
+    const control = mk();
+    assert.equal(run('relay_init', { root: control, name: 'registry crash', preset: 'minimal' }).status, 0);
+    addTask(control, 'T906', '注册表收尾恢复');
+    const claim = run('relay_claim', { root: control, task: 'T906', model: 'registry-a', worktree: true, ttl_minutes: 1 });
+    assert.equal(claim.status, 0, out(claim));
+    const execution = path.join(control, '.relay/worktrees/T906');
+    writeFileSync(path.join(execution, 'README.md'), 'registry crash durable\n');
+    const crashed = run('relay_session_end', {
+      root: execution, model: 'registry-a', summary: 'registry 收尾前中断', done_task: 'T906',
+    }, { RELAY_TEST_HOOKS: '1', RELAY_CRASH_BEFORE_REGISTRY: '1' });
+    assert.equal(crashed.status, 137, out(crashed));
+    const originalCodeSha = git(execution, 'rev-parse', 'HEAD');
+    const originalControlSha = git(control, 'rev-parse', 'HEAD');
+    assert.match(git(control, 'show', '-s', '--format=%s', originalControlSha), /T906 完成/);
+    assert.match(readFileSync(path.join(control, 'LOG.md'), 'utf8'), /task=T906 完成/);
+    const activeRegistry = JSON.parse(readFileSync(path.join(control, '.relay/worktrees.json'), 'utf8'));
+    assert.equal(activeRegistry.worktrees.find((w) => w.task === 'T906').status, 'active');
+    writeFileSync(path.join(execution, 'README.md'), 'task branch advanced after control completion\n');
+    git(execution, 'add', '--', 'README.md');
+    git(execution, '-c', 'commit.gpgsign=false', '-c', 'user.email=fixture@example.test', '-c', 'user.name=fixture',
+      'commit', '-q', '-m', 'task branch follow-up after control completion');
+    assert.notEqual(git(execution, 'rev-parse', 'HEAD'), originalCodeSha);
+    rmSync(path.join(control, '.relay/relay.lock'), { force: true });
+    mkdirSync(path.join(control, 'docs', '04-test'), { recursive: true });
+    writeFileSync(path.join(control, 'docs', '04-test', '01-test-intervening-v1.0.md'),
+      '---\ntitle: Intervening commit\nversion: 1.0\ncreated: 2026-11-28\nstatus: 现行\n---\n\n# Intervening commit\n');
+    git(control, 'add', '--', 'docs/04-test/01-test-intervening-v1.0.md');
+    git(control, '-c', 'user.email=fixture@example.test', '-c', 'user.name=fixture', 'commit', '-q', '-m', 'docs: intervening commit after control completion');
+    assert.notEqual(git(control, 'rev-parse', 'HEAD'), originalControlSha);
+    const recovered = run('relay_session_end', { root: execution, model: 'registry-a', summary: '恢复到原完成提交', done_task: 'T906' });
+    assert.equal(recovered.status, 0, out(recovered));
+    const registry = JSON.parse(readFileSync(path.join(control, '.relay/worktrees.json'), 'utf8'));
+    const record = registry.worktrees.find((w) => w.task === 'T906');
+    assert.equal(record.status, 'completed');
+    assert.equal(record.commitSha, originalCodeSha);
+    assert.equal(record.controlSha, originalControlSha);
+    assert.equal(record.controlCommitted, true);
+    assert.equal(existsSync(path.join(control, '.relay/claims/T906.lock')), false);
+    assert.match(out(recovered), /恢复历史完成 SHA|任务分支之后继续前进/);
+  }
+  check('control HEAD 与任务分支都前进后仍按匹配的 LOG/commit 反查原完成 SHA', () => {});
+
   if (process.platform !== 'win32') {
     console.log('\n== Git 拒绝提交 → 认领保留且重跑补交 ==');
     const root = mk();

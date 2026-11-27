@@ -51,6 +51,7 @@ try {
   {
     const root = await freshRepo('onboard-preserve');
     const before = manifestOf(root);
+    const baselineSha = git(root, 'rev-parse', 'HEAD');
     const custom = {
       ...before,
       worktree: { enabled: true, cacheDir: '.relay/worktrees', ttlHours: 12, autoCleanup: false },
@@ -59,6 +60,7 @@ try {
       protectedPaths: ['secrets/**'],
       entryFilesTakeover: true,
       codeRoots: ['src', 'app'],
+      facts: { ...before.facts, baselineSha },
     };
     writeManifest(root, custom);
     git(root, 'add', '-A');
@@ -143,6 +145,8 @@ try {
     ok(!r3.isError && read(path.join(root2, '.gitignore')).includes('.relay/worktrees/'),
       'C3b: 缺失 .gitignore 时 sync 按基线新建', txt(r3));
     ok(txt(r3).includes('按基线新建'), 'C3b: 报告声明 .gitignore 已按基线新建', txt(r3));
+    ok(!txt(r3).includes('.relay/worktrees.lock') && !read(path.join(root2, '.gitignore')).includes('.relay/worktrees.lock'),
+      'C3b: 新建基线报告与内容都不再出现幽灵 worktrees.lock', txt(r3));
   }
 
   console.log('\n== C4: contract / README / CONTRACT / templates 文案契约 ==');
@@ -174,6 +178,8 @@ try {
     ok(/two commits|TWO commits/i.test(protocol), 'C4: relay://protocol 含双提交');
     ok(protocol.includes('relay/T###') && protocol.includes('ignored'), 'C4: relay://protocol 含未合并/ignored 说明');
     ok(protocol.includes('abort'), 'C4: relay://protocol 含 abort 能力边界');
+    ok(/Managed\s+completion[\s\S]*autoCommit:false[\s\S]*fail-closed/.test(protocol),
+      'C4: relay://protocol 明确 autoCommit:false 的受管完成 fail-closed 语义');
 
     const readme = read(path.join(RELAY, 'README.md'));
     for (const [needle, label] of [

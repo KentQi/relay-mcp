@@ -23,20 +23,22 @@ import { randomUUID } from 'node:crypto';
 import path from 'node:path';
 import {
   acquireFileLock, acquireRepoLock, assertNoSymlinkComponents, ensureDir, findSensitivePaths, gitRun,
-  gitIdentityArgs, isGitRepoAsync, nowIso, parseLockContent, readFileSafe, redactSecrets, releaseFileLock, scanSecrets, sha256Hex, stamp,
-  writeFileAtomic, writeProtocolFile,
+  claimLockExpiry, gitIdentityArgs, isGitRepoAsync, nowIso, parseLockContent, readFileSafe, redactSecrets, releaseFileLock, scanSecrets,
+  sha256Hex, stamp, toolText as textResult, writeFileAtomic, writeProtocolFile, DEFAULT_CLAIM_TTL_MINUTES,
 } from '../util.mjs';
 import { ensureGitignoreBaseline, readManifestConfig } from '../config.mjs';
 import { resolveRelayRoots } from './worktree.mjs';
-import { resolveAllProfiles, legacyProfileFor } from './rescue-profiles.mjs';
+import {
+  MAX_RESCUE_DISCOVERY_CANDIDATES, MAX_RESCUE_SCAN_CANDIDATES, resolveAllProfiles, legacyProfileFor,
+} from './rescue-profiles.mjs';
 import { TASK_LINE_RE } from './verify.mjs';
 
 const RESCUE_REL = '.relay/rescue';
 const LOCK_NAME = 'takeover.lock';
 const STATE_NAME = 'state.json';
 const TRANSCRIPT_NAME = 'transcript.json';
-const TAKEOVER_TTL_MIN = 240;
-const MAX_SCAN_CANDIDATES = 400;
+const TAKEOVER_TTL_MIN = DEFAULT_CLAIM_TTL_MINUTES;
+const MAX_SCAN_CANDIDATES = MAX_RESCUE_SCAN_CANDIDATES;
 const MAX_ARG_BYTES = 16 * 1024;
 const NARRATIVE_CAP = 2400;
 const COMMAND_CAP = 20;
@@ -190,9 +192,6 @@ const startAutoLaunch = async ({ controlRoot, id, task, model, launch }) => {
   return { ok: true, pid: child.pid || null };
 };
 
-const textResult = (text, isError = false) => (
-  isError ? { content: [{ type: 'text', text }], isError: true } : { content: [{ type: 'text', text }] }
-);
 const fail = (title, msg, extra = []) => textResult([`# ${title}`, '', msg, ...extra].join('\n'), true);
 const codePointClip = (s, n) => {
   const cps = Array.from(String(s ?? ''));
@@ -229,10 +228,11 @@ const ownedByRoots = async (roots, cwd) => {
 // 核心不认识任何具体 harness:所有「在哪找、怎么读」都由 rescue-profiles.mjs 的描述符声明。
 // 新增 harness = 加一份描述符,不改本文件。
 
-// 在给定 root 下用某描述符发现候选。归属由调用方在收集后统一判定。
-const discoverWithProfile = async (profile, root, { maxAgeMs }) => {
+// 在给定 root 下用某描述符发现候选。归属仍由调用方统一判定;
+// match/limit 在描述符内部生效,避免大规模无关候选把精确 capture 的目标挡在硬上限外。
+const discoverWithProfile = async (profile, root, { maxAgeMs, limit, match }) => {
   try {
-    return { candidates: await profile.discover(root, { maxAgeMs }), error: '' };
+    return { candidates: await profile.discover(root, { maxAgeMs, limit, match }), error: '' };
   } catch (e) {
     // 不静默吞异常:SQLite 缺表/损坏、权限不足等必须在 scan 的「说明」里可见。
     return { candidates: [], error: `${profile.id}: ${e?.message || String(e)}` };
@@ -281,27 +281,37 @@ const resolveExplicitSource = async (abs, cfg) => {
     if (raw == null) continue;
     let meta;
     try { meta = JSON.parse(raw); } catch { continue; }
-    const pick = (obj, spec) => {
-      const keys = Array.isArray(spec) ? spec : [spec];
-      for (const k of keys) if (typeof (obj || {})[k] === 'string' && obj[k]) return obj[k];
-      return '';
-    };
-    const cwd = pick(meta, ['cwd', 'workspaceRoot', 'dir', 'root']);
+    const mapped = typeof profile.readMetadata === 'function'
+      ? profile.readMetadata(meta, {
+        sourcePath: path.join(abs, metaFile),
+        fallbackId: path.basename(abs),
+        parentSessionId: path.basename(path.dirname(abs)),
+      })
+      : (() => {
+        const pick = (obj, spec) => {
+          const keys = Array.isArray(spec) ? spec : [spec];
+          for (const k of keys) if (typeof (obj || {})[k] === 'string' && obj[k]) return obj[k];
+          return '';
+        };
+        return {
+          sourcePath: path.join(abs, metaFile),
+          transcriptPath: '',
+          agentId: pick(meta, ['agentId', 'id']) || path.basename(abs),
+          parentSessionId: pick(meta, ['parentSessionId', 'parentId']) || path.basename(path.dirname(abs)),
+          cwd: pick(meta, ['cwd', 'workspaceRoot', 'dir', 'root']),
+          status: pick(meta, ['status', 'state']),
+          error: pick(meta, ['error', 'lastError']),
+          prompt: pick(meta, ['prompt', 'task', 'input']),
+          description: pick(meta, ['description', 'title']),
+          agentType: pick(meta, ['profileId', 'agentType', 'kind']),
+          createdAt: pick(meta, ['createdAt', 'created']),
+          updatedAt: pick(meta, ['updatedAt', 'completedAt', 'updated']),
+        };
+      })();
     return {
       candidates: [{
         profile: profile.id,
-        sourcePath: path.join(abs, metaFile),
-        transcriptPath: '',
-        agentId: pick(meta, ['agentId', 'id']) || path.basename(abs),
-        parentSessionId: pick(meta, ['parentSessionId', 'parentId']) || path.basename(path.dirname(abs)),
-        cwd,
-        status: pick(meta, ['status', 'state']),
-        error: pick(meta, ['error', 'lastError']),
-        prompt: pick(meta, ['prompt', 'task', 'input']),
-        description: pick(meta, ['description', 'title']),
-        agentType: pick(meta, ['profileId', 'agentType', 'kind']),
-        createdAt: pick(meta, ['createdAt', 'created']),
-        updatedAt: pick(meta, ['updatedAt', 'completedAt', 'updated']),
+        ...mapped,
       }],
       skipped: [], notes,
     };
@@ -731,6 +741,9 @@ const scanSources = async (
   const skipped = [];
   const notes = [];
   let limitReached = false;
+  const discoveryLimit = Number.isFinite(limit)
+    ? Math.max(MAX_RESCUE_DISCOVERY_CANDIDATES, limit)
+    : Number.POSITIVE_INFINITY;
   sources: for (const entry of configured) {
     const spec = typeof entry === 'string' ? { root: entry } : (entry && typeof entry === 'object' ? entry : null);
     if (!spec || !spec.root) continue;
@@ -744,8 +757,13 @@ const scanSources = async (
     let discovered = 0;
     for (const profile of sourceProfiles) {
       if (!profile || typeof profile.discover !== 'function') continue;
-      const result = await discoverWithProfile(profile, rootAbs, { maxAgeMs });
+      const result = await discoverWithProfile(profile, rootAbs, {
+        maxAgeMs, limit: discoveryLimit, match,
+      });
       if (result.error) notes.push(result.error);
+      if (Number.isFinite(discoveryLimit) && result.candidates.length >= discoveryLimit) {
+        notes.push(`来源 ${rootAbs} / ${profile.id} 达到发现上限 ${discoveryLimit};更后面的候选未展开`);
+      }
       for (const c of result.candidates) {
         discovered += 1;
         if (match && !match(c)) continue;
@@ -1050,11 +1068,31 @@ const actCapture = async ({ controlRoot, executionRoot, cfg, args }) => {
   try {
     const existing = await readState(controlRoot, id);
     if (existing) {
+      let repairedTranscript = false;
+      let existingCheck = await loadTranscript(controlRoot, existing, cfg.profiles);
+      if (!existingCheck.ok && existing.transcriptFile && transcriptBuf) {
+        const sourceSha = sha256Hex(transcriptBuf.toString('utf8'));
+        if (existing.sha256 && sourceSha === existing.sha256) {
+          await writeFileAtomic(path.join(rescueDir(controlRoot, id), TRANSCRIPT_NAME), transcriptBuf, {
+            fencing: () => captureLock.check(),
+            label: '接力单 transcript.json(capture 幂等修复)',
+          });
+          existingCheck = await loadTranscript(controlRoot, existing, cfg.profiles);
+          repairedTranscript = existingCheck.ok;
+        }
+      }
+      if (!existingCheck.ok) {
+        return fail('relay rescue — capture', `同 ID 接力单已存在但不可用:${existingCheck.why}`, [
+          '',
+          '修复:保留现有接力单做取证,删除或改名损坏卡片后重新 capture;引擎不会用不同来源覆盖既有证据。',
+        ]);
+      }
       return {
         content: [{ type: 'text', text: [
           `# 接力单已存在(幂等重试) — \`${id}\``,
           '',
           '- 来源、transcript 内容、task 与 note 均未变化;未创建重复接力单或 git ref。',
+          ...(repairedTranscript ? ['- transcript 缺失或损坏,已按 state.sha256 从当前来源原子修复。'] : []),
           '- 修复:若要记录新的现场/下一棒,请改变来源内容、task 或 note 后再 capture。',
         ].join('\n') }],
       };
@@ -1488,11 +1526,9 @@ const actDrop = async ({ controlRoot, args }) => {
   const lockRaw = await readFileSafe(lockPath, null);
   const lockInfo = lockRaw ? parseLockContent(lockRaw) : null;
   const holder = lockInfo && lockInfo.holder ? lockInfo.holder : '';
-  // 过期判定与锁协议同口径:文件 mtime 年龄(认领锁关闭心跳,TTL 到期即可接管)。
-  const lockSt = await fsStat(lockPath).catch(() => null);
-  const lockAgeMs = lockSt ? Math.max(0, Date.now() - lockSt.mtimeMs) : 0;
-  const lockExpired = !!lockInfo && !!lockInfo.token && lockAgeMs > (lockInfo.ttlMinutes || TAKEOVER_TTL_MIN) * 60000;
-  const held = !!holder && !lockExpired;
+  // 接力锁与认领锁同口径:acquiredAt 是唯一年龄真相源,mtime 不参与 TTL 判定。
+  const expiry = lockInfo ? claimLockExpiry(lockInfo, { defaultTtlMinutes: TAKEOVER_TTL_MIN }) : null;
+  const held = !!holder && !!lockInfo?.token && !expiry?.expired;
   const dispatchRaw = await readDispatchWithAge(rescueDir(controlRoot, id));
   if (dispatchRaw && dispatchRaw.busy) {
     const dispatch = dispatchRaw.state;
@@ -1521,11 +1557,42 @@ const actDrop = async ({ controlRoot, args }) => {
       `确认删除:《{"root":"${controlRoot}","action":"drop","id":"${id}","confirm":true}》`,
     ].join('\n'));
   }
-  // #14(审计):与 actCapture 同款符号链接防线——.relay 或 .relay/rescue 是符号链接时,
-  // rm 会把删除作用到仓库外的子树。
-  await assertNoSymlinkComponents(controlRoot, '.relay', '.relay 目录');
-  await assertNoSymlinkComponents(controlRoot, RESCUE_REL, '接力单目录');
-  await rm(rescueDir(controlRoot, id), { recursive: true, force: true });
+  // confirm 后必须自己持有同一把卡锁;只看一眼 holder 再 rm 会让 takeover/drop 跨进程双赢。
+  const dropHolder = model || `drop:${process.pid}`;
+  let dropLock = null;
+  try {
+    dropLock = await acquireFileLock(controlRoot, path.join(RESCUE_REL, id, LOCK_NAME), dropHolder, {
+      staleMs: TAKEOVER_TTL_MIN * 60000,
+      waitMs: 0,
+      sameHolder: (h) => h === dropHolder,
+      label: `接力单 ${id} 删除互斥`,
+      heartbeat: false,
+      ttlMinutes: TAKEOVER_TTL_MIN,
+    });
+    if (!dropLock.ok) {
+      return fail('relay rescue — drop', `接力单 \`${id}\` 无法取得删除互斥锁:${dropLock.warning || `持有者 ${dropLock.holder || '(未知)'}`}`, [
+        '', '修复:让持有者先 report;或确认它已崩溃并等锁内 acquiredAt 超过 TTL 后再删。',
+      ]);
+    }
+    const fenced = await dropLock.check();
+    if (!fenced.held) return fail('relay rescue — drop', `删除前接力锁归属复核失败:${fenced.warning || '锁已被接管'}`);
+    const latest = await readState(controlRoot, id);
+    if (!latest) return fail('relay rescue — drop', `接力单 \`${id}\` 在加锁后消失,拒绝继续删除。`);
+    const latestDispatch = await readDispatchWithAge(rescueDir(controlRoot, id));
+    if (latestDispatch && latestDispatch.busy) {
+      return fail('relay rescue — drop', `自动拉起任务在加锁后进入运行/损坏状态(status=${latestDispatch.state.status}),拒绝删除。`);
+    }
+    // #14(审计):与 actCapture 同款符号链接防线——.relay 或 .relay/rescue 是符号链接时,
+    // rm 会把删除作用到仓库外的子树。
+    await assertNoSymlinkComponents(controlRoot, '.relay', '.relay 目录');
+    await assertNoSymlinkComponents(controlRoot, RESCUE_REL, '接力单目录');
+    const finalFence = await dropLock.check();
+    if (!finalFence.held) return fail('relay rescue — drop', `最终 fencing 失败:${finalFence.warning || '锁已被接管'}`);
+    await rm(rescueDir(controlRoot, id), { recursive: true, force: true });
+    dropLock = null; // 目录连同锁文件已一起删除
+  } finally {
+    if (dropLock?.ok) await dropLock.release();
+  }
   let refNote = '无快照 ref 需要清理';
   if (state.snapshotRef && /^refs\/relay\/rescue\//.test(state.snapshotRef)) {
     const r = await gitRun(state.snapshotRoot || state.executionRoot || controlRoot, 'update-ref', '-d', state.snapshotRef);

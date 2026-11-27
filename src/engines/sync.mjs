@@ -1,4 +1,4 @@
-// relay-mcp · W3 — relay_sync + 入口文件生成(供 init/onboard 复用)
+// relay-mcp — relay_sync + 入口文件生成(供 init/onboard 复用)
 // 依据 CONTRACT.md「仓库文件格式」「安全与降级」「工具清单」:
 // - 入口文件模板在运行时从 templates/<name>.tpl 读取,占位符
 //   {{PROJECT_NAME}} / {{TODAY}} / __RELAY_HOME__ 由本引擎替换,.tpl 去后缀落盘;
@@ -8,8 +8,10 @@
 // 零依赖:仅 node: 内置。
 
 import { basename, join, dirname, relative, resolve } from 'node:path';
-import { access } from 'node:fs/promises';
-import { acquireRepoLock, assertNoSymlinkComponents, assertNotSymlinkFile, backupFile, readFileSafe, releaseRepoLock, stamp, templatesDir, writeFileAtomic } from '../util.mjs';
+import {
+  acquireRepoLock, assertNoSymlinkComponents, assertNotSymlinkFile, backupFile, firstLine, readFileSafe,
+  releaseRepoLock, stamp, templatesDir, toolError as err, toolOk as ok, writeFileAtomic,
+} from '../util.mjs';
 import { ensureGitignoreBaseline, readManifestConfig } from '../config.mjs';
 
 const MARKER_PREFIX = '<!-- relay:generated';
@@ -39,15 +41,6 @@ const composeProjection = (generated, current) => {
   if (gen != null) return gen === cur ? generated : generated.replace(gen, cur);
   return `${generated.replace(/\s*$/, '')}\n\n${cur}`;
 };
-
-const ok = (text) => ({ content: [{ type: 'text', text }], isError: false });
-const err = (text) => ({ content: [{ type: 'text', text }], isError: true });
-
-const pathExists = async (p) => {
-  try { await access(p); return true; } catch { return false; }
-};
-
-const firstLine = (s) => (String(s || '').trim().split('\n')[0] || '').slice(0, 160);
 
 const relOf = (root, p) => (p ? relative(root, p) : '(无)');
 
@@ -261,7 +254,7 @@ export const relaySync = async (args = {}) => {
     ];
     lines.push(...factsHint);
     if (gi.status === 'created') {
-      lines.push('', '- `.gitignore` 已按基线新建(含 `.relay/worktrees/`、`.relay/worktrees.json`、`.relay/worktrees.lock` 等运行时忽略项)');
+      lines.push('', '- `.gitignore` 已按基线新建(含 `.relay/worktrees/`、`.relay/worktrees.json` 等运行时忽略项)');
     } else if (gi.status === 'appended') {
       lines.push('', `- \`.gitignore\` 已幂等补 ${gi.added.length} 条基线:${gi.added.slice(0, 6).join(', ')}${gi.added.length > 6 ? '…' : ''}`);
     }

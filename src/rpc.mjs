@@ -1,4 +1,4 @@
-// relay-mcp — src/rpc.mjs (W2)
+// relay-mcp — JSON-RPC stdio 层
 // MCP stdio 子集:换行分隔 JSON-RPC 2.0。
 // 铁律:stdout 只输出协议响应(每响应一行 JSON),任何日志走 stderr。
 import { createInterface } from 'node:readline';
