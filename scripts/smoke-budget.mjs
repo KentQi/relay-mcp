@@ -1,11 +1,11 @@
 #!/usr/bin/env node
 // v1.7.0 上下文预算回归:tools/list 是每个会话都要付出的固定成本,
 // 规则条文应留在 relay_rules / relay://protocol(按需读取),不膨胀工具描述。
-// 预算 = 10 KiB(UTF-8). 超了要么压缩描述,要么把内容搬进资源,不允许悄悄涨。
+// 预算按近似 token 计,不引入 tokenizer 依赖。超了要么压缩描述,要么把内容搬进资源。
 import { TOOLS, RESOURCES, PROMPTS, dispatch } from '../src/contract.mjs';
 import { renderCommitMessage, evidenceSummary, commitTemplateUsesAnchors } from '../src/engines/session.mjs';
 
-const BUDGET_BYTES = 10240;
+const BUDGET_TOKENS = 4096;
 const EXPECTED_TOOLS = [
   'relay_init', 'relay_onboard', 'relay_sync', 'relay_session_start', 'relay_session_end',
   'relay_verify', 'relay_restructure', 'relay_claim', 'relay_worktree_cleanup', 'relay_archive_log',
@@ -19,16 +19,30 @@ const ok = (cond, label, extra = '') => {
   else { fail += 1; console.log(`  ✗ FAIL ${label}${extra ? ' — ' + String(extra).slice(0, 400) : ''}`); }
 };
 
+// Conservative dependency-free estimate: ASCII/JSON at 4 chars per token and
+// every non-ASCII code point at 2 tokens. This is a budget guard, not a bill.
+const estimateTokens = (text) => {
+  let ascii = 0;
+  let nonAscii = 0;
+  for (const ch of text) {
+    if (ch.codePointAt(0) <= 0x7f) ascii += 1;
+    else nonAscii += 1;
+  }
+  return Math.ceil(ascii / 4 + nonAscii * 2);
+};
+
 try {
-  console.log('== tools/list 体积预算 ==');
+  console.log('== tools/list 上下文预算 ==');
   const payload = JSON.stringify({ tools: TOOLS });
   const bytes = Buffer.byteLength(payload, 'utf8');
-  console.log(`  当前: ${payload.length} chars / ${bytes} bytes (${(bytes / 1024).toFixed(2)} KB),预算 ${BUDGET_BYTES} bytes,余量 ${BUDGET_BYTES - bytes}`);
-  ok(bytes <= BUDGET_BYTES, `tools/list ≤ ${BUDGET_BYTES} bytes`, `${bytes} bytes(超 ${bytes - BUDGET_BYTES})`);
+  const tokens = estimateTokens(payload);
+  console.log(`  当前: ${payload.length} chars / ${bytes} bytes / ~${tokens} tokens,预算 ${BUDGET_TOKENS} tokens,余量 ${BUDGET_TOKENS - tokens}`);
+  ok(tokens <= BUDGET_TOKENS, `tools/list ≤ ~${BUDGET_TOKENS} tokens`, `~${tokens} tokens(超 ${tokens - BUDGET_TOKENS})`);
   const schema = (name) => TOOLS.find((t) => t.name === name)?.inputSchema?.properties || {};
   ok(schema('relay_claim').ttl_minutes?.type === 'number', 'relay_claim.ttl_minutes 在 MCP schema 可达');
   ok(schema('relay_session_end').maintenance?.type === 'boolean', 'relay_session_end.maintenance 在 MCP schema 可达');
   ok(schema('relay_rescue').task?.type === 'string', 'relay_rescue.task 在 MCP schema 可达');
+  ok(/^capture:/.test(schema('relay_rescue').task?.description || ''), 'relay_rescue.task 描述与 capture 处理器一致');
   ok(!Object.prototype.hasOwnProperty.call(schema('relay_rescue'), '_profiles'), '内部 _profiles 不在 MCP schema 中暴露');
   ok(!/W1 pending|W3\/W4 并行开发|relay relay/.test(JSON.stringify({ tools: TOOLS, prompts: PROMPTS })), '用户可见契约无过时工作包标记/重复 relay 文案');
 

@@ -88,9 +88,12 @@ const emptyRegistry = () => ({ version: 1, worktrees: [] });
 // fail-closed 读取:把「缺失 / 损坏」与「合法但为空」区分开。
 // 受管身份完全依赖该 gitignored 文件,不能把不可读一律当作 managed=false 静默降级。
 export const readWorktreeRegistryState = async (controlRoot) => {
-  const raw = await readFileSafe(path.join(controlRoot, WORKTREE_REGISTRY_REL), null);
-  if (raw == null) return { state: 'missing', registry: emptyRegistry(), error: '' };
   try {
+    await assertNoSymlinkComponents(controlRoot, '.relay', '.relay');
+    const target = path.join(controlRoot, WORKTREE_REGISTRY_REL);
+    await assertNotSymlinkFile(target, WORKTREE_REGISTRY_REL);
+    const raw = await readFileSafe(target, null, { onlyMissing: true });
+    if (raw == null) return { state: 'missing', registry: emptyRegistry(), error: '' };
     const parsed = JSON.parse(raw);
     if (!parsed || typeof parsed !== 'object' || !Array.isArray(parsed.worktrees)) {
       return { state: 'corrupt', registry: emptyRegistry(), error: `${WORKTREE_REGISTRY_REL} 格式无效:缺少 worktrees 数组` };
@@ -101,7 +104,7 @@ export const readWorktreeRegistryState = async (controlRoot) => {
       error: '',
     };
   } catch (e) {
-    return { state: 'corrupt', registry: emptyRegistry(), error: `${WORKTREE_REGISTRY_REL} 解析失败:${e?.message || String(e)}` };
+    return { state: 'corrupt', registry: emptyRegistry(), error: `${WORKTREE_REGISTRY_REL} 读取或解析失败(${e?.code || e?.name || '无效文件'})` };
   }
 };
 
@@ -262,7 +265,7 @@ export const resolveRelayRoots = async (root) => {
 //   2) 受管缓存路径 <cacheDir>/<task> 在磁盘上仍存在;
 //   3) 调用方提供的注册表里存在该任务的非 completed 记录且其路径仍存在。
 // 注意:仅「分支存在」不算痕迹——契约规定清理后分支保留,不能因此永远阻止单根完成。
-export const findManagedWorktreeEvidence = async (controlRoot, task, { registry = null } = {}) => {
+export const findManagedWorktreeEvidence = async (controlRoot, task, { registry = null, manifest } = {}) => {
   const evidence = { found: false, worktreePath: '', reasons: [] };
   const id = String(task || '');
   if (!/^T\d+$/.test(id)) return evidence;
@@ -282,7 +285,7 @@ export const findManagedWorktreeEvidence = async (controlRoot, task, { registry 
   }
   if (!evidence.found) {
     let cacheDir = DEFAULT_WORKTREE_CONFIG.cacheDir;
-    try { cacheDir = (await readWorktreeConfig(controlRoot)).cacheDir; } catch { /* 配置非法时回退默认受管路径 */ }
+    try { cacheDir = (await readWorktreeConfig(controlRoot, { manifest })).cacheDir; } catch { /* 配置非法时回退默认受管路径 */ }
     const expected = path.resolve(controlRoot, cacheDir, id);
     if (existsSync(expected)) {
       evidence.found = true;

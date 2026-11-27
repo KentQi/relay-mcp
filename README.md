@@ -48,6 +48,8 @@ node src/index.mjs        # stdio MCP server（也可由客户端拉起）
 
 重启客户端后，工具名为 `mcp__relay-mcp__relay_*`。
 
+如需随客户端启动检查更新，将 `args` 改为 `["/abs/path/relay-mcp/scripts/relay-mcp-autoupdate.mjs"]`。启动器只在主工作树的 `main` 干净且没有本地独有提交时执行快进。已迁移的安装可能还保留旧启动器和备份，当前注册路径应指向仓库内的启动器。
+
 ### Agent Plugins 插件包（v1.0.0）
 
 仓库根目录同时是一个符合 [Agent Plugins 1.0.0](https://agent-plugins.org/specification) 的插件包，支持该标准的客户端可以直接把仓库目录当插件加载：
@@ -94,9 +96,11 @@ node scripts/smoke-plugin.mjs           # 43–44 断言：合规 + 真实 initi
 
 任一条件不满足：不更新 TASKS/LOG、不提交、保留认领锁。
 
+每个验收命令默认最多运行 180 秒，仓库属主可通过 `manifest.acceptance.timeoutMs` 调整毫秒数。批量完成各跑任务自己的 `test:`，共享一次项目级 `npm test`。
+
 **简报有界（T015）**：入场简报的每条 LOG 摘要硬上限 200 字符（负结果/交接提示 120），超长条目只截断展示并标注"全文见 LOG.md"；总长超过 `manifest.contextBudget`（默认 6000）时追加显式告警而**不裁剪任何段落**（裁剪即静默降级）。
 
-**事实底账（R10）**：出场时由引擎写入一行 `- 事实(v2): mode=… | 文件 N | ± +x/-y | base=… | sha=… | branch=… || 验收: … | verify: PASS a·WARN b·ERROR c | 耗时: Ns`，模型不得手写或改写。以 ` || ` 拆两段。**机检段的 base 不是独立可信锚点**：单根按完成提交 subject 定位、以父代为较弱范围；managed 以 worktree registry 的 `baseSha` 为基准，忽略事实行自报 base，并按该任务「T### 完成」的完成 commit 重算文件数（managed 另对账 ±）。registry 缺失或记录已回收、完成 commit 重复/无法定位 → WARN，**永不 PASS**。**branch 归属**针对已定位的完成 commit 校验——声称的分支必须真实包含它；分支已合并删除且完成提交仍在当前分支历史 → PASS 带注记，否则 WARN。**叙述段**（验收/verify 汇总/耗时）是写时快照，不参与对账、不构成交接证据；v1 旧行只做结构校验并 WARN；`manifest.facts.since` 之前的旧条目豁免，保证升级项目不被历史卡住。
+**事实底账（R10）**由引擎在出场时写入，` || ` 分隔机检段与验收、verify 汇总和耗时。受管模式用注册表的 `baseSha` 和同一 LOG 条目唯一的 `worktree` 成对 SHA 重算文件数与增删行数。分支应包含该提交，合并并删除分支后可用当前 Git 历史验证。单根模式按修改 LOG 的完成提交及其父代对账文件数。缺少独立证据、证据不唯一或只有 v1 事实行时，R10 报 WARN。机检字段不符时报 ERROR。`manifest.facts.since` 限定日期范围，R10 读取范围内最新的完成条目。
 
 ### 任务级 worktree
 
@@ -204,7 +208,7 @@ worktree 清理默认 dry-run：只删除已登记、已过期、非活跃、干
 - 只有 `验收: test:<值>` 会被执行；自由文本验收不会执行。
 - 值不能以 `.js/.mjs/.cjs/.ts/.tsx` 结尾——那会被当成测试文件走 `node --test`，到不了白名单。
 - 值不能以 `-` 开头；匹配是**整串逐字符相等**，不做前缀或正则。
-- 白名单为空时只接受 js/ts 测试文件；命中后经 **shell 执行，超时 180 秒**——这就是"人类签字"的信任边界。
+- 白名单为空时只接受 js/ts 测试文件。命中的命令经 shell 执行，时限取 `manifest.acceptance.timeoutMs`，缺省 180 秒。
 - 外部工具请锁版本、在 CI 或容器里运行；relay 不会自动安装它们。
 - 本仓库自身未启用（`.relay/**` 是受保护路径，启用需人类批准后单独提交）。
 
@@ -268,7 +272,7 @@ node src/cli.mjs --version     # 版本
 
 ### 自举
 
-本仓库使用自身协议开发：`START.md` 是入口，`TASKS.md` 是 backlog，`LOG.md` 记录会话。`npm test` 覆盖 29 套端到端冒烟（协议、补丁、worktree、升级兼容、密钥闸、事实底账、简报、doctor、检索、评审回归、性能计数、LOG 边界、会话性能、并发、归档、安全、Agent Plugins 插件包、崩溃点矩阵、上下文预算、测试框架元负控、协议结构机检、漂移备份闸、D8 归档证据面、子代理抢救、通用 SQLite 会话来源、manifest 声明的自动拉起、自更新启动器、CLI IO/schema、T018 收益复核决策证据），CI 覆盖 Node 22/24/26。
+本仓库使用自身协议开发。`START.md` 是入口，`TASKS.md` 管理任务，`LOG.md` 记录会话。`npm test` 执行 `package.json` 列出的 31 套冒烟，包括认领锁边界和受管出场恢复。CI 覆盖 Node 22/24/26。
 
 一次真实的多模型交接实测记录（含假绿事故的完整证据链）见 [docs/04-test/08-handoff-case-study-v1.0.md](docs/04-test/08-handoff-case-study-v1.0.md)。
 

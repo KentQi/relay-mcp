@@ -32,16 +32,22 @@ try {
   const unknown = sync(['relay_get', '--root', tmp, '--json', 'ids=T001', 'bogus=value']);
   ok(unknown.status === 2, '未知键 → 用法错误 exit 2', String(unknown.status));
   ok(/未知.*bogus|bogus.*未知/.test(out(unknown)) && /ids/.test(out(unknown)), '错误列出未知键与可用键', out(unknown).slice(0, 300));
+  const unknownNoArgs = sync(['relay_rules', '--json', 'bogus=value']);
+  ok(unknownNoArgs.status === 2 && /bogus/.test(out(unknownNoArgs)) && /不接受参数/.test(out(unknownNoArgs)), '空 schema 也拒绝未知键', out(unknownNoArgs).slice(0, 300));
 
   // 单值同样按自然数组处理;object 的标量错误见下一项。
   const scalarObject = sync(['relay_session_end', '--root', tmp, '--json', 'next=oops']);
   ok(scalarObject.status === 2, 'object 收到标量 → 用法错误 exit 2', String(scalarObject.status));
   ok(/next/.test(out(scalarObject)) && /JSON/.test(out(scalarObject)) && /object/i.test(out(scalarObject)), 'object 标量错误建议整段 JSON', out(scalarObject).slice(0, 300));
+  const badNested = sync(['relay_session_end', '--root', tmp, '--json', 'next={"title":7,"acceptance":"npm test"}']);
+  ok(badNested.status === 2 && /next\.title/.test(out(badNested)) && /string/.test(out(badNested)), '嵌套 object 字段也按 schema 校验', out(badNested).slice(0, 300));
 
   const wrongScalar = sync(['relay_archive_log', '--root', tmp, '--json', 'confirm=maybe']);
   ok(wrongScalar.status === 2 && /confirm/.test(out(wrongScalar)) && /boolean/.test(out(wrongScalar)), '标量类型也按 inputSchema 校验', out(wrongScalar).slice(0, 300));
   const badItem = sync(['relay_get', '--root', tmp, '--json', 'ids=T001,7']);
   ok(badItem.status === 2 && /ids/.test(out(badItem)) && /string/.test(out(badItem)), '自然数组元素类型按 items schema 校验', out(badItem).slice(0, 300));
+  ok(sync(['relay_rules', '--json', 'toString=y']).status === 2, '继承的对象属性不属于工具参数');
+  ok(sync(['relay_verify', '--json', 'root=42']).status === 2, 'JSON 的 root 也必须是字符串路径');
 
   console.log('\n== 数组自然写法与既有 JSON 语义 ==');
   mkdirSync(path.join(tmp, 'docs', 'archive'), { recursive: true });

@@ -272,6 +272,7 @@ const readUpdateLock = (file) => {
 // 活锁的最长生命周期不超过总预算 + 终止宽限;超过该期限的锁可安全恢复。
 const acquireUpdateLock = async (commonDir) => {
   const file = join(commonDir, 'relay-autoupdate.lock');
+  if (remainingMs() <= 0) return { ok: false, why: '时间预算耗尽' };
   const waitUntil = Math.min(deadline, Date.now() + UPDATE_LOCK_WAIT_MS);
   while (Date.now() < waitUntil) {
     let fd = null;
@@ -311,6 +312,7 @@ const acquireUpdateLock = async (commonDir) => {
       await sleep(Math.min(100, left));
     }
   }
+  if (remainingMs() <= 0) return { ok: false, why: '时间预算耗尽' };
   return { ok: false, busy: true, why: '另一个 launcher 正在更新' };
 };
 
@@ -343,13 +345,20 @@ const postMergeCheck = async (beforeSha, beforeStatus = '') => {
 };
 
 const checkAndUpdate = async () => {
-  deadline = Date.now() + CHECK_BUDGET_MS;
+  const attemptStartedAt = Date.now();
+  deadline = attemptStartedAt + CHECK_BUDGET_MS;
   const finish = (result, extra) => {
-    // 等待更新锁期间另一个 launcher 可能已写完状态,结束时基于最新状态合并字段。
+    // 另一个 launcher 可能在本进程检查期间完成。较新的完成状态优先,
+    // 避免慢路径的 fail/skip 覆盖已经写入的 success 冷却。
     const latest = readState();
-    // 一次启动至多尝试更新一次:别人的成功节流不能被本次 skip/fail 覆盖成冷却。
-    latest.lastAttempt = Number(latest.lastAttempt) || Date.now();
+    const latestAttemptAt = Number(latest.lastAttempt) || 0;
+    const latestResultAt = Number(latest.lastResultAt) || 0;
+    if (latestResultAt > attemptStartedAt
+      || (latest.lastResult === 'checking' && latestAttemptAt > attemptStartedAt)) return;
+    const completedAt = Date.now();
+    latest.lastAttempt = completedAt;
     latest.lastResult = result;
+    latest.lastResultAt = completedAt;
     if (extra) Object.assign(latest, extra);
     writeState(latest);
   };
@@ -400,13 +409,14 @@ const checkAndUpdate = async () => {
   const lock = await acquireUpdateLock(commonDir);
   if (!lock.ok) {
     log(`${lock.why},启动当前版本`);
-    finish(lock.busy ? 'skip-locked' : 'fail');
+    // 等锁失败不代表本进程做过检查;让持锁者独占写入本次结果。
+    if (!lock.busy) finish('fail');
     return;
   }
 
   try {
     const state = readState();
-    state.lastAttempt = Date.now();
+    state.lastAttempt = attemptStartedAt;
     state.lastResult = 'checking';
     writeState(state);
     if (remainingMs() <= 0) { log('时间预算耗尽,本次不更新'); finish('fail'); return; }

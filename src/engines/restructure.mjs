@@ -14,7 +14,7 @@ import { readdir, stat, writeFile, lstat } from 'node:fs/promises';
 import { randomUUID } from 'node:crypto';
 import { basename, dirname, extname, join, resolve } from 'node:path';
 import {
-  acquireRepoLock, assertNoSymlinkComponents, assertNotSymlinkFile, backupFile, ensureDir, findSensitiveChanges,
+  acquireRepoLock, assertNoSymlinkComponents, assertNotSymlinkFile, backupFile, ensureDir, findSensitivePaths, gitStatusPaths,
   gitIdentityArgs, gitRun, isGitRepoAsync, nowIso, readFileSafe, releaseRepoLock, scanSecrets, sha256Hex, stamp,
   writeFileAtomic, writeProtocolFile,
 } from '../util.mjs';
@@ -345,8 +345,9 @@ export const relayRestructure = async (args = {}) => {
         : '.gitignore 基线已齐全';
 
     // 密钥安检(H-B):移动/提交不搬运疑似密钥文件,转人工(与 session_end 同一条规则)
-    const stSec = await gitRun(root, '-c', 'core.quotePath=false', 'status', '--porcelain', '-uall');
-    const sens = stSec.ok ? findSensitiveChanges(stSec.stdout.split('\n').map((s) => s.replace(/\r$/, '')).filter((s) => s.length >= 3)) : [];
+    const status = await gitStatusPaths(root);
+    if (!status.ok) return err('无法检查 Git 工作区路径;移动与协议记录已完成,修复 Git 状态后请人工提交');
+    const sens = findSensitivePaths(status.paths);
     if (sens.length) {
       return err(`提交跳过:发现疑似密钥/敏感文件,拒绝卷入 git 历史(需人工处理):${sens.slice(0, 3).map((s) => s.path).join(', ')}。移动与协议记录已完成,提交请人工执行`);
     }

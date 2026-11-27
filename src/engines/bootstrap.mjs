@@ -12,9 +12,9 @@
 
 import { basename, dirname, join, relative, resolve } from 'node:path';
 import { randomUUID } from 'node:crypto';
-import { access, chmod, readdir, rename, unlink, writeFile } from 'node:fs/promises';
+import { access, chmod, copyFile, readdir, writeFile } from 'node:fs/promises';
 import {
-  backupFile, ensureDir, findSensitiveChanges, gitIdentityArgs, gitRun, isGitRepoAsync, nowIso,
+  backupFile, ensureDir, findSensitivePaths, gitIdentityArgs, gitRun, gitStatusPaths, isGitRepoAsync, nowIso,
   readFileSafe, stamp, templatesDir, writeFileIfAbsent, scanSecrets, assertSafeWriteLayout, writeFileAtomic,
 } from '../util.mjs';
 import { ensureGitignoreBaseline } from '../config.mjs';
@@ -133,25 +133,12 @@ const readManifest = async (root) => {
   catch { return null; }
 };
 
-// 原子替换前的旧版本快照:先复制完整旧文件,再原子写新内容,最后清理中间文件。
-// 不先 rename 原 manifest,避免备份动作失败时留下「manifest 不存在」的半初始化状态。
-const backupBeforeAtomicReplace = async (target) => {
-  const snapshot = `${target}.relay-bak-new-${process.pid}-${randomUUID()}`;
-  await rename(target, snapshot);
-  return snapshot;
-};
-
-const writeManifestAtomic = async (target, content, previous) => {
-  const backup = await backupBeforeAtomicReplace(target);
-  try {
-    await writeFileAtomic(target, content, { label: '.relay/manifest.json' });
-    return backup;
-  } catch (e) {
-    // 新内容发布失败:恢复旧 manifest,绝不留「文件不存在」的半初始化状态。
-    await writeFileAtomic(target, previous, { label: '.relay/manifest.json' });
-    await unlink(backup).catch(() => {});
-    throw e;
-  }
+// 先复制旧 manifest 作为备份,再原子替换原路径,读取者始终能看到一份完整配置。
+const writeManifestAtomic = async (target, content) => {
+  const backup = `${target}.relay-bak-new-${process.pid}-${randomUUID()}`;
+  await copyFile(target, backup);
+  await writeFileAtomic(target, content, { label: '.relay/manifest.json' });
+  return backup;
 };
 
 const safeGit = async (root, ...args) => {
@@ -172,9 +159,9 @@ const gitCommitFlow = async (root, needInit, message) => {
     lines.push('已初始化 git 仓库');
   }
   // 密钥安检(H-B):与 session_end 同一条规则——工作区有疑似密钥/私钥文件,拒绝自动入库,转人工
-  const stSec = await safeGit(root, '-c', 'core.quotePath=false', 'status', '--porcelain', '-uall');
-  // porcelain 的 XY 状态位是定宽字段:只剥行尾换行不 trim(吃前导空格会让下游截错路径);-uall 防未跟踪目录折叠漏检密钥
-  const sens = stSec.ok ? findSensitiveChanges(stSec.stdout.split('\n').map((s) => s.replace(/\r$/, '')).filter((s) => s.length >= 3)) : [];
+  const status = await gitStatusPaths(root);
+  if (!status.ok) return [...lines, '提交跳过:无法检查 Git 工作区路径,请恢复 Git 状态后人工确认'];
+  const sens = findSensitivePaths(status.paths);
   if (sens.length) {
     lines.push(`提交跳过:发现疑似密钥/敏感文件,拒绝卷入 git 历史(需人工处理后再提交):${sens.slice(0, 3).map((s) => s.path).join(', ')}${sens.length > 3 ? ` 等 ${sens.length} 项` : ''}`);
     return lines;
@@ -361,10 +348,9 @@ export const relayInit = async (args = {}) => {
     const manifestRel = '.relay/manifest.json';
     const manifestPath = join(root, manifestRel);
     const manifestJson = `${JSON.stringify(manifest, null, 2)}\n`;
-    if (await writeFileIfAbsent(manifestPath, manifestJson)) created.push(manifestRel);
+    if (await writeFileAtomic(manifestPath, manifestJson, { createOnly: true, label: manifestRel })) created.push(manifestRel);
     else if (force) {
-      const previous = await readFileSafe(manifestPath, '');
-      const backup = await writeManifestAtomic(manifestPath, manifestJson, previous);
+      const backup = await writeManifestAtomic(manifestPath, manifestJson);
       rewritten.push({ target: manifestRel, backup });
     } else kept.push(manifestRel);
 
@@ -505,12 +491,12 @@ export const relayOnboard = async (args = {}) => {
     const manifestPath = join(root, '.relay', 'manifest.json');
     const manifestJson = `${JSON.stringify(manifest, null, 2)}\n`;
     let manifestBackup = null;
-    if (await writeFileIfAbsent(manifestPath, manifestJson)) created.push('.relay/manifest.json');
+    if (await writeFileAtomic(manifestPath, manifestJson, { createOnly: true, label: '.relay/manifest.json' })) created.push('.relay/manifest.json');
     else {
       const prev = await readFileSafe(manifestPath, null);
       if (prev === manifestJson) keptCore.push('.relay/manifest.json(内容一致,幂等跳过)');
       else {
-        manifestBackup = await writeManifestAtomic(manifestPath, manifestJson, prev);
+        manifestBackup = await writeManifestAtomic(manifestPath, manifestJson);
       }
     }
 

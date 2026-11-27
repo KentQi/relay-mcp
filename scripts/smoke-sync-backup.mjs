@@ -2,10 +2,10 @@
 // T032 冒烟:relay_sync/onboard 的漂移备份(*.relay-bak-*)不得被自动提交。
 // 红线:制造入口漂移 → relay_sync 重写并留下可恢复备份;备份不得出现在 git status / git add -A 暂存区;
 // 旧项目(基线缺该行)运行 relay_sync 后基线被幂等补齐;重复 sync 不产生多余备份;嵌套 .relay 备份同样忽略。
-import { mkdtempSync, writeFileSync, readFileSync, readdirSync, existsSync, rmSync } from 'node:fs';
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { spawnSync } from 'node:child_process';
 
 const RELAY = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -101,6 +101,38 @@ try {
     git(dir, ['add', '-A']);
     const staged = git(dir, ['diff', '--cached', '--name-only']).stdout || '';
     ok(!/relay-bak/.test(staged), '嵌套 .relay 备份未进入暂存区', staged);
+  }
+
+  console.log('\n== 5. 引擎模板缺失时不得谎报全部一致 ==');
+  {
+    const dir = fresh('sync-missing-template');
+    const engine = mkdtempSync(path.join(tmpdir(), 'relay-sync-engine-'));
+    tmpDirs.push(engine);
+    mkdirSync(path.join(engine, 'src', 'engines'), { recursive: true });
+    cpSync(path.join(RELAY, 'src', 'util.mjs'), path.join(engine, 'src', 'util.mjs'));
+    cpSync(path.join(RELAY, 'src', 'config.mjs'), path.join(engine, 'src', 'config.mjs'));
+    cpSync(path.join(RELAY, 'src', 'engines', 'sync.mjs'), path.join(engine, 'src', 'engines', 'sync.mjs'));
+    cpSync(path.join(RELAY, 'templates'), path.join(engine, 'templates'), { recursive: true });
+    rmSync(path.join(engine, 'templates', 'AGENTS.md.tpl'));
+    const importUrl = pathToFileURL(path.join(engine, 'src', 'engines', 'sync.mjs')).href;
+    const runner = [
+      `const { relaySync } = await import(${JSON.stringify(importUrl)});`,
+      `const result = await relaySync({ root: ${JSON.stringify(dir)} });`,
+      'process.stdout.write(JSON.stringify(result));',
+    ].join('\n');
+    const r = spawnSync(process.execPath, ['--input-type=module', '--eval', runner], {
+      encoding: 'utf8',
+      timeout: 120000,
+    });
+    let text = '';
+    try {
+      const result = JSON.parse(r.stdout || '{}');
+      text = result?.content?.[0]?.text || '';
+    } catch { /* 下面的断言会带出原始输出 */ }
+    ok(r.status === 0, '隔离引擎中的 relay_sync 成功返回', out(r).slice(0, 500));
+    ok(/templates\/AGENTS\.md\.tpl 缺失/.test(text), '报告缺失的是引擎自身模板', text.slice(0, 500));
+    ok(/有模板缺失被跳过/.test(text), '摘要明确说明存在跳过项', text.slice(-500));
+    ok(!/全部入口文件与模板再生内容一致,无漂移/.test(text), '同一次输出不再谎报全部一致');
   }
 } catch (e) {
   fail += 1;

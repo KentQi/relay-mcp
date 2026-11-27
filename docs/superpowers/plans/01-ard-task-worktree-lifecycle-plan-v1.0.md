@@ -15,9 +15,8 @@ status: 已完成
 
 **Tech Stack:** Node.js >= 22、纯 ESM、仅 `node:` 内置模块、Git CLI、Node 脚本端到端冒烟测试。
 
-**Spec:** `docs/superpowers/specs/2026-10-29-task-worktree-lifecycle-design.md`
+**Spec:** `docs/superpowers/specs/01-ard-task-worktree-lifecycle-design-v1.0.md`
 
-> **strictDocs 兼容提示:** 本文件是历史实施计划,文件名不含 `NN-类型-主题-vX.Y.md`。若项目启用 `strictDocs:true`,建议主审在 `manifest.docsIgnore` 中加入 `superpowers/**`,或由主审按文档命名规范重命名并同步引用;本任务不修改 manifest。
 
 ## Global Constraints
 
@@ -141,7 +140,7 @@ status: 已完成
 - Modify: `README.md`、`CHANGELOG.md`、`SPEC.md`、`DECISIONS.md`、`TASKS.md`、`LOG.md`
 - Modify: `templates/START.md`、`templates/TASKS.md`、`templates/AGENTS.md.tpl`
 - Modify: `.relay/manifest.json`
-- Modify: `docs/superpowers/specs/2026-10-29-task-worktree-lifecycle-design.md`
+- Modify: `docs/superpowers/specs/01-ard-task-worktree-lifecycle-design-v1.0.md`
 - Modify: `package.json`、`.github/workflows/ci.yml`
 
 **Interfaces:**

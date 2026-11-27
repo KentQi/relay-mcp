@@ -4,7 +4,7 @@
 //   引擎走 DEFAULT_* 分支,行为与补丁前完全相同。
 // 配置面全部落在 .relay/manifest.json(仓库属主任意文本即代码),不接受环境变量——
 //   护栏若可被环境绕过,就不是护栏。
-import { readFileSafe, assertNotSymlinkFile, writeFileAtomic } from './util.mjs';
+import { readFileSafe, assertNoSymlinkComponents, assertNotSymlinkFile, writeFileAtomic } from './util.mjs';
 import { join } from 'node:path';
 
 // —— 默认值(= v1.0.0 原值,勿随手改)——
@@ -13,6 +13,7 @@ export const DEFAULT_DOCS_ROOTS = ['docs'];                    // verify.mjs R6 
 export const DEFAULT_COMMIT_TEMPLATE = 'relay: session end — {{task}}{{summary}}';
 // 简报字符预算(T015 使用):超限只告警、不裁剪(裁剪=静默降级,违反公理)。
 export const DEFAULT_CONTEXT_BUDGET = 6000;
+export const DEFAULT_ACCEPTANCE_TIMEOUT_MS = 180000;
 // 抢救扫描默认值(T048):7 天窗口、单份 transcript 8 MiB 上限。两者都可在 manifest.rescue 覆盖。
 export const DEFAULT_RESCUE_MAX_AGE_DAYS = 7;
 export const DEFAULT_RESCUE_MAX_BYTES = 8 * 1024 * 1024;
@@ -41,7 +42,7 @@ export const KNOWN_NESTED_KEYS = Object.freeze({
   facts: ['enabled', 'since', 'strict'],
   logBoundary: ['strict'],
   structure: ['strict'],
-  acceptance: ['commands'],
+  acceptance: ['commands', 'timeoutMs'],
   rescue: ['sources', 'maxAgeDays', 'maxBytes', 'profiles', 'autoLaunch'],
 });
 
@@ -135,22 +136,22 @@ export const readManifestConfig = async (root, { manifest: preloaded } = {}) => 
   let m = null;
   let manifestCorrupt = false;
   let manifestError = '';
-  if (preloaded && typeof preloaded === 'object' && !Array.isArray(preloaded)) {
+  if (preloaded !== undefined) {
     m = preloaded;
   } else {
-    const raw = await readFileSafe(join(root, '.relay', 'manifest.json'), null);
-    if (raw != null) {
-      try {
+    const target = join(root, '.relay', 'manifest.json');
+    try {
+      await assertNoSymlinkComponents(root, '.relay', '.relay');
+      await assertNotSymlinkFile(target, '.relay/manifest.json');
+      const raw = await readFileSafe(target, null, { onlyMissing: true });
+      if (raw != null) {
         const p = JSON.parse(raw);
-        if (p && typeof p === 'object' && !Array.isArray(p)) m = p;
-        else {
-          manifestCorrupt = true;
-          manifestError = '.relay/manifest.json 不是 JSON 对象';
-        }
-      } catch (e) {
-        manifestCorrupt = true;
-        manifestError = `.relay/manifest.json 解析失败:${e?.message || String(e)}`;
+        if (!p || typeof p !== 'object' || Array.isArray(p)) throw new Error('应是 JSON 对象');
+        m = p;
       }
+    } catch (e) {
+      manifestCorrupt = true;
+      manifestError = `.relay/manifest.json 读取或解析失败(${e?.code || e?.name || '无效文件'})`;
     }
   }
   const codeRoots = strArr(m && m.codeRoots);
@@ -158,6 +159,7 @@ export const readManifestConfig = async (root, { manifest: preloaded } = {}) => 
   const docsIgnore = strArr(m && m.docsIgnore);
   const protectedPaths = strArr(m && m.protectedPaths);
   const acceptanceCmds = strArr(m && m.acceptance && m.acceptance.commands);
+  const timeout = m?.acceptance?.timeoutMs;
   return {
     manifest: m,
     manifestCorrupt,
@@ -168,6 +170,8 @@ export const readManifestConfig = async (root, { manifest: preloaded } = {}) => 
     docsIgnore: docsIgnore.map((p) => ({ pattern: p, re: globToRegExp(p) })),
     protectedPaths: protectedPaths.map((p) => ({ pattern: p, re: globToRegExp(p) })),
     acceptanceCommands: acceptanceCmds,
+    acceptanceTimeoutMs: Number.isInteger(timeout) && timeout > 0 && timeout <= 2147483647
+      ? timeout : DEFAULT_ACCEPTANCE_TIMEOUT_MS,
     commitMessageTemplate:
       typeof (m && m.commitMessageTemplate) === 'string' && m.commitMessageTemplate.trim()
         ? m.commitMessageTemplate

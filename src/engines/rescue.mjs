@@ -22,7 +22,7 @@ import { fileURLToPath } from 'node:url';
 import { randomUUID } from 'node:crypto';
 import path from 'node:path';
 import {
-  acquireFileLock, acquireRepoLock, assertNoSymlinkComponents, ensureDir, findSensitiveChanges, gitRun,
+  acquireFileLock, acquireRepoLock, assertNoSymlinkComponents, ensureDir, findSensitivePaths, gitRun,
   gitIdentityArgs, isGitRepoAsync, nowIso, parseLockContent, readFileSafe, redactSecrets, releaseFileLock, scanSecrets, sha256Hex, stamp,
   writeFileAtomic, writeProtocolFile,
 } from '../util.mjs';
@@ -556,8 +556,9 @@ const snapshotWorktree = async (executionRoot, controlRoot, id, { sensitiveSkipp
     // 重命名/复制在 -z 下是「新路径\0旧路径」两条记录:把旧路径也纳入(它可能仍被引用)。
     if (/[RC]/.test(xy) && records[i + 1]) statusPaths.push(records[i + 1]), i += 1;
   }
-  // 路径级密钥规则仍用 porcelain 行文本判断(它只看路径,不影响内容扫描覆盖面)。
-  const excluded = findSensitiveChanges(records.filter((r) => r && r.length >= 4));
+  // 路径级密钥规则必须直接吃已经解好的 statusPaths。把 -z 记录重新拼成 porcelain
+  // 文本会再次引入引号/` -> ` 歧义,让敏感文件漏出 git add 排除面。
+  const excluded = findSensitivePaths(statusPaths);
   const excludedPaths = new Set(excluded.map((h) => h.path));
   // #9:在任何 git add / write-tree 之前扫描工作区内容,确保密钥 blob 从未进入对象库。
   const changedFiles = statusPaths.filter((rel) => rel && !excludedPaths.has(rel));
@@ -610,7 +611,7 @@ const snapshotWorktree = async (executionRoot, controlRoot, id, { sensitiveSkipp
     const rt = await gitRun(executionRoot, 'read-tree', headSha, { __gitOpts: true, env });
     if (!rt.ok) return { ref: '', note: `read-tree 失败:${rt.stderr.slice(0, 200)}` };
     const addArgs = ['add', '-A'];
-    if (excluded.length) addArgs.push('--', '.', ...excluded.map((p) => `:(exclude,top,glob)${p}`));
+    if (excludedPaths.size) addArgs.push('--', '.', ...[...excludedPaths].map((p) => `:(exclude,top,literal)${p}`));
     const add = await gitRun(executionRoot, ...addArgs, { __gitOpts: true, env });
     if (!add.ok) return { ref: '', note: `add 失败:${add.stderr.slice(0, 200)}` };
     const wt = await gitRun(executionRoot, 'write-tree', { __gitOpts: true, env });
@@ -704,7 +705,12 @@ const stateSummaryLine = (st, cls = null) => {
 
 /* ---------------------------- 扫描(只读) ---------------------------- */
 
-const scanSources = async (controlRoot, executionRoot, cfg, { sourcePath = '' } = {}) => {
+const scanSources = async (
+  controlRoot,
+  executionRoot,
+  cfg,
+  { sourcePath = '', limit = MAX_SCAN_CANDIDATES, match = null } = {},
+) => {
   // #4(审计):配置键在 cfg.rescue.* 下(顶层读取会恒为 undefined → 7 天窗口变 NaN)。
   const maxAgeMs = cfg.rescue.maxAgeDays * 86400000;
   const roots = [controlRoot, executionRoot].filter(Boolean);
@@ -721,71 +727,71 @@ const scanSources = async (controlRoot, executionRoot, cfg, { sourcePath = '' } 
   // 声明式来源:manifest.rescue.sources 每条是 { profile?, root } 或裸路径字符串。
   // **不做任何默认扫描**——核心不认识任何 harness 的安装位置。
   const configured = cfg.rescue.sources || [];
-  const all = [];
+  const kept = [];
+  const skipped = [];
   const notes = [];
-  for (const entry of configured) {
+  let limitReached = false;
+  sources: for (const entry of configured) {
     const spec = typeof entry === 'string' ? { root: entry } : (entry && typeof entry === 'object' ? entry : null);
     if (!spec || !spec.root) continue;
     const rootAbs = path.resolve(String(spec.root).replace(/^~(?=$|\/)/, process.env.HOME || process.env.USERPROFILE || '~'));
-    const candidates = spec.profile
+    const sourceProfiles = spec.profile
       ? (() => {
         const p = profiles.find((x) => x.id === spec.profile);
         return p ? [p] : [];
       })()
       : profiles;
-    let found = 0;
-    for (const profile of candidates) {
+    let discovered = 0;
+    for (const profile of sourceProfiles) {
       if (!profile || typeof profile.discover !== 'function') continue;
       const result = await discoverWithProfile(profile, rootAbs, { maxAgeMs });
       if (result.error) notes.push(result.error);
       for (const c of result.candidates) {
-        // 单一来源/描述符各自有上限,但多个来源累加也必须封顶;否则 MAX_SCAN_CANDIDATES
-        // 只是装饰常量,扫描总量可以随配置数无界增长。
-        if (all.length >= MAX_SCAN_CANDIDATES) break;
-        c.profile = profile.id; all.push(c); found += 1;
+        discovered += 1;
+        if (match && !match(c)) continue;
+        c.profile = profile.id;
+
+        // 全局上限只统计真正属于本项目、可展示的候选。先发现但随后跳过的候选不能
+        // 吃掉预算,否则前一个来源的 400 个外部项目会话会让后续有效来源完全不可见。
+        const cwd = c.cwd || '';
+        if (cwd && !(await ownedBy(cwd))) {
+          if (skipped.length < MAX_SCAN_CANDIDATES) skipped.push({ cand: c, why: `cwd 不在本项目:${cwd}` });
+          continue;
+        }
+        // 先看大小,再只读有界前缀推断 cwd;超大文件不会因归属推断被整体读入内存。
+        // 超限但能证明归属的候选**保留**并标记 oversize:让 capture 给出「超过 maxBytes」的明确失败,
+        // 而不是从扫描结果里凭空消失(那会让用户以为来源没配好)。
+        if (!c.cwd && c.transcriptPath) {
+          const st = await fsStat(c.transcriptPath).catch(() => null);
+          let inferredCwd = '';
+          if (typeof profile.parse === 'function') {
+            try {
+              const prefix = st ? readPrefixForCwd(c.transcriptPath, cfg.rescue.maxBytes) : await readFileSafe(c.transcriptPath, '');
+              const parsed = profile.parse(String(prefix));
+              inferredCwd = parsed && parsed.cwd ? String(parsed.cwd) : '';
+            } catch { inferredCwd = ''; }
+          }
+          if (inferredCwd && !(await ownedBy(inferredCwd))) {
+            if (skipped.length < MAX_SCAN_CANDIDATES) skipped.push({ cand: c, why: `cwd 不在本项目:${inferredCwd}` });
+            continue;
+          }
+          c.cwd = inferredCwd;
+        }
+        if (!c.cwd) {
+          if (skipped.length < MAX_SCAN_CANDIDATES) skipped.push({ cand: c, why: '缺 cwd 且无 transcript 可佐证归属' });
+          continue;
+        }
+        kept.push(c);
+        if (Number.isFinite(limit) && kept.length >= limit) {
+          limitReached = true;
+          break sources;
+        }
       }
-      if (all.length >= MAX_SCAN_CANDIDATES) break;
       if (spec.profile) break; // 显式指定了描述符,不再用其它描述符试
     }
-    if (all.length >= MAX_SCAN_CANDIDATES) {
-      notes.push(`候选总数达到上限 ${MAX_SCAN_CANDIDATES},其余来源未扫描`);
-      break;
-    }
-    if (!found && !notes.some((n) => n.startsWith('来源 '))) notes.push(`来源 ${rootAbs} 下未发现候选`);
+    if (!discovered && !notes.some((n) => n.startsWith('来源 '))) notes.push(`来源 ${rootAbs} 下未发现候选`);
   }
-
-  const candidates = [];
-  const skipped = [];
-  for (const c of all) {
-    const cwd = c.cwd || '';
-    if (cwd && !(await ownedBy(cwd))) { skipped.push({ cand: c, why: `cwd 不在本项目:${cwd}` }); continue; }
-    candidates.push(c);
-  }
-  // 先看大小,再只读有界前缀推断 cwd;超大文件不会因归属推断被整体读入内存。
-  // 超限但能证明归属的候选**保留**并标记 oversize:让 capture 给出「超过 maxBytes」的明确失败,
-  // 而不是从扫描结果里凭空消失(那会让用户以为来源没配好)。
-  const kept = [];
-  for (const c of candidates) {
-    if (!c.cwd && c.transcriptPath) {
-      const profile = profiles.find((x) => x.id === c.profile);
-      const st = await fsStat(c.transcriptPath).catch(() => null);
-      let cwd = '';
-      if (profile && typeof profile.parse === 'function') {
-        try {
-          const prefix = st ? readPrefixForCwd(c.transcriptPath, cfg.rescue.maxBytes) : await readFileSafe(c.transcriptPath, '');
-          const parsed = profile.parse(String(prefix));
-          cwd = parsed && parsed.cwd ? String(parsed.cwd) : '';
-        } catch { cwd = ''; }
-      }
-      if (cwd && !(await ownedBy(cwd))) { skipped.push({ cand: c, why: `cwd 不在本项目:${cwd}` }); continue; }
-      c.cwd = cwd;
-    }
-    if (!c.cwd) {
-      skipped.push({ cand: c, why: '缺 cwd 且无 transcript 可佐证归属' });
-      continue;
-    }
-    kept.push(c);
-  }
+  if (limitReached) notes.push(`候选总数达到上限 ${limit},其余来源未扫描`);
   return { candidates: kept, skipped, notes };
 };
 
@@ -969,10 +975,20 @@ const actCapture = async ({ controlRoot, executionRoot, cfg, args }) => {
       `修复:确认目标无误后重跑并带 confirm:《{"root":"${controlRoot}","action":"capture","id":"${wanted}","confirm":true}》`,
     ]);
   }
-  const scanned = await scanSources(controlRoot, executionRoot, cfg, { sourcePath: args.source || '' });
+  const scanned = await scanSources(controlRoot, executionRoot, cfg, {
+    sourcePath: args.source || '',
+    limit: Number.POSITIVE_INFINITY,
+    match: (c) => c.agentId === wanted || c.sourcePath === wanted,
+  });
   const target = scanned.candidates.find((c) => c.agentId === wanted || c.sourcePath === wanted);
   if (!target) {
-    const known = scanned.candidates.map((c) => c.agentId).filter(Boolean);
+    // 正常 capture 用 match 只保留目标并避免 400 条展示上限;失败时才做一次有界扫描,
+    // 保留原先「可用 id」提示,不让性能优化吞掉诊断信息。
+    const available = await scanSources(controlRoot, executionRoot, cfg, {
+      sourcePath: args.source || '',
+      limit: 20,
+    });
+    const known = available.candidates.map((c) => c.agentId).filter(Boolean);
     return fail('relay rescue — capture', `未找到子代理 \`${wanted}\`。`, [
       known.length ? `可用 id:${known.join(', ')}` : '来源目录下没有属于本项目的候选。',
       '',
@@ -1012,100 +1028,132 @@ const actCapture = async ({ controlRoot, executionRoot, cfg, args }) => {
     String(args.note || ''),
   ]);
   const id = `rs-${sha256Hex(identity).slice(0, 20)}`;
-  const existing = await readState(controlRoot, id);
-  if (existing) {
-    return {
-      content: [{ type: 'text', text: [
-        `# 接力单已存在(幂等重试) — \`${id}\``,
-        '',
-        '- 来源、transcript 内容、task 与 note 均未变化;未创建重复接力单或 git ref。',
-        '- 修复:若要记录新的现场/下一棒,请改变来源内容、task 或 note 后再 capture。',
-      ].join('\n') }],
-    };
+  // 确定 id 只解决「顺序重试」;并发请求仍会同时通过 exists 检查。用短生命周期、
+  // 带心跳的 per-card 锁把「检查 → 快照 → 原子落盘」串行化。崩溃后锁按默认 120s
+  // 失活可接管,不引入 240min 认领锁语义,也不影响不同来源的并行 capture。
+  let captureLock;
+  try {
+    captureLock = await acquireFileLock(controlRoot, path.join(RESCUE_REL, `.capture-${id}.lock`), `capture:${id}`, {
+      waitMs: 60_000,
+      label: `capture ${id} 幂等锁`,
+    });
+  } catch (e) {
+    return fail('relay rescue — capture', `获取 capture 幂等锁失败:${e?.message || String(e)}`, [
+      '', '修复:确认 .relay/rescue 是仓库内普通目录后重试。',
+    ]);
   }
-  const previous = await listStates(controlRoot);
-  // createdAt 是毫秒级:同一毫秒内的两张卡排序不稳定(会让 previousId 随机为空/错指)。
-  // 用 (createdAt, id) 复合键决胜,保证确定性。
-  const chainPrev = previous.length
-    ? previous.slice().sort((a, b) => {
-      const byTime = String(a.createdAt).localeCompare(String(b.createdAt));
-      return byTime !== 0 ? byTime : String(a.id).localeCompare(String(b.id));
-    }).pop()
-    : null;
-  // #13(审计):快照根必须是**被救子代理自己的 cwd**,不是发起抢救的会话的 executionRoot——
-  // 受管 worktree 下两者不同,拍错树会把无关会话的脏改动当成现场(或被救现场根本没进快照)。
-  const snapRootRaw = described.cwd || executionRoot;
-  const snapRoot = isInside(controlRoot, await realPathOf(snapRootRaw)) || isInside(await realPathOf(executionRoot), await realPathOf(snapRootRaw))
-    ? snapRootRaw
-    : executionRoot;
-  const snap = await snapshotWorktree(snapRoot, controlRoot, id, { maxSnapshotBytes: cfg.rescue.maxBytes });
-  const snapRootNote = snapRootRaw !== executionRoot
-    ? `快照根=${snapRoot}(被救子代理的 cwd;调用者的 executionRoot=${executionRoot})`
-    : '';
-  const dir = rescueDir(controlRoot, id);
-  await ensureDir(dir);
-  const state = {
-    version: 1,
-    id,
-    createdAt: nowIso(),
-    updatedAt: nowIso(),
-    profile: described.profile,
-    transcriptless: !!(cfg.profiles.find((x) => x.id === described.profile) || {}).transcriptless,
-    agentId: described.agentId,
-    parentSessionId: described.parentSessionId,
-    sourcePath: target.sourcePath,
-    transcriptFile: transcriptBuf ? `${TRANSCRIPT_NAME}` : '',
-    bytes: transcriptBuf ? transcriptBuf.length : 0,
-    sha256: transcriptBuf ? sha256Hex(transcriptBuf.toString('utf8')) : '',
-    cwd: described.cwd,
-    controlRoot,
-    executionRoot,
-    task: args.task || '',
-    branch: described.gitBranch || '',
-    // #1(审计):prompt / lastNarrative / classification 是**可派生**的,按铁律 2 不落盘——
-    // 否则它们既绕过了 sha256 校验(校验只盖 transcript),又会成为第二真相源。
-    // 一律由 loadTranscript + parse 在每次读取时重新派生。
-    sourceStatus: described.sourceStatus,
-    sourceError: described.sourceError,
-    snapshotRef: snap.ref || '',
-    snapshotSha: snap.commit || '',
-    // #8(审计):快照失败的原因必须可见——否则「快照失败」与「现场本来就干净」在输出上不可区分。
-    snapshotNote: [snap.note, snapRootNote].filter(Boolean).join(' | '),
-    snapshotRoot: snapRoot,
-    snapshotExcluded: snap.excluded || [],
-    previousId: chainPrev ? chainPrev.id : '',
-    note: String(args.note || ''),
-    takeover: null,
-    report: null,
-  };
-  if (transcriptBuf) await writeFileAtomic(path.join(dir, TRANSCRIPT_NAME), transcriptBuf, { label: '接力单 transcript.json' });
-  await writeFileAtomic(path.join(dir, STATE_NAME), `${JSON.stringify(state, null, 2)}\n`, { label: '接力单 state.json' });
+  if (!captureLock.ok) {
+    return fail('relay rescue — capture', `同一接力单的另一个 capture 仍在进行(${captureLock.holder || '未知持有者'})。`, [
+      '', '修复:等该请求结束后原样重试;确定请求已经结束但锁仍在时,最多等 120s 让它失活。',
+    ]);
+  }
+  try {
+    const existing = await readState(controlRoot, id);
+    if (existing) {
+      return {
+        content: [{ type: 'text', text: [
+          `# 接力单已存在(幂等重试) — \`${id}\``,
+          '',
+          '- 来源、transcript 内容、task 与 note 均未变化;未创建重复接力单或 git ref。',
+          '- 修复:若要记录新的现场/下一棒,请改变来源内容、task 或 note 后再 capture。',
+        ].join('\n') }],
+      };
+    }
+    const previous = await listStates(controlRoot);
+    // createdAt 是毫秒级:同一毫秒内的两张卡排序不稳定(会让 previousId 随机为空/错指)。
+    // 用 (createdAt, id) 复合键决胜,保证确定性。
+    const chainPrev = previous.length
+      ? previous.slice().sort((a, b) => {
+        const byTime = String(a.createdAt).localeCompare(String(b.createdAt));
+        return byTime !== 0 ? byTime : String(a.id).localeCompare(String(b.id));
+      }).pop()
+      : null;
+    // #13(审计):快照根必须是**被救子代理自己的 cwd**,不是发起抢救的会话的 executionRoot——
+    // 受管 worktree 下两者不同,拍错树会把无关会话的脏改动当成现场(或被救现场根本没进快照)。
+    const snapRootRaw = described.cwd || executionRoot;
+    const snapRoot = isInside(controlRoot, await realPathOf(snapRootRaw)) || isInside(await realPathOf(executionRoot), await realPathOf(snapRootRaw))
+      ? snapRootRaw
+      : executionRoot;
+    const snap = await snapshotWorktree(snapRoot, controlRoot, id, { maxSnapshotBytes: cfg.rescue.maxBytes });
+    const snapRootNote = snapRootRaw !== executionRoot
+      ? `快照根=${snapRoot}(被救子代理的 cwd;调用者的 executionRoot=${executionRoot})`
+      : '';
+    const dir = rescueDir(controlRoot, id);
+    await ensureDir(dir);
+    const state = {
+      version: 1,
+      id,
+      createdAt: nowIso(),
+      updatedAt: nowIso(),
+      profile: described.profile,
+      transcriptless: !!(cfg.profiles.find((x) => x.id === described.profile) || {}).transcriptless,
+      agentId: described.agentId,
+      parentSessionId: described.parentSessionId,
+      sourcePath: target.sourcePath,
+      transcriptFile: transcriptBuf ? `${TRANSCRIPT_NAME}` : '',
+      bytes: transcriptBuf ? transcriptBuf.length : 0,
+      sha256: transcriptBuf ? sha256Hex(transcriptBuf.toString('utf8')) : '',
+      cwd: described.cwd,
+      controlRoot,
+      executionRoot,
+      task: args.task || '',
+      branch: described.gitBranch || '',
+      // #1(审计):prompt / lastNarrative / classification 是**可派生**的,按铁律 2 不落盘——
+      // 否则它们既绕过了 sha256 校验(校验只盖 transcript),又会成为第二真相源。
+      // 一律由 loadTranscript + parse 在每次读取时重新派生。
+      sourceStatus: described.sourceStatus,
+      sourceError: described.sourceError,
+      snapshotRef: snap.ref || '',
+      snapshotSha: snap.commit || '',
+      // #8(审计):快照失败的原因必须可见——否则「快照失败」与「现场本来就干净」在输出上不可区分。
+      snapshotNote: [snap.note, snapRootNote].filter(Boolean).join(' | '),
+      snapshotRoot: snapRoot,
+      snapshotExcluded: snap.excluded || [],
+      previousId: chainPrev ? chainPrev.id : '',
+      note: String(args.note || ''),
+      takeover: null,
+      report: null,
+    };
+    const fence = () => captureLock.check();
+    if (transcriptBuf) {
+      await writeFileAtomic(path.join(dir, TRANSCRIPT_NAME), transcriptBuf, {
+        fencing: fence, label: '接力单 transcript.json',
+      });
+    }
+    await writeFileAtomic(path.join(dir, STATE_NAME), `${JSON.stringify(state, null, 2)}\n`, {
+      fencing: fence, label: '接力单 state.json',
+    });
 
-  const lines = [
-    `# 接力单已生成 — \`${id}\``,
-    '',
-    `- 来源:${state.profile} / \`${state.agentId}\``,
-    `- 中断:${described.classification.label}(${described.classification.kind})`,
-    state.transcriptFile
-      ? `- transcript:${state.bytes} 字节,sha256 ${state.sha256.slice(0, 12)}…`
-      : '- transcript:(该来源只有元数据,未捕获对话;见 state.json 的 sourcePath)',
-    state.snapshotRef
-      ? `- 工作区快照:${state.snapshotRef}(HEAD..快照的改动可用 \`git diff\` 查看)`
-      : (state.snapshotNote && !/无未提交改动/.test(state.snapshotNote)
-        ? `- 工作区快照:**未生成**(${state.snapshotNote});被救现场可能仍有未提交改动未保存,接手前请人工确认`
-        : '- 工作区快照:(已确认无未提交改动)'),
-    ...(state.snapshotExcluded.length ? [`- 已排除疑似密钥文件:${state.snapshotExcluded.join(', ')}(不进快照)`] : []),
-    ...(gi.added.length ? [`- .gitignore:补了 ${gi.added.length} 条运行时基线`] : []),
-    ...(chainPrev ? [`- 接续链:上一棒 \`${chainPrev.id}\``] : []),
-    '',
-    '接力单在本机 `.relay/rescue/` 内,不入库(transcript 含本机路径与潜在敏感内容)。',
-    '',
-    '下一步:由另一个模型执行 takeover(会占用派发权,并把「重建任务」写进 TASKS 待办):',
-    '```json',
-    `{ "root": "${controlRoot}", "action": "takeover", "id": "${id}", "model": "<你的模型标识>", "confirm": true }`,
-    '```',
-  ];
-  return textResult(lines.join('\n'));
+    const lines = [
+      `# 接力单已生成 — \`${id}\``,
+      '',
+      `- 来源:${state.profile} / \`${state.agentId}\``,
+      `- 中断:${described.classification.label}(${described.classification.kind})`,
+      state.transcriptFile
+        ? `- transcript:${state.bytes} 字节,sha256 ${state.sha256.slice(0, 12)}…`
+        : '- transcript:(该来源只有元数据,未捕获对话;见 state.json 的 sourcePath)',
+      state.snapshotRef
+        ? `- 工作区快照:${state.snapshotRef}(HEAD..快照的改动可用 \`git diff\` 查看)`
+        : (state.snapshotNote && !/无未提交改动/.test(state.snapshotNote)
+          ? `- 工作区快照:**未生成**(${state.snapshotNote});被救现场可能仍有未提交改动未保存,接手前请人工确认`
+          : '- 工作区快照:(已确认无未提交改动)'),
+      ...(state.snapshotExcluded.length ? [`- 已排除疑似密钥文件:${state.snapshotExcluded.join(', ')}(不进快照)`] : []),
+      ...(gi.added.length ? [`- .gitignore:补了 ${gi.added.length} 条运行时基线`] : []),
+      ...(chainPrev ? [`- 接续链:上一棒 \`${chainPrev.id}\``] : []),
+      '',
+      '接力单在本机 `.relay/rescue/` 内,不入库(transcript 含本机路径与潜在敏感内容)。',
+      '',
+      '下一步:由另一个模型执行 takeover(会占用派发权,并把「重建任务」写进 TASKS 待办):',
+      '```json',
+      `{ "root": "${controlRoot}", "action": "takeover", "id": "${id}", "model": "<你的模型标识>", "confirm": true }`,
+      '```',
+    ];
+    return textResult(lines.join('\n'));
+  } catch (e) {
+    return fail('relay rescue — capture', `写入接力单失败:${e?.message || String(e)}`);
+  } finally {
+    await captureLock.release().catch(() => {});
+  }
 };
 
 const actShow = async ({ controlRoot, args, ctxProfiles }) => {

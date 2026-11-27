@@ -8,7 +8,6 @@ status: 已完成
 日期：2026-10-29
 状态：已实现；2026-11-27 按现行实现修正清理与接口口径。
 
-> **strictDocs 兼容提示:** 本文件是历史设计文档,文件名不含 `NN-类型-主题-vX.Y.md`。若项目启用 `strictDocs:true`,建议主审在 `manifest.docsIgnore` 中加入 `superpowers/**`,或由主审按文档命名规范重命名并同步引用;本任务不修改 manifest。
 
 ## 1. 意图与背景
 

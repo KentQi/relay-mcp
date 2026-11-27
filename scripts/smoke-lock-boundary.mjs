@@ -46,7 +46,7 @@ try {
     writeFileSync(path.join(root, '.relay/claims/T901.lock'), JSON.stringify({ version: 2, holder: 'fresh', token: 'a', acquiredAt }) + '\n');
     const old = new Date(Date.now() - 241 * 60000);
     utimesSync(path.join(root, rel), old, old);
-    const lock = await acquireFileLock(root, rel, 'contender', { heartbeat: false, waitMs: 1, staleMs: 240 * 60000, ttlMinutes: 240 });
+    const lock = await acquireFileLock(root, rel, 'contender', { heartbeat: false, staleMs: 240 * 60000, ttlMinutes: 240 });
     assert.equal(lock.ok, false);
     assert.equal(lock.holder, 'fresh');
   }
@@ -55,7 +55,7 @@ try {
     const root = mk();
     const rel = '.relay/claims/T902.lock';
     writeFileSync(path.join(root, rel), JSON.stringify({ version: 2, holder: 'old', token: 'b', acquiredAt: new Date(Date.now() - 241 * 60000).toISOString() }) + '\n');
-    const lock = await acquireFileLock(root, rel, 'contender', { heartbeat: false, waitMs: 1, staleMs: 240 * 60000 });
+    const lock = await acquireFileLock(root, rel, 'contender', { heartbeat: false, staleMs: 240 * 60000 });
     assert.equal(lock.ok, true);
     assert.equal(lock.tookOver, 'old');
     await lock.release();

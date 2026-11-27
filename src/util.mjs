@@ -1,6 +1,6 @@
 // relay-mcp — src/util.mjs (W2)
 // 零依赖公共助手:fs / git / 时间戳。仅使用 node: 内置模块。
-import { readFile, writeFile, mkdir, rename, stat, lstat, unlink, utimes, open as fsOpen2 } from 'node:fs/promises';
+import { readFile, writeFile, mkdir, rename, link, stat, lstat, unlink, utimes, open as fsOpen2 } from 'node:fs/promises';
 import { writeFileSync } from 'node:fs';
 import { realpath } from 'node:fs/promises';
 import path from 'node:path';
@@ -37,11 +37,12 @@ export const templatesDir = () =>
   path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', 'templates');
 
 // 读文件,不存在(或不可读)返回 fallback
-export const readFileSafe = async (p, fallback = null) => {
+export const readFileSafe = async (p, fallback = null, { onlyMissing = false } = {}) => {
   traceRead(p);
   try {
     return await readFile(p, 'utf8');
-  } catch {
+  } catch (e) {
+    if (onlyMissing && e?.code !== 'ENOENT') throw e;
     return fallback;
   }
 };
@@ -133,6 +134,13 @@ export const gitRun = async (root, ...rest) => {
   }
 };
 
+// NUL 分隔保留文件名原样;关闭 rename 推断使重命名的两端各自成为独立记录。
+export const gitStatusPaths = async (root) => {
+  const status = await gitRun(root, 'status', '--porcelain', '-z', '--no-renames', '-uall');
+  const paths = status.ok ? status.stdout.split('\0').filter(Boolean).map((record) => record.slice(3)) : [];
+  return { ...status, paths };
+};
+
 // recursive mkdir
 export const ensureDir = async (p) => {
   await mkdir(p, { recursive: true });
@@ -167,28 +175,36 @@ export const nowIso = () => new Date().toISOString();
 // —— 疑似密钥文件守卫(H3/H-B):在场即不自动提交,强制人类过目 ——
 // 单一实现,session_end / init / onboard / restructure 各自动提交点共用
 export const SECRET_RULES = [
-  [/(^|\/)\.env(\..+)?$/i, '.env 疑似密钥'],
+  [/(^|\/)\.env(\.[^/]+)?$/i, '.env 疑似密钥'],
   [/(^|\/)[^/]*secret[^/]*$/i, '文件名含 secret'],
   [/(^|\/)[^/]*credential[^/]*$/i, '文件名含 credential'],
   [/\.(key|pem)$/i, '*.key / *.pem 私钥'],
-  [/(^|\/)id_rsa(\..+)?$/i, 'id_rsa 私钥'],
+  [/(^|\/)id_rsa(\.[^/]+)?$/i, 'id_rsa 私钥'],
 ];
+/** @internal 旧 porcelain 文本调用方兼容。引擎使用 findSensitivePaths 处理原始路径。 */
 export const findSensitiveChanges = (statusLines) => {
-  const hits = new Map();
+  const paths = [];
   for (const line of statusLines || []) {
     if (line.length < 4) continue;
     for (const raw of line.slice(3).split(' -> ')) {
       let p = raw.trim();
       if (p.length >= 2 && p.startsWith('"') && p.endsWith('"')) p = p.slice(1, -1);
-      const rule = SECRET_RULES.find(([re]) => re.test(p));
-      if (rule) hits.set(p, rule[1]);
+      paths.push(p);
     }
+  }
+  return findSensitivePaths(paths);
+};
+export const findSensitivePaths = (paths) => {
+  const hits = new Map();
+  for (const p of paths) {
+    const rule = SECRET_RULES.find(([re]) => re.test(p));
+    if (rule) hits.set(p, rule[1]);
   }
   return [...hits.entries()].map(([path, why]) => ({ path, why })).sort((a, b) => a.path.localeCompare(b.path));
 };
 
 // —— 协议文件内容级密钥扫描(R11)——
-// 上面的 SECRET_RULES/findSensitiveChanges 只看路径,不看内容;这里补内容级。
+// SECRET_RULES/findSensitivePaths 只看路径;这里补内容级扫描。
 // 规则刻意窄:宁可漏掉冷门格式,也不要误报把出场绿闸变成噪音源。
 // 一行只报一条,preview 只保留前 4 字符——扫描结果会进简报/LOG,绝不能回显完整密钥。
 export const SECRET_OK_MARKER = 'relay:secret-ok';
@@ -310,7 +326,7 @@ export const assertNotSymlinkFile = async (p, label = '') => {
 };
 
 // 原子写:同目录临时文件 + rename,失败清理;可选 fencing 回调在 rename 之前复核锁仍属于本会话。
-export const writeFileAtomic = async (target, content, { fencing = null, label = '' } = {}) => {
+export const writeFileAtomic = async (target, content, { fencing = null, label = '', createOnly = false } = {}) => {
   await assertNotSymlinkFile(target, label);
   const dir = path.dirname(target);
   const dirStat = await lstat(dir).catch(() => null);
@@ -326,7 +342,14 @@ export const writeFileAtomic = async (target, content, { fencing = null, label =
         throw new Error(`锁 fencing 校验失败:${verdict?.warning || '写入前发现仓库锁已不属于当前会话'}`);
       }
     }
-    await rename(tmp, target);
+    if (!createOnly) {
+      await rename(tmp, target);
+    } else {
+      // link 同样原子发布完整内容,且目标已存在时不会替换原文件。
+      try { await link(tmp, target); }
+      catch (e) { if (e?.code === 'EEXIST') return false; throw e; }
+    }
+    return true;
   } finally {
     await unlink(tmp).catch(() => { /* 已 rename 或写失败 */ });
   }
@@ -370,7 +393,7 @@ export class ProtocolConflictError extends Error {
 export const writeProtocolFile = async (root, name, content, { token = '', lockLabel = '仓库写锁', expectedHash = '' } = {}) => {
   // 崩溃点矩阵(测试钩子):RELAY_CRASH_AT_WRITE=N 在第 N+1 次协议写之前立刻退出,
   // 用来验证「半途崩溃后重跑必收敛」。生产环境不设置该变量时行为完全不变。
-  if (process.env.RELAY_CRASH_AT_WRITE != null) {
+  if (process.env.RELAY_TEST_HOOKS === '1' && process.env.RELAY_CRASH_AT_WRITE != null) {
     const n = Number(process.env.RELAY_CRASH_AT_WRITE);
     globalThis.__relayProtocolWrites = (globalThis.__relayProtocolWrites || 0) + 1;
     if (Number.isFinite(n) && globalThis.__relayProtocolWrites > n) process.exit(137);
@@ -460,7 +483,8 @@ export const parseLockContent = (raw) => {
 
 // 认领锁(heartbeat:false)以锁内 acquiredAt 为唯一年龄真相源;仓库写锁用心跳刷新的 mtime。
 // 无法证明过期时绝不接管:旧文本缺时间、空锁/损坏锁都交给宽限期或人工诊断。
-export const claimLockExpiry = (info, { now = Date.now(), defaultTtlMinutes = 240, overrideTtlMinutes = null } = {}) => {
+export const DEFAULT_CLAIM_TTL_MINUTES = 240;
+export const claimLockExpiry = (info, { now = Date.now(), defaultTtlMinutes = DEFAULT_CLAIM_TTL_MINUTES, overrideTtlMinutes = null } = {}) => {
   // 优先级:调用方本次显式 TTL(ttl_minutes 覆盖)> 锁内记录的真实 TTL > 默认 240。
   // 若固定优先锁内值,调用方传更短 TTL 想强制接管时会被旧锁记录的 240 分钟挡住。
   const hasOverride = Number.isFinite(overrideTtlMinutes) && overrideTtlMinutes > 0;
@@ -524,6 +548,7 @@ export const acquireFileLock = async (root, relPath, holder, {
   const token = randomUUID();
   const acquiredAt = new Date().toISOString();
   const deadline = Date.now() + waitMs;
+  const newLockTtl = ttlMinutes ?? (heartbeat ? null : staleMs / 60000);
   let tookOver = '';
   for (;;) {
     let handle = null;
@@ -531,7 +556,7 @@ export const acquireFileLock = async (root, relPath, holder, {
     try {
       handle = await fsOpen2(file, 'wx');
       opened = true;
-      await handle.writeFile(serializeLock({ holder, token, acquiredAt, ttlMinutes }), 'utf8');
+      await handle.writeFile(serializeLock({ holder, token, acquiredAt, ttlMinutes: newLockTtl }), 'utf8');
       await handle.close();
       handle = null;
       return makeLockHandle({ root: rootAbs, relPath, file, token, holder, created: true, tookOver, label, heartbeat });
@@ -566,7 +591,9 @@ export const acquireFileLock = async (root, relPath, holder, {
       let adoptToken = snap.info.token;
       if (!adoptToken) {
         adoptToken = token;
-        await writeFileAtomic(file, serializeLock({ holder: lockHolder, token: adoptToken, acquiredAt: snap.info.acquiredAt || acquiredAt, ttlMinutes }), { label });
+        await writeFileAtomic(file, serializeLock({
+          holder: lockHolder, token: adoptToken, acquiredAt: snap.info.acquiredAt || acquiredAt, ttlMinutes: newLockTtl,
+        }), { label });
       }
       return makeLockHandle({ root: rootAbs, relPath, file, token: adoptToken, holder: lockHolder, created: false, tookOver: '', label, heartbeat });
     }
@@ -574,7 +601,7 @@ export const acquireFileLock = async (root, relPath, holder, {
     // 空锁仍走 mtime 宽限期(acquiredAt 不存在);完整认领锁只按 acquiredAt 的精确毫秒裁决。
     const expiry = !heartbeat && !halfInitialized
       ? claimLockExpiry(snap.info, {
-        defaultTtlMinutes: Number.isFinite(staleMs) ? staleMs / 60000 : 240,
+        defaultTtlMinutes: Number.isFinite(staleMs) ? staleMs / 60000 : DEFAULT_CLAIM_TTL_MINUTES,
         overrideTtlMinutes: Number.isFinite(ttlMinutes) && ttlMinutes > 0 ? ttlMinutes : null,
       })
       : null;
@@ -600,6 +627,7 @@ export const acquireFileLock = async (root, relPath, holder, {
       const ageMs = expiry && expiry.ageMinutes != null ? expiry.ageMinutes * 60000 : snap.ageMs;
       return {
         ok: false, holder: snap.info.holder || '(未知持有者)', ageMs, ageMin: ageMs / 60000,
+        ttlMin: expiry?.ttlMinutes,
         staleMs, label,
         warning: `${label}被 ${snap.info.holder || '(未知持有者)'} 持有(约 ${Math.round(ageMs / 1000)}s)${expiry ? `;${expiry.reason}` : ''}`,
       };

@@ -851,6 +851,33 @@ try {
       ok(!/notes\.txt/.test(gitOut(secRepo, 'rev-list', '--objects', '--all')),
         '密钥文件也没有被任何提交/树对象引用');
 
+      // 路径名里含字面 ` -> `:需要保持完整文件名才能识别 id_rsa.* 并排除它。
+      const trickyRepo = freshRepo('snap-path', '快照路径守卫夹具');
+      writeFileSync(path.join(trickyRepo, 'base.txt'), 'base\n');
+      git(trickyRepo, 'add', '-A');
+      git(trickyRepo, '-c', 'user.name=t', '-c', 'user.email=t@l', 'commit', '-qm', 'base');
+      const trickyName = 'id_rsa. -> literal';
+      writeFileSync(path.join(trickyRepo, trickyName), 'harmless placeholder\n');
+      writeFileSync(path.join(trickyRepo, 'regular.txt'), 'regular snapshot content\n');
+      const H10path = mkTmp('home10-path');
+      copyFixture('claude', path.join(H10path, 'cc'), { ROOT: trickyRepo });
+      setRescueSources(trickyRepo, [{ profile: 'cc-ref', root: path.join(H10path, 'cc', 'projects') }], PROFILE_SPECS);
+      const trickyCap = cli(trickyRepo, 'relay_rescue', { action: 'capture', id: 'claude-ok', confirm: true }, {});
+      ok(trickyCap.status === 0, '含 ` -> ` 文件名的现场可 capture', out(trickyCap).slice(0, 400));
+      const trickyId = rescueIds(trickyRepo)[0];
+      if (trickyId) {
+        const trickyState = JSON.parse(read(path.join(rescueRootOf(trickyRepo), trickyId, 'state.json')));
+        ok(trickyState.snapshotExcluded.some((h) => h.path === trickyName),
+          '路径级敏感规则按结构化路径识别 ` -> ` 文件名', JSON.stringify(trickyState.snapshotExcluded));
+        ok(!!trickyState.snapshotRef, '普通改动仍可生成快照', trickyState.snapshotNote);
+        if (trickyState.snapshotRef) {
+          const treeNames = (git(trickyRepo, 'ls-tree', '-r', '-z', '--name-only', trickyState.snapshotRef).stdout || '')
+            .split('\u0000').filter(Boolean);
+          ok(treeNames.includes('regular.txt') && !treeNames.includes(trickyName),
+            '快照包含普通改动且排除含 ` -> ` 的敏感路径', treeNames.join(' | '));
+        }
+      }
+
       // 超过扫描上限时必须整体拒绝,不能「只扫前 500 个」放行其余文件
       const manyRepo = freshRepo('manyfiles', '大量改动夹具');
       const H10b = mkTmp('home10b');
@@ -1063,6 +1090,148 @@ try {
     // 真正要钉的是「总条数不超过上限」,而不是某一个序号是否出现。
     const shown = (text.match(/^- `cap-\d+`/gm) || []).length;
     ok(shown === 400, '第 401 个候选被截断(展示条数恰好等于上限)', `shown=${shown}`);
+  }
+  // ==========================================================================
+  console.log('\n== 13. 并发 capture 与扫描上限语义 ==');
+  // ==========================================================================
+  {
+    const repo = freshRepo('capture-race', '并发 capture');
+    writeFileSync(path.join(repo, 'race.txt'), 'dirty before concurrent capture\n');
+    const spec = { id: 'race-ref', kind: 'json-metadata', metaFile: 'metadata.json' };
+    setRescueSources(repo, [{ profile: spec.id, root: repo }], [spec]);
+
+    let arrived = 0;
+    let release;
+    const gate = new Promise((resolve) => { release = resolve; });
+    const raceProfile = {
+      id: spec.id,
+      title: 'concurrent capture probe',
+      roots: () => [],
+      transcriptless: false,
+      async discover() {
+        return [{
+          profile: spec.id,
+          sourcePath: path.join(repo, 'race-agent.jsonl'),
+          transcriptPath: path.join(repo, 'race-agent.jsonl'),
+          agentId: 'race-agent',
+          cwd: repo,
+        }];
+      },
+      async loadTranscript() {
+        arrived += 1;
+        if (arrived === 2) release();
+        await gate;
+        return Buffer.from(`${JSON.stringify({
+          type: 'user', cwd: repo, message: { role: 'user', content: '并发 capture 任务' },
+        })}\n${JSON.stringify({
+          type: 'assistant',
+          message: { role: 'assistant', content: [{ type: 'tool_use', id: 'call-race', name: 'Read', input: {} }] },
+        })}\n`);
+      },
+      parse() {
+        return {
+          prompt: '并发 capture 任务',
+          cwd: repo,
+          gitBranch: '',
+          edits: [],
+          commands: [],
+          toolCalls: [],
+          todos: [],
+          narrative: '',
+          toolSignals: {
+            pendingToolUse: new Set(['call-race']),
+            lastRecordKind: 'assistant',
+            trailingToolError: false,
+            anyToolError: false,
+            explicitCompletion: false,
+            apiError: null,
+            parseIssues: [],
+          },
+        };
+      },
+    };
+
+    const previousTestProfiles = process.env.RELAY_RESCUE_TEST_PROFILES;
+    process.env.RELAY_RESCUE_TEST_PROFILES = '1';
+    try {
+      const { relayRescue } = await import('../src/engines/rescue.mjs');
+      const captureArgs = {
+        root: repo, action: 'capture', id: 'race-agent', confirm: true, _profiles: [raceProfile],
+      };
+      const results = await Promise.all([relayRescue(captureArgs), relayRescue(captureArgs)]);
+      const texts = results.map((r) => (r.content || []).map((x) => x.text || '').join('\n'));
+      ok(texts.filter((t) => /接力单已生成/.test(t)).length === 1,
+        '并发原样 capture 只有一个请求报告创建成功', texts.join('\n---\n').slice(0, 800));
+      ok(texts.filter((t) => /已存在\(幂等重试\)/.test(t)).length === 1,
+        '并发原样 capture 的另一个请求报告幂等重试', texts.join('\n---\n').slice(0, 800));
+      ok(rescueIds(repo).length === 1, '并发原样 capture 只落一张接力单', rescueIds(repo).join(','));
+      ok(!readdirSync(rescueRootOf(repo)).some((n) => n.startsWith('.capture-')),
+        '并发 capture 结束后释放 per-card 幂等锁');
+    } finally {
+      if (previousTestProfiles == null) delete process.env.RELAY_RESCUE_TEST_PROFILES;
+      else process.env.RELAY_RESCUE_TEST_PROFILES = previousTestProfiles;
+    }
+  }
+  {
+    const repo = freshRepo('scan-cap-order', '扫描上限不吞有效候选');
+    const otherProject = freshRepo('scan-cap-other', '别的项目');
+    const skippedRoot = path.join(mkTmp('scan-cap-skipped'), 'agents');
+    const validRoot = path.join(mkTmp('scan-cap-valid'), 'agents');
+    const spec = { id: 'cap-order-ref', kind: 'json-metadata', metaFile: 'metadata.json' };
+    const writeMeta = (root, parent, agentId, cwd) => {
+      const dir = path.join(root, parent, agentId);
+      mkdirSync(dir, { recursive: true });
+      writeFileSync(path.join(dir, 'metadata.json'), JSON.stringify({
+        agentId, cwd, prompt: `task ${agentId}`, status: 'failed', error: 'quota 429',
+        createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
+      }));
+    };
+    for (let i = 0; i < 400; i += 1) writeMeta(skippedRoot, `parent-${i}`, `skipped-${i}`, otherProject);
+    writeMeta(validRoot, 'parent-valid', 'valid-after-cap', repo);
+    setRescueSources(repo, [
+      { profile: spec.id, root: skippedRoot },
+      { profile: spec.id, root: validRoot },
+    ], [spec]);
+
+    const scan = out(cli(repo, 'relay_rescue', { action: 'scan' }));
+    ok(/valid-after-cap/.test(scan), '前序跳过项不耗尽全局候选上限', scan.slice(0, 800));
+    const capture = cli(repo, 'relay_rescue', {
+      action: 'capture', id: 'valid-after-cap', confirm: true,
+    });
+    ok(capture.status === 0, 'capture 仍可找到上限之后的项目内候选', out(capture).slice(0, 800));
+  }
+  {
+    const repo = freshRepo('capture-beyond-scan-cap', 'capture 不受展示上限截断');
+    const firstRoot = path.join(mkTmp('capture-cap-first'), 'agents');
+    const targetRoot = path.join(mkTmp('capture-cap-target'), 'agents');
+    const spec = { id: 'capture-cap-ref', kind: 'json-metadata', metaFile: 'metadata.json' };
+    const writeMeta = (root, parent, agentId) => {
+      const dir = path.join(root, parent, agentId);
+      mkdirSync(dir, { recursive: true });
+      writeFileSync(path.join(dir, 'metadata.json'), JSON.stringify({
+        agentId, cwd: repo, prompt: `task ${agentId}`, status: 'failed', error: 'quota 429',
+        createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
+      }));
+    };
+    for (let i = 0; i < 400; i += 1) writeMeta(firstRoot, `parent-${i}`, `visible-${i}`);
+    writeMeta(targetRoot, 'parent-target', 'target-beyond-scan-cap');
+    setRescueSources(repo, [
+      { profile: spec.id, root: firstRoot },
+      { profile: spec.id, root: targetRoot },
+    ], [spec]);
+
+    const scan = out(cli(repo, 'relay_rescue', { action: 'scan' }));
+    ok(/可抢救\(400\)/.test(scan) && !/target-beyond-scan-cap/.test(scan),
+      'scan 仍严格限制为前 400 个有效候选', scan.slice(0, 500));
+    const capture = cli(repo, 'relay_rescue', {
+      action: 'capture', id: 'target-beyond-scan-cap', confirm: true,
+    });
+    ok(capture.status === 0, 'capture 按 id 查找时不受 scan 展示上限截断', out(capture).slice(0, 800));
+    const missing = cli(repo, 'relay_rescue', {
+      action: 'capture', id: 'missing-beyond-scan-cap', confirm: true,
+    });
+    ok(missing.status === 1 && /可用 id:visible-0/.test(out(missing)),
+      'capture 未命中时仍保留有界的可用 id 诊断', out(missing).slice(0, 800));
   }
 } catch (e) {
   fail += 1;

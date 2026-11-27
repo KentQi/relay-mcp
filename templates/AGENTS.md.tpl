@@ -39,8 +39,8 @@
 | R6 | 代码连动而文档未动 → staleness 提醒 |
 | R7 | 会话日志连续 3 条任务会话(task=维护/无 不计入)无「T### 完成」→ 停机,人类仲裁 |
 | R8 | 项目配了 format 工具链就跑;没配不硬加 |
-| R9 | 全局核对 TASKS `[x]` 与 live LOG + 合法归档完成条目;摘要正文不算证据;历史 T055–T057 具名保留 WARN(锚定 DECISIONS T061),不汇总 PASS |
-| R10 | 完成条目须带引擎写入的「事实(v2)」:managed 以 registry.baseSha 为基准并按完成 commit subject 定位,重算文件数(managed 另含 ±);single 以完成 commit 父代为较弱范围;registry 缺失/回收、commit 重复或无法定位 → WARN,绝不 PASS,不自报 base 可信;branch 须包含完成 commit;叙述段不对账;v1 只结构校验并 WARN |
+| R9 | 全局核对 TASKS `[x]` 与 live LOG 及 `docs/archive/LOG-*.md` 的完成标题;DECISIONS T061 具名批准的 T055–T057 历史缺口仍报 WARN |
+| R10 | 对账范围内最新的完成条目须带「事实(v2)」;managed 用 registry.baseSha 与同一条目唯一的 worktree 成对 SHA 重算文件数及 ±,校验分支归属;single 按修改 LOG 的完成提交及其父代对账文件数;证据缺失或不唯一、v1 旧格式 → WARN,字段不符 → ERROR;叙述段不对账 |
 | R11 | 协议面 8 文件与 `docs/archive/*.md`(单层全部 .md)不得含密钥样式;出场写盘前阻断;`relay:secret-ok` 只豁免 R11 检测,写入路径一律拒绝 |
 | R12 | LOG 活跃区(归档指针之前的行)>150 行或活跃区内完成条目 >20 → WARN(manifest.logBoundary.strict 升 ERROR);只认第一个有效指针:格式为 docs/archive/LOG-*.md、真实存在且非空、realpath 在仓库内、目录组件非符号链接;失效指针 → WARN;归档动作留人工 |
 | R13 | 协议结构:任务行/LOG 标题必须匹配契约正则(任务号唯一;`[~]` 带 model+时间;`[x]` 带完成日期;HTML 注释/缩进行豁免);违规 → WARN(manifest.structure.strict 升 ERROR)——防拼错的行被解析器静默跳过 |

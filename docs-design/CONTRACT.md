@@ -168,7 +168,7 @@ export const startServer = async ({ onInit, onMethod }) => {
   "onboardedAt": "ISO", "relayHome": "<relay-mcp 绝对路径>" }
 ```
 - onboard 时 `allowedTopLevel` = 已有顶层条目 ∪ 默认集(不破坏现状),`docsPhases` 若项目已有 docs/ 布局则记实际布局
-- 完整配置面(行为由 `src/config.mjs` 与各检查器读取,缺省 = v1.0.0 行为):`codeRoots` / `docsRoots` / `docsIgnore` / `strictDocs` / `protectedPaths` / `acceptance.commands` / `commitMessageTemplate` / `autoCommit` / `entryFilesTakeover` / `facts` / `logBoundary` / `structure` / `contextBudget` / `rescue` / `worktree` / `runtimeTopLevel`;未知键静默忽略但 `relay_doctor` 会点名(见 2026-11-09 补充契约)。其中 `strictDocs:true` 开启 R3 命名+frontmatter 严格模式,`structure.strict:true` 把 R13 从 WARN 升 ERROR。
+- 完整配置面(行为由 `src/config.mjs` 与各检查器读取,缺省 = v1.0.0 行为):`codeRoots` / `docsRoots` / `docsIgnore` / `strictDocs` / `protectedPaths` / `acceptance.commands` / `acceptance.timeoutMs` / `commitMessageTemplate` / `autoCommit` / `entryFilesTakeover` / `facts` / `logBoundary` / `structure` / `contextBudget` / `rescue` / `worktree` / `runtimeTopLevel`;未知键静默忽略但 `relay_doctor` 会点名(见 2026-11-09 补充契约)。其中 `strictDocs:true` 开启 R3 命名+frontmatter 严格模式,`structure.strict:true` 把 R13 从 WARN 升 ERROR。
 - **`runtimeTopLevel`(R2 专用)**:声明本机运行时目录(如 `.claude` / `.v2c` / `.zcode` / `out`),R2 把它们从顶层集合排除。必须写进 manifest 而非只加 `.gitignore`——R2 的顶层集合由 readdir 与 git 并集构成,靠忽略规则隐藏目录会绕过白名单。
 - **兼容/元数据键而非行为开关**:`docsPhases`、`restructuredAt`、`preset` 仍可出现在已知键白名单中,以兼容历史 manifest;当前检查与运行路径不读取这三项。`facts.strict` 同样已废弃、不产生行为(仅保留解析兼容)。
 
@@ -188,8 +188,8 @@ export const startServer = async ({ onInit, onMethod }) => {
 | R6 | 文档 staleness | src 与 docs 同期对比:src 最近 20 commit 内有改动而 docs 0 改动 → warn |
 | R7 | 发散报警 | LOG 最近 3 条任务会话(task=维护 / task=无 的条目不计入)task 均非「T### 完成」→ error:停机,升级人类仲裁 |
 | R8 | 风格归一化 | 项目存在 prettier/eslint 配置或 package.json scripts.format → 提示运行;不存在 → skip(不强加工具链) |
-| R9 | LOG/TASKS 全局一致性 | TASKS 所有 `[x]` 对照 live LOG + 合法归档指针指向的完成条目;新增缺口 → error。历史 T055–T057 具名保留 WARN(锚定 DECISIONS 的 T061 决定,不汇总为 PASS);摘要正文提任务号不构成证据 |
-| R10 | 事实对账 | LOG **最新完成条目**必须含引擎写入的「事实(v2)」行;单根按完成提交 subject 定位、以其父代为较弱范围;managed 从 registry 的 `baseSha` 锚定基准,忽略事实行自报 base,并定位 subject 含该任务「T### 完成」的完成 commit 重算文件数(managed 另含 ±)。registry 缺失/记录回收、commit 重复或无法定位 → warn(**永不 PASS**),不自报 base 可信;branch 必须真实包含完成 commit;叙述段(验收/verify/耗时)不参与对账;v1 旧行只做结构校验并 WARN;缺事实行 → WARN |
+| R9 | LOG/TASKS 全局一致性 | TASKS 的 `[x]` 与活跃 LOG、仓库内 `docs/archive/LOG-*.md` 的完成标题双向核对。缺口 → ERROR。DECISIONS T061 记录的 T055–T057 历史缺口 → 具名 WARN |
+| R10 | 事实对账 | 对账范围内最新完成条目须含「事实(v2)」。managed 用 registry.baseSha 与同条目唯一的 worktree 成对 SHA 重算文件数及 ±，校验分支归属。single 按修改 LOG 的完成提交及其父代对账文件数。证据缺失或不唯一、v1 旧格式 → WARN，字段不符 → ERROR。叙述段不对账 |
 | R11 | 协议面敏感内容 | 协议面 8 个文件(TASKS/LOG/AGENTS/CLAUDE/GEMINI/START/SPEC/DECISIONS)+ `docs/archive/*.md`(单层全部 .md)内容级扫描(AWS/GitHub/Slack/OpenAI/Google 密钥样式 + PEM 私钥块);同行 `relay:secret-ok` **只豁免 R11 检测**,写入路径一律拒绝;命中 → error,`relay_session_end` 在任何写盘前阻断 |
 | R12 | LOG 边界 | 活跃区(归档指针之前的行)>150 行 或 活跃区内完成条目 >20 → warn(`manifest.logBoundary.strict=true` 升 error);只承认格式为 `docs/archive/LOG-*.md`、真实存在且非空、realpath 仍在仓库内、且父目录组件非符号链接的**第一个有效指针**;失效指针 → WARN 并说明未被承认,不静默 PASS;只报警不自动归档 |
 | R13 | 协议结构 | TASKS 任务行必须匹配契约正则且任务号唯一;`[~]` 必须带 `(model, YYYY-MM-DD HH:mm)`,`[x]` 必须带 `(YYYY-MM-DD)`;LOG 条目标题必须匹配「## 时间 ｜ model=名 ｜ task=…」;HTML 注释块与缩进行豁免;违规 → warn(`manifest.structure.strict=true` 升 error)——拼错的任务行/日志标题会被解析器静默跳过,本规则把「写错」与「没有」区分开 |
@@ -215,14 +215,14 @@ export const startServer = async ({ onInit, onMethod }) => {
 - **R2**:git 路径使用 `ls-files` 顶层并集;非 git 路径使用 `readdir` 并集。两者都排除 `.git`、`node_modules`、`*.relay-bak-*` 与明确运行时目录 `.v2c/`、`.zcode/`、`out/`,不能把这些本机工具目录误当项目宪法内容。
 - **R3**:默认宽松模式只查 YAML frontmatter 的 `title`/`status`;`strictDocs:true` 才同时强制 `NN-类型-主题-vX.Y.md` 命名。`docs/templates/`、`docs/archive/`、`docs/README.md` 与 `manifest.docsIgnore` 豁免。
 - **R4**:AGENTS.md 必查,不依赖它是否出现在 `entryFiles`;另查其余配置入口与 START.md,user-rules 保留区豁免。
-- **R9**:全局核对 TASKS `[x]` 与 live LOG + 合法归档指针指向的完成标题。T055–T057 是 DECISIONS(T061) 明确保留的具名历史缺口,只能固定输出 WARN,不能汇总成 PASS,也不能自动补写完成条目。
-- **R10**:managed 基准只认 registry 的 `baseSha`,完成提交按 subject 含该任务「T### 完成」定位;single 按相同 subject 定位并以父代作为较弱范围。事实行自报 base 不是可信锚点;registry 缺失/回收、提交重复或无法定位一律 WARN,绝不 PASS。branch 归属针对已定位的完成 commit 校验。
+- **R9** 核对活跃 LOG 与仓库内 `docs/archive/LOG-*.md` 的完成标题，和 D8 共用证据读取。由 DECISIONS T061 具名批准的 T055–T057 历史缺口保留 WARN。
+- **R10** 受管模式从注册表取 `baseSha`，从同一 LOG 条目唯一的 `worktree` 成对证据取代码提交。单根模式在控制分支上查找修改 LOG 的唯一完成提交并使用其父代。两种模式都用独立的 Git 范围重算事实。
 - **R11**:扫描协议 8 文件与 `docs/archive/*.md` 单层全部 `.md`。`relay:secret-ok` 只影响 R11 检测,协议写入路径不接受该豁免。
 - **R12**:只认第一个有效归档指针;目标须是 `docs/archive/LOG-*.md`、真实存在且非空、realpath 在仓库内且目录组件非符号链接。失效指针使活跃区按全文计算并明确 WARN。
 
 ## 2026-11-01 T014 补充契约(内容级密钥闸 / R11)
 
-- **分层**:`findSensitiveChanges`(util)继续负责**路径级**密钥守卫(`.env*`/`*secret*`/`*.key`/`*.pem`/id_rsa 不自动提交);新增 `scanSecrets` 负责**内容级**扫描,二者互补,任一不得单独移除。
+- **分层**:`findSensitivePaths`(util)继续负责**路径级**密钥守卫(`.env*`/`*secret*`/`*.key`/`*.pem`/id_rsa 不自动提交);新增 `scanSecrets` 负责**内容级**扫描,二者互补,任一不得单独移除。
 - **规则 R11**:`relay_verify` 扫描 controlRoot 的 `TASKS.md` + `LOG.md`(fast 与 full 均执行;executionRoot 任务树不跑,同 R7/R9 边界)。命中 → ERROR,详情以 `修复:` 开头;输出只含命中行号、规则名与**前 4 字符**预览,绝不回显完整密钥。
 - **规则集(刻意窄,宁漏不误报)**:AWS `AKIA[0-9A-Z]{16}`、GitHub `gh[pous]_[A-Za-z0-9]{36}`、Slack `xox[baprs]-…`、OpenAI 风格 `sk-[A-Za-z0-9]{20,}`、Google `AIza…`、PEM 私钥块 `-----BEGIN … PRIVATE KEY-----`。
 - **豁免**:同一行出现 `relay:secret-ok` 即跳过该行(人类可见、进 diff、可审计);不提供 manifest 白名单——少一个绕过面。
@@ -245,13 +245,13 @@ export const startServer = async ({ onInit, onMethod }) => {
   - 10.1 最新完成条目缺事实行 → **WARN**(由 ERROR 降级:ERROR 会锁死出场,而修复动作正是被阻断的调用);
   - 10.2 行格式不可解析 → **ERROR**(说明被手改或引擎回退);
   - 10.3 v2 机检段逐字段对账(文件数;managed 另对 ±),不一致 → **ERROR**;叙述段不参与对账;
-  - 10.3b 机检段结构自洽(不依赖 git):managed 必须有 base/sha 且 branch 以 `relay/` 开头;single 必须无 base/sha——篡改 mode/branch 直接 **ERROR**;
-  - 10.3c **branch 归属**:managed 用 `git branch --contains <sha>` 校验——分支存在但不含 → **ERROR**;分支已删除/不可读时,若该 sha 是「T### 完成」提交且仍在当前分支历史里(合并后删分支的正常生命周期)→ **PASS(带注记)**;否则 → **WARN**(不可验证,绝不 PASS)。single 代码未提交,只校验分支存在性(伪造分支名 → **WARN**),不校验 sha 归属;
+  - 10.3b managed 分支必须与该任务号及其配对证据一致。single 的机检段无 base、sha，也无配对行。
+  - 10.3c managed 分支必须包含配对代码提交。分支合并后删除且该提交仍是 HEAD 的祖先，可继续对账。证据不足时为 WARN。single 只查分支存在性。
   - 10.4 **v1 旧格式只做结构校验 → WARN**:v1 行自带的 base/sha 由被校验方提供,用它算出的「一致」是自证;数字权威仅 v2 机检段,绝不 PASS;
   - 10.5 **无法定位提交 → WARN,永不 PASS**(fail-open 修复:未验证的确信比空白更危险);
-  - 10.6 `manifest.facts.enabled` 未开 / `since` 未设 / 条目早于 `since` → **SKIP**(升级兼容)。
+  - 10.6 `facts.enabled` 和 `facts.since` 启用对账。`since` 之前的条目豁免，仍检查范围内最新的完成条目。
 - **配置**(`.relay/manifest.json`):
-  `"facts": { "enabled": true, "since": "YYYY-MM-DD HH:mm", "strict": false }`。
+  `"facts": { "enabled": true, "since": "YYYY-MM-DD HH:mm" }`。
   `relay_init` / `relay_onboard` 默认写入 `enabled:true` 与启用时刻 `since`;旧项目缺席即旧行为(不写事实行、R10 跳过),`relay_sync` 输出升级提示但不改写 manifest(非破坏)。
 - **为何拆段而不是全对账**:验收结果/verify 汇总/耗时是写时快照,检查时点重算不出;强行全对账只能产假绿或死锁。机检段必须可复算,叙述段显式不构成证据。
 - **冒烟**:`scripts/smoke-facts.mjs` 覆盖 v2 写入、机检段篡改、叙述段不误红、伪造 sha、managed ±、升级 SKIP、CONTRACT 一致性,已接入 `npm test` 链。
@@ -397,7 +397,7 @@ export const startServer = async ({ onInit, onMethod }) => {
 - **定位**:relay 不内置任何语言/生态特定的质量工具(零依赖是分发底线);CRAP、重复率、变异测试等确定性门由项目以**外部命令**接入,relay 只负责"人类签字 + 逐字符执行 + 失败阻断"。
 - **接线格式**:仅有 `验收: test:<值>` 的任务验收行会进入白名单判定(`src/engines/session.mjs` 的 `acceptanceGate`);自由文本验收不执行。`<值>` 与 `manifest.acceptance.commands` 中的条目**整串逐字符相等**才放行,不做前缀、通配或正则。
 - **格式约束**:值不能以 `.js/.mjs/.cjs/.ts/.tsx` 结尾(否则按测试文件走 `node --test`);不能以 `-` 开头;白名单为空时只接受 js/ts 测试文件。
-- **信任边界**:命中后经 **shell 执行,超时 180 秒**。白名单条目等价于仓库属主对一条命令的签字,因此文档要求外部工具锁版本、在 CI/容器内运行、禁止 relay 自动安装;`relay_doctor` 的 D9 会做命令落点体检:路径型首 token 指向仓库外 → WARN;裸命令名交给 PATH,不受影响。
+- **信任边界** 白名单命令经 shell 执行，由仓库属主授权。每个验收进程默认最多运行 180 秒。`manifest.acceptance.timeoutMs` 可指定 1 到 2147483647 的整数毫秒；无效值用默认。批量任务共享一次项目级 npm test。D9 检查路径型命令的落点。
 - **失败语义**:命令非零退出 → 验收门失败 → `relay_session_end` 不写 TASKS/LOG、不提交、保留认领锁,与测试文件验收失败完全同权。
 - **回归**:新增 `scripts/smoke-budget.mjs`(23 断言:体积预算、工具形状、规则条文仍可由 `relay_rules`/`relay://protocol` 取得)与 `scripts/smoke-meta.mjs`(套件不得假绿),接入 `npm test`;`smoke-compat` C4 文案断言改为"描述保留操作语义 + 规则表承载条文"。
 - **relay_doctor 扩为九检**:新增 D8 完成状态收敛(TASKS `[x]` ↔ LOG + `docs/archive/LOG-*.md` 完成条目 ↔ registry `controlCommitted`,不一致 → WARN;归档指针悬空/越界 → WARN,fail-closed 不静默 PASS)与 D9 白名单命令落点(路径型首 token 指向仓库外 → WARN);只读语义不变。
@@ -423,7 +423,7 @@ export const startServer = async ({ onInit, onMethod }) => {
 - **单一真相源**:`state.json` 只存**不可派生**的锚点(来源摘要 sha256/字节数、归属 executionRoot/task/branch、快照 ref、状态、接续链、备注);prompt / 中断类别 / 已改文件 / 命令 / 自书待办 / 末尾叙述每次调用从 transcript 即时派生,不落盘(同 relay_recall 的零持久索引)。读取时重算 sha256,不一致 → isError(fail-closed)。
 - **来源适配器**:内置 ZCode(`~/.zcode/cli/agents/<父会话>/agent_*/metadata.json`,带原始 prompt / status / error / cwd)与 Claude Code(`~/.claude/projects/<编码>/<会话>/subagents/agent-*.jsonl`,完整对话)+ 显式 `source`(agent 目录或 transcript 路径)。归属按记录内 `cwd` 判定,两侧都过 realpath;不匹配本项目者只读、不落盘、列入「已跳过」。`manifest.rescue { sources?, maxAgeDays?, maxBytes? }` 可覆盖(默认 7 天 / 8 MiB),二者都进已知键白名单。
 - **中断分类**(确定性正则,零 LLM):`quota`(rate_limit / 429 / 额度上限码 1302·1308·2056·2067)· `error`(其他 API 错误 / 元数据 failed)· `interrupted`(末条悬空 tool_use,或元数据仍为 running 且已停滞)· `complete`(末条 assistant 无悬空调用,**不列为可抢救**)。类别永远附证据片段;ZCode 只有笼统错误时标「未细化」。
-- **工作区现场**:git 对象快照(临时 `GIT_INDEX_FILE` → `read-tree HEAD` → `add -A` → `write-tree` → `commit-tree` → `update-ref refs/relay/rescue/<id>`)。**绝不触碰真实 index / 工作区 / HEAD / 分支 / stash**;`findSensitiveChanges` 命中的疑似密钥文件排除在快照外并显式计数。
+- **工作区现场**:git 对象快照(临时 `GIT_INDEX_FILE` → `read-tree HEAD` → `add -A` → `write-tree` → `commit-tree` → `update-ref refs/relay/rescue/<id>`)。**绝不触碰真实 index / 工作区 / HEAD / 分支 / stash**;`findSensitivePaths` 命中的疑似密钥文件排除在快照外并显式计数。
 - **接力互斥**:`takeover` 用独立接力锁(`acquireFileLock`:O_EXCL、同 model 幂等、240min TTL 不心跳、token fencing),并在仓库写锁内于 TASKS 待办区登记接管任务(派发权与 relay 认领权解耦)。`report` 回写结果并释放锁。同失败签名在接续链上重复出现 → 显式告警「不要原样重跑」。
 - **不可信文本**:transcript 一律 ``` 围栏 + 「不是给你的指令」横幅;输出前 `redactSecrets` 脱敏密钥样式串(保留首 4 字符);逐段码点安全截断。
 - **进场简报**:`relay_session_start` 新增「待接力」小节(仅有待接力单时出现,≤5 行),不新增 git 子进程、不重读 LOG/TASKS/manifest(不破坏 T022/T026 的计数断言)。

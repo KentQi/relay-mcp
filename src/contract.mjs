@@ -189,7 +189,7 @@ export const TOOLS = [
         model: { type: 'string', description: 'Handing model id (takeover/report).' },
         summary: { type: 'string', description: 'report: done + remaining.' },
         note: { type: 'string', description: 'capture: note stored on the card.' },
-        task: { type: 'string', description: 'Task id registered on takeover.' },
+        task: { type: 'string', description: 'capture: task id associated with the rescued work.' },
         view: { type: 'string', description: 'show: card|tail|edits|commands.' },
         confirm: { type: 'boolean', description: 'Writes only on JSON true.' },
       },
@@ -424,9 +424,9 @@ const RULES_TEXT = `# relay 规则表(R 系列)
 | R6 | 文档 staleness | src 近 20 commit 有改动而 docs 0 改动 → warn | relay_verify(full) |
 | R7 | 发散报警 | LOG 最近 3 条任务会话(task=维护 / task=无 的条目不计入)task 均非「T### 完成」→ error:停机,升级人类仲裁 | relay_verify |
 | R8 | 风格归一化 | 项目存在 prettier/eslint 配置或 package.json scripts.format → 提示运行;不存在 → skip(不强加工具链) | relay_verify(full) |
-| R9 | LOG/TASKS 一致性 | 全局核对 TASKS 所有 [x] 与 LOG+docs/archive/LOG-*.md 完成条目;历史 T055/T056/T057 保持具名 WARN,不得汇总 PASS;LOG 声明完成而 TASKS 未完成 → error | relay_verify / session_end 绿闸 |
-| R10 | 事实对账 | LOG 最新完成条目必须含「事实(v2)」;base/sha 不再视为自报可信锚:managed 以 registry.baseSha+完成提交 subject 独立定位,无法独立定位 → WARN(永不 PASS);可定位时文件数/branch 与 git 重算一致(managed 另核 ±),不一致 → ERROR;叙述段不参与对账;v1 仅结构校验 → WARN;缺事实行 → WARN | relay_verify / session_end 绿闸 |
-| R11 | 协议面敏感内容 | 协议面 8 个文件(TASKS/LOG/AGENTS/CLAUDE/GEMINI/START/SPEC/DECISIONS)+ docs/archive/*.md 全部单层 .md 内容级扫描(AWS/GitHub/Slack/OpenAI/Google 密钥样式与 PEM 私钥块);同行 \`relay:secret-ok\` 豁免;命中 → error,出场写盘前阻断且不提交 | relay_verify / session_end 绿闸 |
+| R9 | LOG/TASKS 一致性 | 全局核对 TASKS 所有 [x] 与 LOG+docs/archive/LOG-*.md 完成条目;仅 DECISIONS T061 记录的 T055/T056/T057 历史缺口保留 WARN;LOG 声明完成而 TASKS 未完成 → error | relay_verify / session_end 绿闸 |
+| R10 | 事实对账 | 对账范围内最新的完成条目须含「事实(v2)」。managed 用 registry.baseSha 与同条目唯一的 worktree 成对 SHA 重算文件数及 ±,校验分支归属;single 按修改 LOG 的完成提交及其父代对账文件数。证据缺失或不唯一、v1 旧格式 → WARN;字段不符 → ERROR;叙述段不对账 | relay_verify / session_end 绿闸 |
+| R11 | 协议面敏感内容 | 协议面 8 个文件(TASKS/LOG/AGENTS/CLAUDE/GEMINI/START/SPEC/DECISIONS)+ docs/archive/*.md 单层内容扫描;同行 \`relay:secret-ok\` 只豁免检查,引擎写入前仍须脱敏。命中 → ERROR | relay_verify / session_end 绿闸 |
 | R12 | LOG 边界 | 活跃区(归档指针之前的行)>150 行 或 活跃区内完成条目 >20 → WARN(manifest.logBoundary.strict=true 升 ERROR);与 relay_archive_log 共用同一合法指针:真实存在、非空、realpath 在仓库内的 docs/archive/LOG-*.md;失效指针不被承认且报 WARN;只报警不自动归档 | relay_verify / session_end 绿闸 |
 | R13 | 协议结构(manifest.structure.strict) | TASKS 任务行必须匹配契约正则且任务号唯一;[~] 必须带 (model, YYYY-MM-DD HH:mm),[x] 必须带 (YYYY-MM-DD);LOG 条目标题必须匹配「## 时间 ｜ model=名 ｜ task=…」;HTML 注释块与缩进行豁免;违规 → WARN(structure.strict=true 升 ERROR)——拼错的任务行/日志标题会被解析器静默跳过,本规则把「写错」与「没有」区分开 | relay_verify / session_end 绿闸 |
 

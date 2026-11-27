@@ -131,7 +131,7 @@ const buildModel = async (controlRoot) => {
     if (entries.some((e) => e.id === id)) continue;
     entries.push({ id, time: '', model: t.meta ? t.meta.split(',')[0].trim() : '', task: t.title, block: [], summary: '', handoff: '', negatives: 0, pendingOnly: true });
   }
-  return { entries, tasks };
+  return { entries, tasks, logMissing: logText == null };
 };
 
 export const relayRecall = async (args = {}) => {
@@ -143,7 +143,21 @@ export const relayRecall = async (args = {}) => {
   let limit = Number.isFinite(Number(args.limit)) ? Math.floor(Number(args.limit)) : DEFAULT_LIMIT;
   if (limit < 1) limit = DEFAULT_LIMIT;
   if (limit > MAX_LIMIT) limit = MAX_LIMIT;
-  const { entries, tasks } = await buildModel(controlRoot);
+  const { entries, tasks, logMissing } = await buildModel(controlRoot);
+  if (logMissing) {
+    return {
+      content: [{
+        type: 'text',
+        text: [
+          `# relay recall — ${controlRoot}`,
+          '',
+          'LOG.md 不存在,无法检索任务历史。',
+          '修复:确认 root 指向已接入 relay 的控制根;新项目先运行 relay_init,存量项目先运行 relay_onboard。',
+        ].join('\n'),
+      }],
+      isError: true,
+    };
+  }
   // P1-11:先过滤、后按 id 去重(同一任务多条日志只留最新一条)。
   // 旧实现先 seen.add 再过滤,最新条目不匹配时会把更早的匹配条目一并吞掉。
   const seen = new Set();

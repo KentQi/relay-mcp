@@ -8,8 +8,9 @@
 // 零依赖:仅 node: 内置。
 
 import { basename, join, dirname, relative, resolve } from 'node:path';
-import { access } from 'node:fs/promises';import { acquireRepoLock, assertNoSymlinkComponents, assertNotSymlinkFile, backupFile, readFileSafe, releaseRepoLock, stamp, templatesDir, writeFileAtomic } from '../util.mjs';
-import { ensureGitignoreBaseline } from '../config.mjs';
+import { access } from 'node:fs/promises';
+import { acquireRepoLock, assertNoSymlinkComponents, assertNotSymlinkFile, backupFile, readFileSafe, releaseRepoLock, stamp, templatesDir, writeFileAtomic } from '../util.mjs';
+import { ensureGitignoreBaseline, readManifestConfig } from '../config.mjs';
 
 const MARKER_PREFIX = '<!-- relay:generated';
 const MARKER = '<!-- relay:generated v1 -->';
@@ -206,19 +207,14 @@ export const generateEntryFiles = async (root, ctx = {}) => {
 export const relaySync = async (args = {}) => {
   const root = resolve((args && args.root) || process.cwd());
   try {
-    const manifestPath = join(root, '.relay', 'manifest.json');
-    const raw = await readFileSafe(manifestPath, null);
-    if (raw === null) {
+    const { manifest, manifestCorrupt, manifestError } = await readManifestConfig(root);
+    if (manifestCorrupt) return err(`${manifestError}。修复:恢复可读的 manifest JSON 后重跑 relay_sync。`);
+    if (!manifest) {
       return err([
         '未找到 .relay/manifest.json,无法对账入口文件。',
         '- 新项目请先运行 relay_init',
         '- 现有项目请先运行 relay_onboard',
       ].join('\n'));
-    }
-    let manifest = null;
-    try { manifest = JSON.parse(raw); }
-    catch (e) {
-      return err(`.relay/manifest.json 解析失败:${firstLine(e && e.message)}。请人工修复,或重新 relay_init / relay_onboard。`);
     }
     // AGENTS.md 永远必需;entryFiles 只控制其他适配入口,空数组不再表示「不投影任何入口」。
     const configured = Array.isArray(manifest.entryFiles) ? manifest.entryFiles : DEFAULT_ENTRY_FILES;
@@ -254,7 +250,7 @@ export const relaySync = async (args = {}) => {
     const factsHint = factsEnabled
       ? []
       : ['', '- 事实底账未启用(manifest.facts.enabled 缺失):出场不会写「事实(v2)」行,R10 会一直 SKIP。',
-        '  - 如需启用:在 .relay/manifest.json 写入 \"facts\": {\"enabled\": true, \"since\": \"' + stamp() + '\", \"strict\": false} 后重跑 relay_verify。'];
+        '  - 如需启用:在 .relay/manifest.json 写入 \"facts\": {\"enabled\": true, \"since\": \"' + stamp() + '\"} 后重跑 relay_verify。'];
 
     const lines = [
       `## relay:sync — 入口文件对账(${entryFiles.length} 个)`,

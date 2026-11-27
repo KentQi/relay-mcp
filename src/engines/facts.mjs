@@ -1,13 +1,12 @@
 // relay-mcp — 事实底账(T013/R10):从 git/verify 确定性派生 LOG「事实」行。
 // 设计铁律:
 //   1) 零 LLM、零新状态:写入在 relay_session_end 内完成,校验在 relay_verify 内完成,不落 .relay。
-//   2) 只比文件数,不比行数:行级 ±x/-y 会被 CRLF/重命名/合并污染,成为假裁判。
-//   3) 写入侧与校验侧共用 diffStat,且事实行记录 base sha —— 「用哪个 range」是事实的一部分,
-//      不靠两侧各自猜测(旧实现 writer 用 baseSha..HEAD、checker 用 sha^..sha,多提交/二次出场必然错位)。
+//   2) 文件数与 managed 的 ± 由双方共用 diffStat;单根 ± 只是写时近似。
+//   3) 写入侧记录 range,校验侧按完成证据与 worktree registry 独立定位 range。
 import { gitRun, isGitRepoAsync } from '../util.mjs';
 
 // v2(T023):按「可复算性」拆两段——机检段(检查时点可从 git 重算)与叙述段(写时快照,仅结构校验)。
-// 中间用 "||" 分隔;v1 旧行仍可解析(只对账文件数),保证升级不误报。
+// 中间用 "||" 分隔;v1 旧行仍可解析,仅做结构校验。
 export const FACT_LINE_PREFIX = '- 事实(v2):';
 export const FACT_LINE_RE = /^- 事实\(v([12])\):\s*(.*)$/;
 // 剥离 v1/v2 两种前缀(recall 等消费方共用):只认 v2 前缀会把升级前的 v1 行原样吐出来。
@@ -34,7 +33,7 @@ export const changedPathsFromStatus = (records) => {
 };
 
 // 一次 git 调用同时拿到文件数与 ±(--numstat 每行自带路径);两侧共用本函数。
-// 导出供 R10 使用:按候选提交逐个算 numstat,选「与事实行声明一致」的完成提交(防 grep 劫持)。
+// R10 在独立定位的范围内重算,不按统计值挑选候选。
 export const diffStat = async (root, range) => {
   const nums = await gitRun(root, 'diff', '--numstat', '-z', '--no-renames', ...range);
   if (!nums.ok) return null;
@@ -59,13 +58,13 @@ export const diffStat = async (root, range) => {
  * 派生本次会话的事实。
  * - managed: 代码提交在 executionRoot 的任务分支 → 用 baseSha..HEAD。
  * - 单根: 代码尚未提交 → 用工作区 vs HEAD(git diff HEAD)。
- * - 非 git / git 不可读: 退化为 statusLines 的文件数(± 记 0,不假装知道)。
+ * - 非 git / git 不可读: 退化为已知改动路径的文件数(± 记 0)。
  */
 export const deriveFacts = async ({
   executionRoot,
   managed = false,
   baseSha = '',
-  statusLines = [],
+  statusPaths = [],
   verifyResults = [],
   acceptance = null,
   branch = '',
@@ -73,6 +72,7 @@ export const deriveFacts = async ({
   startedAt = 0,
 }) => {
   const git = await isGitRepoAsync(executionRoot);
+  const changed = statusPaths.filter((p) => !isProtocolFile(p));
   let stat = null;
   let base = '';
   if (git) {
@@ -83,14 +83,12 @@ export const deriveFacts = async ({
     } else {
       // 单根:文件数取 git status(含未跟踪文件——它们会被随后的 git add -A 纳入提交);
       // ± 取工作区 vs HEAD(numstat 不含未跟踪文件,故 ± 可能为 0,不假装知道)。
-      const changed = changedPathsFromStatus(statusLines);
       const nums = await diffStat(executionRoot, ['HEAD']);
       stat = { files: changed.length, insertions: nums ? nums.insertions : 0, deletions: nums ? nums.deletions : 0 };
     }
   }
   if (!stat) {
-    const files = changedPathsFromStatus(statusLines);
-    stat = { files: files.length, insertions: 0, deletions: 0 };
+    stat = { files: changed.length, insertions: 0, deletions: 0 };
   }
   const counts = { PASS: 0, WARN: 0, ERROR: 0 };
   for (const r of verifyResults || []) counts[r.result] = (counts[r.result] || 0) + 1;
@@ -206,14 +204,11 @@ export const parseFactLine = (text) => {
 };
 
 /**
- * 校验侧重算:只数文件数,且与写入侧同一条命令。
- * 优先用事实行里的代码 SHA(managed);否则用 HEAD(单根:HEAD 就是本次完成提交)。
- * 返回 null 表示「无法定位提交」,调用方应跳过数字对账而不是判错。
- * 注意:v1 旧行不得走「行自带的 base/sha」——那等于让被校验方自选 range(审计 P0-2);
- * R10 对 v1 只做结构校验并 WARN,数字权威仅 v2 机检段。
+ * 对调用方独立提供的提交区间重算:managed 用 registry.baseSha 与 worktree 配对 SHA,
+ * 单根用完成提交的第一父代。返回 null 时没有可对账的 git 证据。
  */
 export const recomputeCommitStats = async (root, parsed, {
-  isRepo = undefined, completionSha = '', registryBaseSha = '', taskId = '', branch = '', codeSha = '',
+  isRepo = undefined, completionSha = '', registryBaseSha = '', taskId = '', codeSha = '',
 } = {}) => {
   if (isRepo === false) return null;
   if (isRepo === undefined && !(await isGitRepoAsync(root))) return null;
@@ -221,19 +216,7 @@ export const recomputeCommitStats = async (root, parsed, {
   let sha = '';
   let base = '';
   if (parsed?.mode === 'managed') {
-    // managed 是两段提交:代码提交在任务分支(事实行 sha 记的就是它),完成提交在 controlRoot。
-    // 独立定位代码提交 = 取任务分支 tip,且必须满足 base 是它的祖先;
-    // 绝不用事实行自报的 sha 作为输入,也不拿 controlRoot 的完成提交冒充。
-    // 优先用独立锚定:controlRoot 完成提交消息里记录的 codeSha(成对证据)。
-    // 它指认的是「本次出场提交的那个代码提交」,不受出场后分支追加提交影响。
-    // 没有该锚点时才退回分支 tip。
-    if (codeSha && /^[0-9a-f]{7,40}$/.test(codeSha)) {
-      sha = codeSha;
-    } else {
-      const tip = branch ? await gitRun(root, 'rev-parse', '--verify', `refs/heads/${branch}`) : { ok: false };
-      if (!tip.ok || !String(tip.stdout || '').trim()) return null;
-      sha = tip.stdout.trim();
-    }
+    sha = codeSha;
     base = registryBaseSha;
   } else if (parsed?.mode === 'single') {
     // 单根无 registry:按 subject 定位完成提交,以其第一父提交为较弱但独立的范围。

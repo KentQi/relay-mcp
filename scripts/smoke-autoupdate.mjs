@@ -39,6 +39,9 @@ const ok = (cond, label, extra = '') => {
 };
 const tmpDirs = [];
 const mkTmp = (tag) => { const d = mkdtempSync(path.join(tmpdir(), `relay-au-${tag}-`)); tmpDirs.push(d); return d; };
+// Wrapper fallback state/log files use os.homedir(); pin every fixture to a
+// throwaway home so linked-worktree coverage never reads or writes the real one.
+const TEST_HOME = mkTmp('home');
 const sleep = (ms) => new Promise((done) => setTimeout(done, ms));
 const waitFor = async (predicate, timeoutMs = 5000) => {
   const until = Date.now() + timeoutMs;
@@ -49,7 +52,10 @@ const waitFor = async (predicate, timeoutMs = 5000) => {
   return predicate();
 };
 const git = (cwd, ...args) => {
-  const r = spawnSync(GIT_EXEC, ['-C', cwd, ...args], { encoding: 'utf8' });
+  const r = spawnSync(GIT_EXEC, ['-C', cwd, ...args], {
+    encoding: 'utf8',
+    env: { ...process.env, HOME: TEST_HOME, USERPROFILE: TEST_HOME },
+  });
   if (r.status !== 0) throw new Error(`git ${args.join(' ')} 失败: ${r.stderr || r.stdout}`);
   return r.stdout.trim();
 };
@@ -59,6 +65,8 @@ const commit = (cwd, message) => {
   git(cwd, '-c', 'user.name=t', '-c', 'user.email=t@l', '-c', 'commit.gpgsign=false', 'commit', '-qm', message);
 };
 const status = (repo) => git(repo, 'status', '--porcelain', '--untracked-files=no');
+const readLauncherState = (repo) =>
+  JSON.parse(readFileSync(path.join(repo, '.git', 'relay-autoupdate.json'), 'utf8'));
 
 // 最小 MCP 应答器:收到 initialize 就回一条,stdin EOF 退出
 const RESPONDER = `process.stdin.setEncoding('utf8');let buf='';
@@ -125,13 +133,10 @@ const probe = (repo, {
   args = [], budget = null, timeoutMs = 30000, scriptPath = null, env: extraEnv = {}, onSpawn = null,
 } = {}) => new Promise((resolve) => {
   const script = scriptPath || path.join(repo, 'scripts', 'relay-mcp-autoupdate.mjs');
-  const env = { ...process.env };
+  const env = { ...process.env, HOME: TEST_HOME, USERPROFILE: TEST_HOME };
   delete env.NODE_TEST_CONTEXT;                       // T063 同款:防外层 node --test 污染子进程退出码
   if (budget != null) env.RELAY_AUTOUPDATE_BUDGET_MS = String(budget);
   Object.assign(env, extraEnv);
-  // 显式 shim 优先;否则让 wrapper 用同一份真实 git,避免 PATH 中的 git shim 与
-  // 测试夹具的 git 二进制行为分叉。
-  if (!env.GIT_BIN) env.GIT_BIN = GIT_EXEC;
   // 显式 shim 优先;否则让 wrapper 用同一份真实 git,避免 PATH 中的 git shim 与
   // 测试夹具的 git 二进制行为分叉。
   if (!env.GIT_BIN) env.GIT_BIN = GIT_EXEC;
@@ -213,6 +218,8 @@ try {
     ok(r.code === 0 && /relay-mcp-fixture/.test(r.out), 'linked worktree 仍启动当前 MCP', `code=${r.code} err=${r.err.slice(0, 150)}`);
     ok(head(linked) === before, 'linked worktree 的 HEAD 不被自动快进');
     ok(head(f.work) !== upstreamTip, '主检出 main 也没有被 linked worktree 更新');
+    ok(existsSync(path.join(TEST_HOME, '.relay-mcp', 'state')),
+      'linked worktree 的 fallback state/log 留在夹具 HOME');
 
     for (const [tag, mode] of [['oldgit', 'path-format'], ['badpath', 'missing-path']]) {
       const g = makeFixture(tag);
@@ -286,6 +293,8 @@ if (args.includes('fetch')) {
     ok(head(f.work) === upstreamTip, '并发场景最终只快进一次,HEAD/index 一致');
     ok(status(f.work) === '' && !existsSync(path.join(f.work, '.git', 'relay-autoupdate.lock')),
       '并发结束后工作树干净且更新锁释放');
+    ok(readLauncherState(f.work).lastResult === 'ok',
+      '并发结束后持锁者的成功状态是最终状态');
   }
 
   console.log('\n== 7. 总预算立即生效 + git 进程组终止 ==');
@@ -413,6 +422,108 @@ if (args.includes('fetch')) {
     const bad = await probe(bogus, { args: [bogus], scriptPath: WRAPPER_SRC });
     ok(bad.code === 2, '无 .git 的目录作为 REPO → exit 2', `code=${bad.code}`);
     ok(/仓库路径无效/.test(bad.err), '报错写明「仓库路径无效」', bad.err.slice(0, 200));
+  }
+
+  console.log('\n== 13. 失败检查刷新冷却起点,冷却期内不再调用 git ==');
+  {
+    const f = makeFixture('failed-cooldown');
+    const stateFile = path.join(f.work, '.git', 'relay-autoupdate.json');
+    const staleAt = Date.now() - 11 * 60 * 1000;
+    writeFileSync(stateFile, JSON.stringify({ lastAttempt: staleAt, lastResult: 'fail' }));
+    const failGit = writeShim(f.root, 'git-fail-branch.mjs', `
+if (args.includes('symbolic-ref')) {
+  console.error('fatal: cannot resolve HEAD');
+  process.exit(128);
+}`);
+    const started = Date.now();
+    const first = await probe(f.work, {
+      scriptPath: WRAPPER_SRC, args: [f.work], env: { GIT_BIN: failGit },
+    });
+    const failedState = readLauncherState(f.work);
+    ok(first.code === 0 && /relay-mcp-fixture/.test(first.out),
+      '失败检查仍启动当前 MCP', `code=${first.code} err=${first.err.slice(0, 150)}`);
+    ok(failedState.lastResult === 'fail' && failedState.lastAttempt >= started
+      && failedState.lastResultAt >= started,
+      '失败检查用本次完成时间刷新冷却起点', JSON.stringify(failedState));
+
+    const marker = path.join(f.root, 'cooldown-git-ran');
+    const markerGit = writeShim(f.root, 'git-cooldown-marker.mjs', `
+require('node:fs').writeFileSync(process.env.AU_MARKER, 'git-ran');`);
+    const second = await probe(f.work, {
+      scriptPath: WRAPPER_SRC, args: [f.work],
+      env: { GIT_BIN: markerGit, AU_MARKER: marker },
+    });
+    ok(second.code === 0 && /relay-mcp-fixture/.test(second.out) && !existsSync(marker),
+      '冷却期内直接启动当前版本,没有再次调用 git');
+    ok(readLauncherState(f.work).lastAttempt === failedState.lastAttempt,
+      '冷却期内的启动不改写失败状态');
+  }
+
+  console.log('\n== 14. 并发完成的较新 success 不被本次 fail 覆盖 ==');
+  {
+    const f = makeFixture('concurrent-state');
+    const stateFile = path.join(f.work, '.git', 'relay-autoupdate.json');
+    const racingGit = writeShim(f.root, 'git-concurrent-state.mjs', `
+if (args.includes('symbolic-ref')) {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 50);
+  require('node:fs').writeFileSync(process.env.AU_STATE_FILE, JSON.stringify({
+    lastAttempt: Date.now(),
+    lastResult: 'ok',
+    lastResultAt: Date.now(),
+    lastSha: 'other-launcher'
+  }));
+  console.error('fatal: simulated concurrent branch-check failure');
+  process.exit(128);
+}`);
+    const r = await probe(f.work, {
+      scriptPath: WRAPPER_SRC, args: [f.work],
+      env: { GIT_BIN: racingGit, AU_STATE_FILE: stateFile },
+    });
+    const state = readLauncherState(f.work);
+    ok(r.code === 0 && /relay-mcp-fixture/.test(r.out),
+      '并发状态夹具仍启动当前 MCP', `code=${r.code} err=${r.err.slice(0, 150)}`);
+    ok(state.lastResult === 'ok' && state.lastSha === 'other-launcher',
+      '已完成的较新 success 保留为最终状态', JSON.stringify(state));
+  }
+
+  console.log('\n== 15. 合并前预留预算不足 → 不进入 merge ==');
+  {
+    const f = makeFixture('premerge-budget');
+    const before = head(f.work);
+    bumpOrigin(f, 'premerge-new');
+    const slowRevList = writeShim(f.root, 'git-slow-rev-list.mjs', `
+if (args.includes('HEAD..origin/main')) {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 3000);
+}`);
+    const r = await probe(f.work, {
+      scriptPath: WRAPPER_SRC, args: [f.work], budget: 5000, timeoutMs: 10000,
+      env: { GIT_BIN: slowRevList },
+    });
+    ok(r.code === 0 && /relay-mcp-fixture/.test(r.out) && !/premerge-new/.test(r.out),
+      '预算不足时仍启动更新前版本', `code=${r.code} err=${r.err.slice(0, 150)}`);
+    ok(head(f.work) === before, '未给合并后复核留足预算时 HEAD 不动');
+    ok(/时间预算不足/.test(logOf(f)) && readLauncherState(f.work).lastResult === 'fail',
+      '合并前预算不足记为 fail,不写成功状态');
+  }
+
+  console.log('\n== 16. 等更新锁耗尽预算 → 记为失败检查而非普通争用 ==');
+  {
+    const f = makeFixture('lock-budget');
+    const before = head(f.work);
+    const lock = path.join(f.work, '.git', 'relay-autoupdate.lock');
+    writeFileSync(lock, JSON.stringify({
+      token: 'fixture-holder',
+      pid: process.pid,
+      acquiredAt: Date.now(),
+    }));
+    const r = await probe(f.work, {
+      scriptPath: WRAPPER_SRC, args: [f.work], budget: 1000, timeoutMs: 5000,
+    });
+    ok(r.code === 0 && /relay-mcp-fixture/.test(r.out),
+      '等锁预算耗尽后仍启动当前 MCP', `code=${r.code} err=${r.err.slice(0, 150)}`);
+    ok(head(f.work) === before && existsSync(lock), '未更新且未删除仍新鲜的他人锁');
+    ok(/时间预算耗尽/.test(logOf(f)) && readLauncherState(f.work).lastResult === 'fail',
+      '等锁耗尽预算记为 fail 并写入冷却');
   }
 } catch (e) {
   fail += 1;

@@ -57,6 +57,16 @@ const validateValue = (key, value, schema, label) => {
   if (schema.type === 'array' && schema.items) {
     value.forEach((item, i) => validateValue(`${key}[${i}]`, item, schema.items, label));
   }
+  if (schema.type === 'object' && schema.properties) {
+    for (const [childKey, childValue] of Object.entries(value)) {
+      const childSchema = Object.hasOwn(schema.properties, childKey) ? schema.properties[childKey] : null;
+      if (!childSchema) {
+        const available = Object.keys(schema.properties).join(', ');
+        failUsage(`未知参数 \`${key}.${childKey}\`。${label} \`${key}\` 可用字段: ${available}`);
+      }
+      validateValue(`${key}.${childKey}`, childValue, childSchema, label);
+    }
+  }
 };
 
 const argv = process.argv.slice(2);
@@ -77,13 +87,13 @@ const tool = argv[0];
 const toolSchema = TOOLS.find((t) => t.name === tool)?.inputSchema;
 
 let rootFlag;
-let jsonArgs = {};
+const jsonArgs = Object.create(null);
 
 for (let i = 1; i < argv.length; i++) {
   const a = argv[i];
   if (a === '--root') {
     const v = argv[++i];
-    if (v === undefined) failUsage('--root 需要一个路径参数');
+    if (v === undefined || v.startsWith('--')) failUsage('--root 需要一个路径参数');
     rootFlag = v;
   } else if (a === '--json') {
     const parts = [];
@@ -97,7 +107,7 @@ for (let i = 1; i < argv.length; i++) {
         if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
           failUsage('--json 的 JSON 参数必须是对象');
         }
-        jsonArgs = { ...jsonArgs, ...parsed };
+        Object.assign(jsonArgs, parsed);
       } catch (e) {
         failUsage(`--json JSON 解析失败: ${e.message}`);
       }
@@ -130,11 +140,16 @@ if (rootFlag !== undefined) jsonArgs.root = rootFlag; // 显式 --root 优先
 const UNIVERSAL_KEYS = new Set(['root']);
 if (toolSchema) {
   for (const [key, value] of Object.entries(jsonArgs)) {
-    if (UNIVERSAL_KEYS.has(key)) continue;
-    if (!toolSchema.properties || Object.keys(toolSchema.properties).length === 0) continue; // 无参工具不拒收
-    const schema = toolSchema.properties[key];
+    const properties = toolSchema.properties || {};
+    const schema = Object.hasOwn(properties, key) ? properties[key]
+      : UNIVERSAL_KEYS.has(key) ? { type: 'string' } : null;
     if (!schema) {
-      failUsage(`未知参数 \`${key}\`。${tool} 可用参数: ${Object.keys(toolSchema.properties).join(', ')}`);
+      const available = Object.keys(properties).join(', ');
+      failUsage(
+        available
+          ? `未知参数 \`${key}\`。${tool} 可用参数: ${available}`
+          : `未知参数 \`${key}\`。${tool} 不接受参数`,
+      );
     }
     validateValue(key, value, schema, tool);
   }

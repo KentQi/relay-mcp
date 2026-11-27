@@ -86,6 +86,19 @@ try {
     const archivedGet = cli('relay_get', { ids: ['T900'] });
     ok(archivedGet.status === 0 && /不要重试旧方案/.test(out(archivedGet)), 'get live 未命中时回查归档');
   }
+
+  console.log('\n== 缺失 LOG 是配置错误,空搜索才是正常结果 ==');
+  {
+    const savedLog = readFileSync(logPath, 'utf8');
+    rmSync(logPath);
+    const missingLog = cli('relay_recall', { query: '任意查询' });
+    ok(missingLog.status === 1 && /LOG\.md 不存在/.test(out(missingLog)),
+      'LOG.md 缺失 → recall isError(不伪装成空搜索)', out(missingLog).slice(0, 300));
+    writeFileSync(logPath, savedLog);
+    const noHit = cli('relay_recall', { query: '绝对不存在的检索词' });
+    ok(noHit.status === 0 && /无命中/.test(out(noHit)),
+      'LOG.md 存在但零命中 → 成功返回空搜索', out(noHit).slice(0, 300));
+  }
 } finally {
   rmSync(tmp, { recursive: true, force: true });
 }

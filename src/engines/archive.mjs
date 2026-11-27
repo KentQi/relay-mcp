@@ -7,11 +7,11 @@
 //   5) 写入走协议原语(密钥闸 + 内容 CAS + fencing),不裸写 LOG.md。
 import {
   readFileSafe, writeFileAtomic, writeProtocolFile, scanSecrets, acquireRepoLock, sha256Hex, stamp,
-  ensureDir, assertNoSymlinkComponents, checkProtocolFilesSafe,
+  ensureDir, assertNoSymlinkComponents, assertNotSymlinkFile, checkProtocolFilesSafe,
 } from '../util.mjs';
 import { join, dirname } from 'node:path';
 import { resolveRelayRoots } from './worktree.mjs';
-import { LOG_TITLE_RE, findArchiveBoundary, ARCHIVE_REL_RE, LOG_ARCHIVE_POINTER_RE } from './verify.mjs';
+import { LOG_TITLE_RE, findArchiveBoundary, LOG_ARCHIVE_POINTER_RE, isTaskSession } from './verify.mjs';
 
 const POINTER_RE = LOG_ARCHIVE_POINTER_RE;
 const DEFAULT_KEEP = 8;
@@ -49,6 +49,8 @@ export const relayArchiveLog = async (args = {}) => {
     notes.push(`- 注意:输入根是任务 worktree;归档只操作 controlRoot(${root})的 LOG.md(任务树里的 LOG 是 baseSha 快照)。`);
   }
   const logPath = join(root, 'LOG.md');
+  const safe = await checkProtocolFilesSafe(root);
+  if (!safe.ok) return textResult(`归档被拒:协议文件布局不安全(${safe.error})。`, true);
   const raw = await readFileSafe(logPath, null);
   if (raw == null) return textResult('LOG.md 不存在,无法归档。修复:确认 root 是已接入 relay 协议的控制根。', true);
   const lines = String(raw).replace(/\r\n/g, '\n').split('\n');
@@ -68,13 +70,13 @@ export const relayArchiveLog = async (args = {}) => {
   let keepCount = Math.min(keep, entries.length);
   let taskSessions = 0;
   for (let i = 0; i < entries.length; i += 1) {
-    const task = String(entries[i].task || '').trim();
-    if (task === '维护' || task === '无') continue;
+    if (!isTaskSession(entries[i].task)) continue;
     taskSessions += 1;
     if (taskSessions === MIN_KEEP) { keepCount = Math.max(keepCount, i + 1); break; }
   }
   const kept = entries.slice(0, keepCount);
   const moved = entries.slice(keepCount);
+  if (!moved.length) return textResult('# relay_archive_log — 无需归档\n\n现有条目均需保留以维持 R7 的任务会话窗口。');
   // 安全线:最新完成条目必须留在 live(否则 R10 的「最新完成条目」会指向归档区)。
   const newestDoneIdx = entries.findIndex((e) => isDoneTask(e.task));
   if (newestDoneIdx >= 0 && newestDoneIdx >= keepCount) {
@@ -89,23 +91,27 @@ export const relayArchiveLog = async (args = {}) => {
   const keptLines = kept.flatMap((e) => lines.slice(e.start, e.end));
   const movedText = movedLines.join('\n').replace(/\n+$/, '');
   const keptText = keptLines.join('\n').replace(/\n+$/, '');
-  // 目标归档文件:已有合法指针 → 追加到同一文件;否则新建 docs/archive/LOG-<today>.md。
-  let archiveRel = '';
-  if (pointerIdx >= 0) {
-    const m = lines[pointerIdx].match(POINTER_RE);
-    if (m && ARCHIVE_REL_RE.test(m[1])) archiveRel = m[1];
-  }
-  const creating = !archiveRel;
-  if (creating) archiveRel = `docs/archive/LOG-${stamp().slice(0, 10)}.md`;
+  // 指针丢失或上次归档中断时,仍须保留同日归档已落盘的内容。
+  const archiveRel = pointerIdx >= 0 ? lines[pointerIdx].match(POINTER_RE)[1]
+    : `docs/archive/LOG-${stamp().slice(0, 10)}.md`;
   const archiveAbs = join(root, archiveRel);
-  const existingArchive = creating ? null : await readFileSafe(archiveAbs, null);
+  let existingArchive;
+  try {
+    await assertNoSymlinkComponents(root, dirname(archiveRel), '归档文件目录');
+    await assertNotSymlinkFile(archiveAbs, archiveRel);
+    existingArchive = await readFileSafe(archiveAbs, null, { onlyMissing: true });
+  } catch (e) {
+    return textResult(`归档被拒:${e?.message || String(e)}`, true);
+  }
+  const creating = existingArchive == null;
   // 幂等重试(审计 P1 半写):上一次若已写归档文件但 LOG 写失败,重试时不要重复追加同一段。
-  const alreadyArchived = !creating && String(existingArchive || '').includes(movedText);
+  const alreadyArchived = !creating && `\n${existingArchive}\n`.includes(`\n${movedText}\n`);
+  const separator = existingArchive?.endsWith('\n\n') ? '' : existingArchive?.endsWith('\n') ? '\n' : '\n\n';
   const archiveContent = creating
     ? ['# 归档 — 会话日志', '', `> 由 relay_archive_log 于 ${stamp()} 从 LOG.md 尾部搬出;只增不改。`, '', movedText, ''].join('\n')
     : (alreadyArchived
-      ? String(existingArchive || '')
-      : `${String(existingArchive || '').replace(/\n+$/, '')}\n\n${movedText}\n`);
+      ? existingArchive
+      : `${existingArchive}${separator}${movedText}\n`);
   const pointer = `<!-- relay:log-archive: ${archiveRel} -->`;
   const newLog = ['# 会话日志(最新在上)', '', keptText, '', pointer, ''].join('\n');
   const header = [
@@ -126,8 +132,8 @@ export const relayArchiveLog = async (args = {}) => {
   const lock = await acquireRepoLock(root, 'archive-log');
   if (!lock.ok) return textResult(`归档被拒:仓库写锁被 ${lock.holder} 持有,请稍后重试。`, true);
   try {
-    const hits = scanSecrets(archiveContent);
-    if (hits.length) return textResult(`归档被拒:搬移内容含疑似密钥(${hits.length} 处),拒绝写盘。`, true);
+    const hits = [...scanSecrets(archiveContent), ...scanSecrets(newLog)];
+    if (hits.length) return textResult(`归档被拒:搬移或保留内容含疑似密钥(${hits.length} 处),拒绝写盘。`, true);
     // 写盘前布局安全闸:docs/archive 的既有组件不得是符号链接,否则归档文件会被写到仓库外
     // (审计 P0:docs -> /tmp/OUT 时,LOG 指针仍指向仓库内路径,而内容其实在仓库外)。
     const protoSafe = await checkProtocolFilesSafe(root);
@@ -142,7 +148,18 @@ export const relayArchiveLog = async (args = {}) => {
     const archiveDirRel = archiveRel.split('/').slice(0, -1).join('/');
     if (archiveDirRel) await assertNoSymlinkComponents(root, archiveDirRel, '归档文件目录');
     await ensureDir(dirname(archiveAbs));
-    await writeFileAtomic(archiveAbs, archiveContent, { label: archiveRel });
+    const fencing = async () => {
+      const current = await readFileSafe(archiveAbs, null, { onlyMissing: true });
+      if (current !== existingArchive) return { ok: false, warning: '归档文件在读取后被修改,请重试' };
+      const verdict = await lock.check();
+      return { ok: verdict.held, warning: verdict.warning };
+    };
+    if (alreadyArchived) {
+      const verdict = await fencing();
+      if (!verdict.ok) return textResult(`归档被拒:${verdict.warning}`, true);
+    } else if (!await writeFileAtomic(archiveAbs, archiveContent, { label: archiveRel, fencing, createOnly: creating })) {
+      return textResult('归档被拒:目标文件已被其他写入者创建,请重试。', true);
+    }
     await writeProtocolFile(root, 'LOG.md', newLog, { token: lock.token, lockLabel: '仓库写锁', expectedHash: sha256Hex(raw) });
   } catch (e) {
     return textResult(`归档被拒:${e?.message || String(e)}`, true);

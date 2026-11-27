@@ -100,6 +100,7 @@ try {
   ok(!/m7\b/.test(logDir) && !/m1\b/.test(logDir), 'live 不含旧条目(m7/m1;m1\\b 不误伤 m10)');
   const archDir = readFileSync(path.join(tmp, pointerOf(logDir)), 'utf8');
   ok(/m7/.test(archDir) && /m1/.test(archDir) && !/m10/.test(archDir), '归档文件是最旧 7 条(m7..m1),不含最新');
+  ok(archDir.startsWith(archivedText), '没有指针时也逐字节保留同日归档的已有历史');
 
   console.log('\n== 维护条目不占 R7 的 3 个任务会话配额 ==');
   {
@@ -107,7 +108,7 @@ try {
     const tasks = ['T201 完成', 'T202 完成', 'T203 完成'];
     tasks.forEach((task, i) => {
       mixed.push(`## 2026-02-0${i + 1} 10:00 | model=x | task=${task}`, `- 摘要: task-${i + 1}`, '');
-      mixed.push(`## 2026-02-0${i + 1} 11:00 | model=x | task=无`, '- 摘要: maintenance', '');
+      mixed.push(`## 2026-02-0${i + 1} 11:00 | model=x | task=维护 环境`, '- 摘要: maintenance', '');
     });
     for (let i = 0; i < 8; i += 1) mixed.push(`## 2026-01-01 10:00 | model=x | task=T3${i} 完成`, '- 摘要: old', '');
     writeFileSync(logPath, mixed.join('\n'));
@@ -117,6 +118,7 @@ try {
     const liveTasks = [...live.matchAll(/task=(T\d+) 完成/g)].map((m) => m[1]);
     ok(liveTasks.includes('T201') && liveTasks.includes('T202') && liveTasks.includes('T203'),
       '第 3 个任务会话在 keep 之外时扩展边界保留', liveTasks.join(','));
+    ok(liveTasks.length === 3, 'live 恰好保留 R7 实际计数的 3 个任务会话', liveTasks.join(','));
     const r7 = out(run(tmp, 'relay_verify', { full: true }));
     ok(/R7\s*\|\s*PASS/.test(r7) && /最近 3 条任务会话/.test(r7), '归档后 R7 仍有完整 3 会话窗口', r7.match(/R7[^\n]+/)?.[0] || '');
   }
@@ -148,6 +150,24 @@ try {
     ok(readdirSync(outside).length === 0, '仓库外目录未出现归档文件');
     rmSync(outside, { recursive: true, force: true });
   } finally { rmSync(tmp2, { recursive: true, force: true }); }
+
+  console.log('\n== 归档文件叶子符号链接 → 拒绝写穿 ==');
+  const tmp3 = mkdtempSync(path.join(tmpdir(), 'relay-archive-leaf-'));
+  try {
+    run(tmp3, 'relay_init', { name: 'archive-leaf' });
+    const outside = mkdtempSync(path.join(tmpdir(), 'relay-leaf-outside-'));
+    const d = new Date();
+    const today = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+    const archiveDir = path.join(tmp3, 'docs', 'archive');
+    mkdirSync(archiveDir, { recursive: true });
+    symlinkSync(outside, path.join(archiveDir, `LOG-${today}.md`), process.platform === 'win32' ? 'junction' : 'dir');
+    writeFileSync(path.join(tmp3, 'LOG.md'), makeLog(30));
+    const leafRun = run(tmp3, 'relay_archive_log', { confirm: true });
+    ok(leafRun.status === 1 && /符号链接|拒绝/.test(out(leafRun)),
+      '归档目标叶子是符号链接 → 拒绝写穿', out(leafRun).slice(0, 300));
+    ok(readdirSync(outside).length === 0, '仓库外目录未出现归档内容');
+    rmSync(outside, { recursive: true, force: true });
+  } finally { rmSync(tmp3, { recursive: true, force: true }); }
 
   console.log('\n== 幂等:低于保留条件 → no-op ==');
   writeFileSync(logPath, ['# 会话日志(最新在上)', '', '## 2026-01-01 10:00 | model=x | task=维护', '- 摘要: only one', ''].join('\n'));

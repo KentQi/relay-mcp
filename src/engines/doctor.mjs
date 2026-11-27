@@ -7,9 +7,9 @@ import { readFileSafe, isGitRepoAsync, gitRun, parseLockContent, claimLockExpiry
 import { readWorktreeRegistryState, resolveRelayRoots } from './worktree.mjs';
 import { generateEntryFiles } from './sync.mjs';
 import { collectUnknownManifestKeys, KNOWN_MANIFEST_KEYS, KNOWN_NESTED_KEYS } from '../config.mjs';
-import { TASK_LINE_RE, DONE_TASK_RE, parseLogEntries } from './verify.mjs';
+import { collectCompletionEvidence, completedTaskIds, findArchiveBoundary, LOG_ARCHIVE_POINTER_RE } from './verify.mjs';
 import { join, resolve, isAbsolute, sep } from 'node:path';
-import { readdir, lstat, realpath, stat } from 'node:fs/promises';
+import { readdir, lstat, stat } from 'node:fs/promises';
 
 const ok = (id, name, detail) => ({ id, name, result: 'OK', detail, fix: null });
 const warn = (id, name, detail, fix) => ({ id, name, result: 'WARN', detail, fix });
@@ -54,73 +54,29 @@ const suggestManifestKey = (key) => {
 };
 
 // D8 完成状态收敛:TASKS [x] ↔ LOG + docs/archive/LOG-*.md 完成条目 ↔ registry controlCommitted。
-// 证据面与 R11 扫描面一致(仅 LOG-*.md):归档条目仍能证明完成,归档后不再永久 WARN;
-// 但归档指针本身必须可验证——悬空/越界指针 fail-closed 报警,不因任务恰好被 LOG 覆盖而静默 PASS。
-const ARCHIVE_POINTER_LINE_RE = /^\s*<!--\s*relay:log-archive:\s*(\S+)\s*-->\s*$/;
-const ARCHIVE_POINTER_PATH_RE = /^docs\/archive\/LOG-[^/\\]+\.md$/i;
-const completionIdsOf = (text) => new Set(
-  parseLogEntries(text || '')
-    .map((e) => String(e.task || '').trim())
-    .filter((t) => DONE_TASK_RE.test(t))
-    .map((t) => (t.match(/^T\d+/) || [''])[0])
-    .filter(Boolean),
-);
-
+// 完成证据与 R9 共用;悬空/越界归档指针另外诊断。
 const checkCompletionConsistency = async (root) => {
   const tasks = await readText(join(root, 'TASKS.md'));
   const log = await readText(join(root, 'LOG.md'));
   if (tasks == null) return warn('D8', '完成状态', 'TASKS.md 缺失', '先 relay_init/onboard 建立任务队列');
-  const doneIds = [];
-  for (const line of String(tasks).split('\n')) {
-    const m = line.match(TASK_LINE_RE);
-    if (m && m[1] === 'x') doneIds.push(m[2]);
-  }
-  const completed = completionIdsOf(log);
-  const archived = new Set();
-  let archiveNames = [];
-  try {
-    archiveNames = (await readdir(join(root, 'docs', 'archive'), { withFileTypes: true }))
-      .filter((e) => e.isFile() && /^LOG-.*\.md$/i.test(e.name))
-      .map((e) => e.name)
-      .sort();
-  } catch { /* 无 docs/archive 目录不算漂移 */ }
-  for (const name of archiveNames) {
-    for (const id of completionIdsOf(await readText(join(root, 'docs', 'archive', name)))) archived.add(id);
-  }
+  const doneIds = completedTaskIds(tasks);
+  const { completed, archived, archiveUnreadable } = await collectCompletionEvidence(root, log);
   const issues = [];
-  // 归档指针 fail-closed:已存在的指针必须指向真实、非空且仍在仓库内的 docs/archive/LOG-*.md。
-  const pointerRels = String(log ?? '').split('\n')
-    .map((l) => l.match(ARCHIVE_POINTER_LINE_RE))
-    .filter(Boolean)
-    .map((m) => m[1]);
+  if (archiveUnreadable) issues.push('无法完整读取 LOG-* 归档证据');
   const dangling = [];
-  if (pointerRels.length) {
-    let rootReal = null;
-    try { rootReal = await realpath(root); } catch { rootReal = null; }
-    for (const rel of pointerRels) {
-      if (!ARCHIVE_POINTER_PATH_RE.test(rel)) { dangling.push(`${rel}(不在 docs/archive/LOG-*.md)`); continue; }
-      try {
-        const abs = join(root, rel);
-        const st = await stat(abs);
-        const real = await realpath(abs);
-        const inRepo = rootReal && (real === rootReal || real.startsWith(rootReal + sep));
-        if (!st.isFile() || st.size <= 0 || !inRepo) dangling.push(`${rel}(目标不存在/为空/越出仓库)`);
-      } catch { dangling.push(`${rel}(目标不存在)`); }
-    }
+  for (const line of String(log ?? '').split('\n')) {
+    const pointer = line.match(LOG_ARCHIVE_POINTER_RE);
+    if (pointer && await findArchiveBoundary(root, [line]) < 0) dangling.push(pointer[1]);
   }
   if (dangling.length) issues.push(`归档指针未被承认:${dangling.join('; ')}`);
   const missing = doneIds.filter((id) => !completed.has(id) && !archived.has(id));
-  const regRaw = await readText(join(root, '.relay', 'worktrees.json'));
-  const regTasks = [];
-  if (regRaw) {
-    try {
-      const reg = JSON.parse(regRaw);
-      for (const w of reg.worktrees || []) if (w && w.controlCommitted === true) regTasks.push(String(w.task || ''));
-    } catch { /* 注册表损坏由 doctor 其他项/引擎 fail-closed 处理 */ }
-  }
-  const regMissing = regTasks.filter((t) => !doneIds.includes(t));
+  const { registry } = await readWorktreeRegistryState(root);
+  const regMissing = registry.worktrees.filter((w) => w.controlCommitted === true && !doneIds.includes(w.task));
+  const unsealed = registry.worktrees.filter((w) => w.status === 'active' && doneIds.includes(w.task)
+    && (completed.has(w.task) || archived.has(w.task)));
   if (missing.length) issues.push(`TASKS 标 [x] 但 LOG/归档无完成条目:${missing.join(', ')}`);
-  if (regMissing.length) issues.push(`registry 记录控制面已提交但 TASKS 未完成:${regMissing.join(', ')}`);
+  if (regMissing.length) issues.push(`registry 记录控制面已提交但 TASKS 未完成:${regMissing.map((w) => w.task).join(', ')}`);
+  if (unsealed.length) issues.push(`完成记录已写入,registry 尚未收尾:${unsealed.map((w) => w.task).join(', ')}`);
   if (issues.length) {
     return warn('D8', '完成状态', issues.join('; '), '让归档指针指向真实存在且非空的 docs/archive/LOG-*.md;旧式非 LOG 指针不会被承认,运行 relay_archive_log {confirm:true} 会新建 LOG-*.md 并改指它。补齐 LOG/归档完成条目或修正 TASKS 状态;证据不得删除,只可回填');
   }
@@ -203,7 +159,7 @@ const checkClaimLocks = async (root) => {
     const raw = await readText(join(dir, n));
     const info = parseLockContent(raw);
     const task = n.replace(/\.lock$/, '');
-    const expiry = claimLockExpiry(info, { now, defaultTtlMinutes: 240 });
+    const expiry = claimLockExpiry(info, { now });
     const ttlNote = expiry.ttlSource === 'lock'
       ? `TTL ${expiry.ttlMinutes} 分钟`
       : `按默认 ${expiry.ttlMinutes} 分钟判定`;

@@ -110,6 +110,10 @@ try {
   gitAt(tmp, '-c', 'user.name=t', '-c', 'user.email=t@t', 'commit', '-q', '-m', 'docs: 完成后的普通提交');
   const vPost = cli('relay_verify', { full: true });
   ok(/R10\s*\|\s*PASS/.test(out(vPost)), '完成提交之后有普通提交,R10 仍 PASS(按「T### 完成」反查,不依赖 HEAD)', out(vPost).slice(0, 400));
+  const oldHeading = '## 2000-01-01 00:00 | model=legacy | task=T777 完成';
+  writeFileSync(logPath, log.replace(/(?=^## )/m, `${oldHeading}\n\n`).replace(/文件 (\d+)/, (_, n) => `文件 ${Number(n) + 1}`));
+  ok(/R10\s*\|\s*ERROR/.test(r10Row(cli('relay_verify', { full: true }))), '旧日期条目不能遮盖后面的有效完成证据');
+  writeFileSync(logPath, log);
 
   console.log('\n== 解析器边界:| 与 ||(审计 P2-8/P2-9)==');
   const pPipe = parseFactLine('- 事实(v2): mode=managed | 文件 1 | ± +1/-0 | base=abc1234 | sha=def5678 | branch=relay/T1|x || 验收: 通过 | verify: PASS 1·WARN 0·ERROR 0 | 耗时: 1s');
@@ -142,20 +146,23 @@ try {
     g('add', '-A');
     g('-c', 'user.name=t', '-c', 'user.email=t@t', 'commit', '-q', '-m', 'T900 完成');
     const sha2 = g('rev-parse', 'HEAD').stdout.trim();
+    const controlBranch = g('branch', '--show-current').stdout.trim();
     mkdirSync(path.join(mtmp, '.relay'), { recursive: true });
     writeFileSync(path.join(mtmp, '.relay', 'manifest.json'), JSON.stringify({
       version: 1, entryFiles: ['AGENTS.md'], allowedTopLevel: ['src', '.relay', 'TASKS.md', 'LOG.md'],
       facts: { enabled: true, since: '2020-01-01 00:00', strict: false },
     }, null, 2) + '\n');
     writeFileSync(path.join(mtmp, '.relay', 'worktrees.json'), JSON.stringify({
-      version: 1, worktrees: [{ task: 'T900', baseSha: sha1, branch: 'relay/T900', controlCommitted: true }],
+      version: 1, worktrees: [{ task: 'T900', baseSha: sha1, branch: 'relay/T900', status: 'completed', controlCommitted: true, commitSha: sha2 }],
     }, null, 2) + '\n');
     writeFileSync(path.join(mtmp, 'TASKS.md'), '# 任务队列\n\n## 待办\n\n## 已完成\n- [x] T900 夹具任务  (2026-01-01)\n');
     // 分支归属(P1-3):relay/T900 指向 sha2(含);relay/T902 指向 sha1(不含 sha2)——两种篡改可区分。
     g('branch', 'relay/T900', sha2);
     g('branch', 'relay/T902', sha1);
     const mkFact = (pm) => `- 事实(v2): mode=managed | 文件 1 | ± ${pm} | base=${sha1} | sha=${sha2} | branch=relay/T900 || 验收: 通过 | verify: PASS 0·WARN 0·ERROR 0 | 耗时: 1s`;
-    const logM = (factLine) => writeFileSync(path.join(mtmp, 'LOG.md'), `# 会话日志(最新在上)\n\n## 2026-01-01 00:00 | model=fixture | task=T900 完成\n- 摘要: 夹具\n${factLine}\n`);
+    const pair = `- worktree: branch=relay/T900; sha=${sha2}; 已验收,未合并\n`;
+    const logM = (factLine, evidence = pair) => writeFileSync(path.join(mtmp, 'LOG.md'), `# 会话日志(最新在上)\n\n## 2026-01-01 00:00 | model=fixture | task=T900 完成\n- 摘要: 夹具\n${factLine}\n${evidence}`);
+    const verifyManaged = () => r10Row(cliAt(mtmp, 'relay_verify', { full: true }));
     const mRow = (mut) => { logM(mut(mkFact('+2/-0'))); return r10Row(cliAt(mtmp, 'relay_verify', { full: true })); };
     logM(mkFact('+2/-0'));
     const m1 = cliAt(mtmp, 'relay_verify', { full: true });
@@ -176,7 +183,11 @@ try {
     const rMergedDeleted = r10Row(cliAt(mtmp, 'relay_verify', { full: true }));
     ok(!/R10\s*\|\s*PASS/.test(rMergedDeleted), '分支已删除时不做无依据的 PASS(无法独立验证保持可见)', rMergedDeleted);
     const rBranchWrong = mRow((l) => l.replace('branch=relay/T900', 'branch=relay/T902'));
-    ok(/R10\s*\|\s*ERROR/.test(rBranchWrong) && /(不包含|不在 .* 上)/.test(rBranchWrong), '分支存在但不含 sha → R10 ERROR(分支与提交不匹配)', rBranchWrong);
+    ok(/R10\s*\|\s*ERROR/.test(rBranchWrong) && /branch/.test(rBranchWrong), '事实行分支与任务或成对证据不匹配 → R10 ERROR', rBranchWrong);
+    logM(mkFact('+2/-0'));
+    g('branch', '-f', 'relay/T900', sha1);
+    ok(/R10\s*\|\s*ERROR.*不包含/.test(verifyManaged()), '真实任务分支不包含成对证据提交 → R10 ERROR');
+    g('branch', '-f', 'relay/T900', sha2);
     const rSha = mRow((l) => l.replace(`sha=${sha2}`, 'sha=deadbeefdeadbeefdeadbeefdeadbeefdeadbeef'));
     ok(/R10\s*\|\s*ERROR/.test(rSha) && /sha 声明/.test(rSha), '伪造 sha → R10 ERROR(独立定位提交不被事实行左右)', rSha);
     const rBase = mRow((l) => l.replace(`base=${sha1}`, 'base=deadbeefdeadbeefdeadbeefdeadbeefdeadbeef'));
@@ -184,6 +195,9 @@ try {
     const rEmpty = mRow((l) => l.replace(`base=${sha1}`, `base=${sha2}`).replace(`sha=${sha2}`, `sha=${sha2}`).replace(/文件 1/, '文件 0').replace(/\+2\/-0/, '+0/-0'));
     ok(/R10\s*\|\s*ERROR/.test(rEmpty) && /文件数/.test(rEmpty), 'base=sha 伪造空区间 → R10 ERROR(不再空洞 PASS)', rEmpty);
     const savedReg = readFileSync(path.join(mtmp, '.relay', 'worktrees.json'), 'utf8');
+    logM(mkFact('+2/-0'));
+    writeFileSync(path.join(mtmp, '.relay', 'worktrees.json'), savedReg.replace('relay/T900', 'relay/T902'));
+    ok(/R10\s*\|\s*ERROR.*registry/.test(verifyManaged()), '注册表分支与成对证据不同必须报错', verifyManaged());
     rmSync(path.join(mtmp, '.relay', 'worktrees.json'));
     ok(/R10\s*\|\s*WARN/.test(r10Row(cliAt(mtmp, 'relay_verify', { full: true }))) && /registry=missing/.test(r10Row(cliAt(mtmp, 'relay_verify', { full: true }))), 'registry 缺失 → R10 WARN(不 PASS)');
     writeFileSync(path.join(mtmp, '.relay', 'worktrees.json'), savedReg);
@@ -193,36 +207,28 @@ try {
     const rV1 = r10Row(cliAt(mtmp, 'relay_verify', { full: true }));
     ok(/R10\s*\|\s*WARN/.test(rV1) && /v1/.test(rV1), 'v1 旧行数字一致也只报 WARN(不自证 PASS)', rV1);
     ok(!/R10\s*\|\s*PASS/.test(rV1), 'v1 旧行绝不 PASS');
-  console.log('\n== R10 锚点:出场后分支追加提交,旧事实行仍须对账 ==');
-  {
-    // 回归:锚点曾用「任务分支 tip」,出场后再提交(wip/修复)会让 tip 前移、旧事实行失配。
-    // 正确锚点是 LOG 同条目的「成对证据」行(- worktree: ... sha=...),由引擎独立写盘。
-    // 真实场景:出场写完事实行后,任务分支上又追加了提交(wip/修复)。
-    // 锚点若用「分支 tip」就会前移,旧事实行当场失配;正确锚点是 LOG 同条目的成对证据行。
-    const { runChecks } = await import('../src/engines/verify.mjs');
-    const before = (await runChecks(mtmp, { full: true })).filter((r) => r.id === 'R10')[0];
-    ok(before && before.result !== 'ERROR', '追加提交前 R10 正常', before ? before.detail : '(无 R10)');
-    const tipBranch = g('rev-parse', '--abbrev-ref', 'HEAD');
-    g('checkout', '-q', tipBranch);
+
+    console.log('\n== R10 锚点:同一条目的配对证据不随任务分支移动 ==');
+    logM(mkFact('+2/-0'), `\n## 2025-12-31 00:00 | model=fixture | task=T901 完成\n${pair}`);
+    ok(/R10\s*\|\s*WARN/.test(verifyManaged()), '同 SHA 的其他条目不能提供锚点', verifyManaged());
+    logM(mkFact('+2/-0'), pair.repeat(2));
+    ok(/R10\s*\|\s*WARN/.test(verifyManaged()), '同条目有多个锚点 → R10 WARN', verifyManaged());
+    logM(mkFact('+2/-0'));
+    ok(g('checkout', '-q', 'relay/T900').status === 0, '切到任务分支');
     writeFileSync(path.join(mtmp, 'src', 'after-exit.mjs'), 'export const after = 1;\n');
-    g('add', '-A');
-    g('-c', 'user.name=t', '-c', 'user.email=t@t', 'commit', '-q', '-m', 'wip: after exit');
-    const after = (await runChecks(mtmp, { full: true })).filter((r) => r.id === 'R10')[0];
-    ok(after && after.result !== 'ERROR', '出场后分支追加提交,旧事实行仍对账通过(锚点不依赖 tip)',
-      after ? after.detail : '(无 R10)');
-  }
+    g('add', '--', 'src/after-exit.mjs');
+    const added = g('-c', 'commit.gpgsign=false', '-c', 'user.name=t', '-c', 'user.email=t@t', 'commit', '-q', '-m', 'wip: after exit');
+    ok(added.status === 0, '任务分支新增真实提交', added.stderr);
+    const newTip = g('rev-parse', 'HEAD').stdout.trim();
+    ok(newTip !== sha2 && /R10\s*\|\s*PASS/.test(verifyManaged()), '追加提交后原事实行仍须 PASS', verifyManaged());
+    const mismatched = mRow((line) => line.replace(`sha=${sha2}`, `sha=${newTip}`).replace('文件 1', '文件 2').replace('+2/-0', '+3/-0'));
+    ok(/R10\s*\|\s*ERROR.*sha 声明/.test(mismatched), '事实行与独立成对证据不一致时必须报错', mismatched);
+    logM(mkFact('+2/-0'));
+    ok(g('checkout', '-q', controlBranch).status === 0 && g('merge', '--ff-only', 'relay/T900').status === 0
+      && g('branch', '-d', 'relay/T900').status === 0, '合并任务分支后删除本地任务引用');
+    ok(/R10\s*\|\s*PASS.*已合并删除/.test(verifyManaged()), '合并并删除分支后仍可按原锚点对账', verifyManaged());
   } finally {
     rmSync(mtmp, { recursive: true, force: true });
-  }
-
-  console.log('\n== R10 分支已删除路径不得抛 TDZ(CI 回归) ==');
-  {
-    // 「分支不存在但提交可验证」这条路径曾把 branchNote 用在声明之前:
-    // 本地有分支时不触发,CI 新克隆必然触发。直接断言 runChecks 不抛错。
-    const { runChecks } = await import('../src/engines/verify.mjs');
-    let threw = '';
-    try { await runChecks(mtmp, { full: true }); } catch (e) { threw = String((e && e.message) || e); }
-    ok(!threw, 'R10 在所有分支路径上都不抛异常(含分支已删除)', threw);
   }
 
   console.log('\n== 升级兼容:since 在未来 → SKIP ==');

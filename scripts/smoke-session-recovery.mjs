@@ -48,7 +48,7 @@ try {
   {
     const root = mk();
     const script = path.join(root, 'env-check.mjs');
-    writeFileSync(script, `if (process.env.NODE_TEST_CONTEXT) process.exit(9); console.log('ENV-OK'); console.error('x'.repeat(4*1024*1024+20));\n`);
+    writeFileSync(script, `if (process.env.NODE_TEST_CONTEXT) process.exit(9); console.log('ENV-OK'); console.error('x'.repeat(8*1024*1024));\n`);
     const previous = process.env.NODE_TEST_CONTEXT;
     process.env.NODE_TEST_CONTEXT = 'child-v8-context';
     let r;
@@ -56,7 +56,7 @@ try {
     finally { if (previous == null) delete process.env.NODE_TEST_CONTEXT; else process.env.NODE_TEST_CONTEXT = previous; }
     assert.equal(r.ok, true);
     assert.match(r.out, /ENV-OK/);
-    assert.ok(r.out.length < 4 * 1024 * 1024 + 100, `输出必须有上限,实际 ${r.out.length}`);
+    assert.ok(Buffer.byteLength(r.out) <= 4 * 1024 * 1024 + 1, `输出必须有上限,实际 ${r.out.length}`);
   }
   check('runCmd 清洗 NODE_TEST_CONTEXT 且总输出有界', () => {});
 
@@ -64,8 +64,8 @@ try {
   {
     const root = mk();
     assert.equal(run('relay_init', { root, name: 'manifest once', preset: 'minimal' }).status, 0);
-    const trace = path.join(root, 'trace.json');
-    const end = run('relay_session_end', { root, model: 'once', summary: '单次读取' }, { RELAY_TRACE_FILE: trace });
+    const trace = path.join(mk(), 'trace.json');
+    const end = run('relay_session_end', { root, model: 'once', summary: '单次读取', done_task: 'T003' }, { RELAY_TRACE_FILE: trace });
     assert.equal(end.status, 0, out(end));
     const reads = JSON.parse(readFileSync(trace, 'utf8')).reads;
     assert.equal(reads['manifest.json'], 1);
@@ -75,6 +75,16 @@ try {
     const bad = run('relay_session_end', { root, model: 'once', summary: '损坏应早退' });
     assert.equal(bad.status, 1);
     assert.match(out(bad), /manifest 损坏/);
+    assert.equal(readFileSync(path.join(root, 'TASKS.md'), 'utf8'), beforeTasks);
+    const badVerify = run('relay_verify', { root, full: true }, { RELAY_TRACE_FILE: trace });
+    assert.equal(badVerify.status, 1, out(badVerify));
+    assert.match(out(badVerify), /R1.*manifest.*解析失败/);
+    assert.equal(JSON.parse(readFileSync(trace, 'utf8')).reads['manifest.json'], 1);
+    rmSync(mf);
+    mkdirSync(mf);
+    const badClaim = run('relay_claim', { root, model: 'once', task: 'T002', worktree: false });
+    assert.equal(badClaim.status, 1, out(badClaim));
+    assert.match(out(badClaim), /manifest\.json/);
     assert.equal(readFileSync(path.join(root, 'TASKS.md'), 'utf8'), beforeTasks);
   }
   check('session_end manifest 读 1 次且损坏不进入写盘', () => {});
@@ -96,23 +106,62 @@ try {
   }
   check('无待办 next 仅写维护注释,简报不指定队首', () => {});
 
-  console.log('\n== managed 代码提交后协议写异常 → 幂等补交 ==');
+  console.log('\n== 批量出场复用项目测试与可配置超时 ==');
+  {
+    const root = mk();
+    const init = run('relay_init', { root, name: 'acceptance limits', preset: 'minimal' });
+    assert.equal(init.status, 0, out(init));
+    addTask(root, 'T904', '批量测试一');
+    addTask(root, 'T905', '批量测试二');
+    const pkg = path.join(root, 'package.json');
+    const mf = path.join(root, '.relay', 'manifest.json');
+    const manifest = JSON.parse(readFileSync(mf, 'utf8'));
+    writeFileSync(pkg, JSON.stringify({ scripts: { test: 'node -e "setTimeout(() => {}, 1500)"' } }));
+    writeFileSync(mf, JSON.stringify({ ...manifest, acceptance: { timeoutMs: 200 } }));
+    const timedOut = run('relay_session_end', { root, model: 'run-once', summary: '验收时限', done_task: 'T904', done_tasks: ['T905'] });
+    assert.equal(timedOut.status, 1, out(timedOut));
+    assert.match(out(timedOut), /npm test.*超时\(0\.2s\)/);
+    assert.doesNotMatch(readFileSync(path.join(root, 'TASKS.md'), 'utf8'), /^- \[x\] T90[45] /m);
+    writeFileSync(mf, JSON.stringify(manifest));
+    writeFileSync(pkg, JSON.stringify({ scripts: { test: `node -e "require('node:fs').appendFileSync('.relay/test-count', '1')"` } }));
+    const batch = run('relay_session_end', { root, model: 'run-once', summary: '批量验收', done_task: 'T904', done_tasks: ['T905'] });
+    assert.equal(batch.status, 0, out(batch));
+    assert.equal(readFileSync(path.join(root, '.relay', 'test-count'), 'utf8'), '1');
+    assert.equal((readFileSync(path.join(root, 'LOG.md'), 'utf8').match(/task=T90[45] 完成/g) || []).length, 2);
+  }
+  check('验收超时报告准确,批量完成只运行一次 npm test', () => {});
+
+  console.log('\n== managed 代码提交后的写盘中断 → 同一任务可接管补交 ==');
   {
     const control = mk();
     assert.equal(run('relay_init', { root: control, name: 'managed recovery', preset: 'minimal' }).status, 0);
     addTask(control, 'T903', '受管恢复');
-    const claim = run('relay_claim', { root: control, task: 'T903', model: 'managed-a', worktree: true });
+    const claim = run('relay_claim', { root: control, task: 'T903', model: 'managed-a', worktree: true, ttl_minutes: 1 });
     assert.equal(claim.status, 0, out(claim));
     const execution = path.join(control, '.relay/worktrees/T903');
     assert.ok(existsSync(execution), 'managed worktree 已创建');
-    writeFileSync(path.join(execution, 'result.txt'), 'durable\n');
+    writeFileSync(path.join(execution, 'README.md'), 'durable\n');
     const baseSha = git(execution, 'rev-parse', 'HEAD');
-    const crashed = run('relay_session_end', { root: execution, model: 'managed-a', summary: '中断恢复', done_task: 'T903' }, { RELAY_CRASH_AT_WRITE: '0' });
-    assert.equal(crashed.status, 0, out(crashed));
+    const crashed = run('relay_session_end', { root: execution, model: 'managed-a', summary: '中断恢复', done_task: 'T903' },
+      { RELAY_TEST_HOOKS: '1', RELAY_CRASH_AT_WRITE: '1' });
+    assert.equal(crashed.status, 137, out(crashed));
     const codeSha = git(execution, 'rev-parse', 'HEAD');
     assert.notEqual(codeSha, baseSha, '首次 managed 代码提交已落账');
+    const tasksPath = path.join(control, 'TASKS.md');
+    const logPath = path.join(control, 'LOG.md');
+    assert.match(readFileSync(tasksPath, 'utf8'), /^- \[x\] T903 /m);
+    assert.doesNotMatch(readFileSync(logPath, 'utf8'), /task=T903 完成/);
     rmSync(path.join(control, '.relay/relay.lock'), { force: true });
-    const recovered = run('relay_session_end', { root: execution, model: 'managed-a', summary: '中断恢复', done_task: 'T903' });
+    const claimPath = path.join(control, '.relay', 'claims', 'T903.lock');
+    const whileHeld = run('relay_claim', { root: control, task: 'T903', model: 'managed-b', worktree: true });
+    assert.equal(whileHeld.status, 1, out(whileHeld));
+    const lock = JSON.parse(readFileSync(claimPath, 'utf8'));
+    writeFileSync(claimPath, JSON.stringify({ ...lock, acquiredAt: new Date(Date.now() - 120000).toISOString() }));
+    const wrongRoot = run('relay_claim', { root: control, task: 'T903', model: 'managed-b', worktree: false });
+    assert.equal(wrongRoot.status, 1, out(wrongRoot));
+    const tookOver = run('relay_claim', { root: control, task: 'T903', model: 'managed-b', worktree: true });
+    assert.equal(tookOver.status, 0, out(tookOver));
+    const recovered = run('relay_session_end', { root: execution, model: 'managed-b', summary: '中断恢复', done_task: 'T903' });
     assert.equal(recovered.status, 0, out(recovered));
     assert.equal(git(execution, 'rev-parse', 'HEAD'), codeSha, '幂等恢复不得重复代码提交');
     const tasks = readFileSync(path.join(control, 'TASKS.md'), 'utf8');
@@ -124,11 +173,47 @@ try {
     assert.equal(record.status, 'completed');
     assert.equal(record.controlCommitted, true);
     assert.equal(existsSync(path.join(control, '.relay/claims/T903.lock')), false);
-    const again = run('relay_session_end', { root: execution, model: 'managed-a', summary: '幂等恢复', done_task: 'T903' });
+    const again = run('relay_session_end', { root: execution, model: 'managed-b', summary: '幂等恢复', done_task: 'T903' });
     assert.equal(again.status, 0, out(again));
     assert.equal((readFileSync(path.join(control, 'LOG.md'), 'utf8').match(/task=T903 完成/g) || []).length, 1);
+    const passer = () => (run('relay_verify', { root: execution, full: true }).stdout || '').split('\n').find((line) => line.startsWith('| R10 |'));
+    assert.match(passer(), /R10 \| PASS/);
+    writeFileSync(path.join(execution, 'README.md'), 'follow-up\n');
+    git(execution, 'add', '--', 'README.md');
+    git(execution, '-c', 'commit.gpgsign=false', '-c', 'user.name=fixture', '-c', 'user.email=fixture@example.test', 'commit', '-m', '分支继续开发');
+    assert.notEqual(git(execution, 'rev-parse', 'HEAD'), codeSha);
+    assert.match(passer(), /R10 \| PASS/);
+    const replay = run('relay_session_end', { root: execution, model: 'managed-b', summary: '重跑已经提交的出场', done_task: 'T903' });
+    assert.equal(replay.status, 0, out(replay));
+    assert.match(out(replay), new RegExp(`codeSha=${codeSha}`));
+    assert.equal(readFileSync(logPath, 'utf8'), log);
   }
   check('managed 代码提交后异常恢复幂等,不重复代码提交', () => {});
+
+  if (process.platform !== 'win32') {
+    console.log('\n== Git 拒绝提交 → 认领保留且重跑补交 ==');
+    const root = mk();
+    const init = run('relay_init', { root, name: 'git failure', preset: 'minimal' });
+    assert.equal(init.status, 0, out(init));
+    const args = { root, model: 'retry-git', done_task: 'T003', summary: 'Git 拒绝提交时保留认领' };
+    assert.equal(run('relay_claim', { root, task: 'T003', model: args.model, worktree: false }).status, 0);
+    const hook = path.join(root, '.git', 'hooks', 'pre-commit');
+    git(root, 'config', 'core.hooksPath', '.git/hooks');
+    writeFileSync(hook, '#!/bin/sh\nexit 42\n', { mode: 0o755 });
+    const before = git(root, 'rev-parse', 'HEAD');
+    const r = run('relay_session_end', args);
+    assert.equal(r.status, 1, out(r));
+    assert.match(out(r), /提交失败.*待补交/);
+    assert.equal(git(root, 'rev-parse', 'HEAD'), before);
+    const claimFile = path.join(root, '.relay', 'claims', 'T003.lock');
+    assert.ok(existsSync(claimFile));
+    rmSync(hook);
+    const retry = run('relay_session_end', args);
+    assert.equal(retry.status, 0, out(retry));
+    assert.notEqual(git(root, 'rev-parse', 'HEAD'), before);
+    assert.equal(existsSync(claimFile), false);
+    check('Git 提交失败返回错误并保留认领，补交后释放', () => {});
+  }
   console.log(`\n结果: ${pass} 通过 / 0 失败`);
 } finally {
   for (const root of roots) rmSync(root, { recursive: true, force: true });
