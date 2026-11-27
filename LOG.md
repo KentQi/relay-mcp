@@ -1,5 +1,12 @@
 # 会话日志(最新在上)
 
+## 2026-11-28 02:05 | model=codex-audit-followup-final | task=维护
+- 摘要: T073 最终续作已合并：PR #12 终稿代码 dfe39d1，GitHub merge commit 738240c，Node 22/24/26 两事件矩阵 6 个 CI job 全绿；本地在合并后的 main 上 npm test 31 套全绿（0 失败），双根 verify 为 controlRoot PASS 9/WARN 1/ERROR 0、executionRoot PASS 4/WARN 0/ERROR 0，插件校验 0 fatal，npm pack dry-run 56 文件，git diff --check 通过。MAX 审计确认项已全部落地并有行为回归；T055–T057 仍按 DECISIONS 有意保留 R9 WARN。T073 既有完成证据不改写，本次以维护出场记录后续修复、PR 合并与最终验证。
+- 事实(v2): mode=single | 文件 0 | ± +0/-0 | base=- | sha=- | branch=main || 验收: 通过 | verify: PASS 10·WARN 1·ERROR 0 | 耗时: 113s
+- 负结果: 不要用 done_task=T073 重跑完成出场：T073 已是 [x]，registry 仍保存 ecad5e4/b95ecf0 的旧成对证据；最终续作应走无 done_task 维护出场。
+- 负结果: T055–T057 是经批准保留的历史 R9 缺口，不得回填或伪造完成证据。
+- 负结果: 便携 Node 自更新仍保留已写入 CONTRACT 的最终内容 CAS rename 与锁释放 unlink 两个不可完全原子化窗口，不应在本任务中扩展架构重写。
+
 ## 2026-11-27 17:12 | model=codex-audit-followup | task=T073 完成
 - 摘要: 复核 PR #12 基线 4203d78，Node 22/24/26 共 6 个 CI job 成功。补齐 R9/R10 完成证据、半写与重复出场恢复、同日归档保全、不可读配置、验收输出与时限、原始文件名守卫、并发接力和启动器冷却。认领锁与出场恢复冒烟已接入 npm test。审计逐项结果见任务分支 docs/04-test/13-audit-deep-scan-v2.1.md 第 12 节。任务分支 relay/T073 待人工复核。
 - 事实(v2): mode=managed | 文件 67 | ± +4200/-1902 | base=0d8764b11b886c748c6b04544d0c97d95d8d4cd9 | sha=ecad5e455b8f9e1e21ed961388f4ff4d34b5eced | branch=relay/T073 || 验收: 通过 | verify: PASS 15·WARN 1·ERROR 0 | 耗时: 111s
