@@ -538,6 +538,7 @@ const checkR10 = async (root, cfg, snap) => {
   // 完成提交独立定位:subject 必须含精确任务号,候选重复/缺失一律 WARN;不按文件数挑候选。
   const taskId = taskIdOfEntry(entry);
   let completionSha = '';
+  let independentCodeSha = '';
   let registryBaseSha = '';
   let registryState = 'missing';
   if (taskId && snap && snap.git && snap.git.isRepo) {
@@ -560,6 +561,18 @@ const checkR10 = async (root, cfg, snap) => {
           } else registryState = 'corrupt';
         } catch { registryState = 'corrupt'; }
       }
+      // 代码提交的独立锚点 = LOG 同条目里引擎写的「成对证据」行(- worktree: ... sha=...)。
+      // 它由引擎在写 LOG 时落盘,与事实行分开写,互不覆盖。
+      // 不能用任务分支 tip:出场后分支上还会追加提交(wip/修复),tip 前移会让旧事实行失配。
+      const logForAnchor = snap ? snap.logText : await readText(join(root, 'LOG.md'));
+      if (logForAnchor) {
+        const entryBlock = String(logForAnchor).split('\n').filter((l) => /^- worktree:/.test(l)
+          || /^- 事实\(v2\):/.test(l) || /^- 摘要:/.test(l));
+        for (const line of entryBlock) {
+          const m = line.match(/^- worktree:.*?sha=([0-9a-f]{40})/);
+          if (m && m[1] === parsed.sha) independentCodeSha = parsed.sha;
+        }
+      }
     }
   }
   // P1-3(审计):branch 必须真的与 git 对得上。
@@ -571,6 +584,7 @@ const checkR10 = async (root, cfg, snap) => {
     registryBaseSha,
     taskId,
     branch: parsed.branch,
+    codeSha: independentCodeSha,
   });
   if (!stats) {
     // managed 的代码提交无法独立定位时,若分支存在但 tip 不等于声明的 sha,

@@ -193,6 +193,24 @@ try {
     const rV1 = r10Row(cliAt(mtmp, 'relay_verify', { full: true }));
     ok(/R10\s*\|\s*WARN/.test(rV1) && /v1/.test(rV1), 'v1 旧行数字一致也只报 WARN(不自证 PASS)', rV1);
     ok(!/R10\s*\|\s*PASS/.test(rV1), 'v1 旧行绝不 PASS');
+  console.log('\n== R10 锚点:出场后分支追加提交,旧事实行仍须对账 ==');
+  {
+    // 回归:锚点曾用「任务分支 tip」,出场后再提交(wip/修复)会让 tip 前移、旧事实行失配。
+    // 正确锚点是 LOG 同条目的「成对证据」行(- worktree: ... sha=...),由引擎独立写盘。
+    // 真实场景:出场写完事实行后,任务分支上又追加了提交(wip/修复)。
+    // 锚点若用「分支 tip」就会前移,旧事实行当场失配;正确锚点是 LOG 同条目的成对证据行。
+    const { runChecks } = await import('../src/engines/verify.mjs');
+    const before = (await runChecks(mtmp, { full: true })).filter((r) => r.id === 'R10')[0];
+    ok(before && before.result !== 'ERROR', '追加提交前 R10 正常', before ? before.detail : '(无 R10)');
+    const tipBranch = g('rev-parse', '--abbrev-ref', 'HEAD');
+    g('checkout', '-q', tipBranch);
+    writeFileSync(path.join(mtmp, 'src', 'after-exit.mjs'), 'export const after = 1;\n');
+    g('add', '-A');
+    g('-c', 'user.name=t', '-c', 'user.email=t@t', 'commit', '-q', '-m', 'wip: after exit');
+    const after = (await runChecks(mtmp, { full: true })).filter((r) => r.id === 'R10')[0];
+    ok(after && after.result !== 'ERROR', '出场后分支追加提交,旧事实行仍对账通过(锚点不依赖 tip)',
+      after ? after.detail : '(无 R10)');
+  }
   } finally {
     rmSync(mtmp, { recursive: true, force: true });
   }

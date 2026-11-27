@@ -213,7 +213,7 @@ export const parseFactLine = (text) => {
  * R10 对 v1 只做结构校验并 WARN,数字权威仅 v2 机检段。
  */
 export const recomputeCommitStats = async (root, parsed, {
-  isRepo = undefined, completionSha = '', registryBaseSha = '', taskId = '', branch = '',
+  isRepo = undefined, completionSha = '', registryBaseSha = '', taskId = '', branch = '', codeSha = '',
 } = {}) => {
   if (isRepo === false) return null;
   if (isRepo === undefined && !(await isGitRepoAsync(root))) return null;
@@ -224,9 +224,16 @@ export const recomputeCommitStats = async (root, parsed, {
     // managed 是两段提交:代码提交在任务分支(事实行 sha 记的就是它),完成提交在 controlRoot。
     // 独立定位代码提交 = 取任务分支 tip,且必须满足 base 是它的祖先;
     // 绝不用事实行自报的 sha 作为输入,也不拿 controlRoot 的完成提交冒充。
-    const tip = branch ? await gitRun(root, 'rev-parse', '--verify', `refs/heads/${branch}`) : { ok: false };
-    if (!tip.ok || !String(tip.stdout || '').trim()) return null;
-    sha = tip.stdout.trim();
+    // 优先用独立锚定:controlRoot 完成提交消息里记录的 codeSha(成对证据)。
+    // 它指认的是「本次出场提交的那个代码提交」,不受出场后分支追加提交影响。
+    // 没有该锚点时才退回分支 tip。
+    if (codeSha && /^[0-9a-f]{7,40}$/.test(codeSha)) {
+      sha = codeSha;
+    } else {
+      const tip = branch ? await gitRun(root, 'rev-parse', '--verify', `refs/heads/${branch}`) : { ok: false };
+      if (!tip.ok || !String(tip.stdout || '').trim()) return null;
+      sha = tip.stdout.trim();
+    }
     base = registryBaseSha;
   } else if (parsed?.mode === 'single') {
     // 单根无 registry:按 subject 定位完成提交,以其第一父提交为较弱但独立的范围。
