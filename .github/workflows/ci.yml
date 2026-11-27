@@ -16,6 +16,11 @@ jobs:
         node-version: [22, 24, 26]
     steps:
       - uses: actions/checkout@v4
+        with:
+          # 协议本身要考古历史提交(R10 独立定位完成提交、事实行校验历史 sha、
+          # smoke-t021-decision 反查 DECISIONS 引用的提交)。默认 depth:1 的浅克隆
+          # 拿不到这些历史对象,会让协议在 CI 上与本地表现不一致。
+          fetch-depth: 0
       - uses: actions/setup-node@v4
         with:
           node-version: ${{ matrix.node-version }}
