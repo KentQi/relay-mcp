@@ -48,7 +48,11 @@ try {
   const d0 = cli('relay_doctor', {});
   const t0 = out(d0);
   ok(d0.status === 0, '健康仓库 doctor 退出码 0', t0.slice(0, 300));
-  ok(t0.includes('D1') && t0.includes('D9'), '输出覆盖 D1–D9 九项检查');
+  for (let id = 1; id <= 9; id++) {
+    const checkId = `D${id}`;
+    const row = t0.split('\n').find((line) => new RegExp(`^\\| ${checkId} .*\\| OK \\|`).test(line));
+    ok(!!row, `${checkId} 独立行存在且健康仓库判定为 OK`, row || t0.slice(0, 500));
+  }
   ok(!t0.includes('修复:'), '健康仓库无「修复:」行');
   ok(snapshot(tmp) === before, 'doctor 零写盘(整棵仓库树快照不变,含根目录入口文件)');
 
@@ -75,6 +79,36 @@ try {
     const du = cli('relay_doctor', {});
     ok(/D2[^\n]*WARN/.test(out(du)) && /worktree\.enable/.test(out(du)) && /enabled/.test(out(du)),
       'D2 WARN 点名未知键并建议 worktree.enabled', out(du).slice(0, 400));
+    writeFileSync(mfPath, mfBackup);
+  }
+  console.log('\n== fixture 2b2:三级对象未知键 → D2 WARN + 精确建议 ==');
+  {
+    const mfUnknown = JSON.parse(mfBackup);
+    mfUnknown.rescue = {
+      ...(mfUnknown.rescue || {}),
+      autoLaunch: { enabled: false, enabel: true },
+    };
+    writeFileSync(mfPath, JSON.stringify(mfUnknown, null, 2) + '\n');
+    const du = cli('relay_doctor', {});
+    ok(/D2[^\n]*WARN/.test(out(du)) && /rescue\.autoLaunch\.enabel/.test(out(du))
+      && /rescue\.autoLaunch\.enabled/.test(out(du)), 'D2 点名 rescue.autoLaunch.enabel 并建议 enabled', out(du).slice(0, 500));
+    writeFileSync(mfPath, mfBackup);
+  }
+  console.log('\n== fixture 2b3:数组对象未知键 → D2 WARN + 精确建议 ==');
+  {
+    const mfUnknown = JSON.parse(mfBackup);
+    mfUnknown.rescue = {
+      ...(mfUnknown.rescue || {}),
+      sources: [{ profile: 'jsonl-agent', rooot: '/tmp/example' }],
+      profiles: [{ id: 'custom', kind: 'jsonl-message', filePattern: 'x', extraField: true }],
+    };
+    writeFileSync(mfPath, JSON.stringify(mfUnknown, null, 2) + '\n');
+    const du = cli('relay_doctor', {});
+    ok(/D2[^\n]*WARN/.test(out(du))
+      && /rescue\.sources\[0\]\.rooot/.test(out(du))
+      && /rescue\.sources\[0\]\.root/.test(out(du))
+      && /rescue\.profiles\[0\]\.extraField/.test(out(du)),
+    'D2 检查 rescue.sources/profiles 数组对象并给精确路径', out(du).slice(0, 800));
     writeFileSync(mfPath, mfBackup);
   }
 

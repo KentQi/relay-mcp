@@ -84,8 +84,8 @@ try {
       const lptr = pointerOf(readFileSync(path.join(legacyTmp, 'LOG.md'), 'utf8'));
       ok(/^docs\/archive\/LOG-[^/]+\.md$/.test(lptr), '指针改指新的 LOG-* 归档', lptr);
       ok(readFileSync(legacyPath, 'utf8') === legacyBefore, '旧的非 LOG 归档文件未被改写', legacyRel);
-      const lv = run(legacyTmp, 'relay_verify', { full: true });
-      ok(lv.status === 0 && /R12\s*\|\s*PASS/.test(out(lv)), '新指针被 R12 承认', out(lv).slice(0, 400));
+    const lv = run(legacyTmp, 'relay_verify', { full: true });
+    ok(/R12\s*\|\s*PASS/.test(out(lv)), '新指针被 R12 承认', out(lv).split('\n').filter((l) => l.startsWith('| R12') || l.startsWith('**汇总')).join('\n'));
     } finally { rmSync(legacyTmp, { recursive: true, force: true }); }
   }
 
@@ -100,6 +100,28 @@ try {
   ok(!/m7\b/.test(logDir) && !/m1\b/.test(logDir), 'live 不含旧条目(m7/m1;m1\\b 不误伤 m10)');
   const archDir = readFileSync(path.join(tmp, pointerOf(logDir)), 'utf8');
   ok(/m7/.test(archDir) && /m1/.test(archDir) && !/m10/.test(archDir), '归档文件是最旧 7 条(m7..m1),不含最新');
+  ok(archDir.startsWith(archivedText), '没有指针时也逐字节保留同日归档的已有历史');
+
+  console.log('\n== 维护条目不占 R7 的 3 个任务会话配额 ==');
+  {
+    const mixed = ['# 会话日志(最新在上)', ''];
+    const tasks = ['T201 完成', 'T202 完成', 'T203 完成'];
+    tasks.forEach((task, i) => {
+      mixed.push(`## 2026-02-0${i + 1} 10:00 | model=x | task=${task}`, `- 摘要: task-${i + 1}`, '');
+      mixed.push(`## 2026-02-0${i + 1} 11:00 | model=x | task=维护 环境`, '- 摘要: maintenance', '');
+    });
+    for (let i = 0; i < 8; i += 1) mixed.push(`## 2026-01-01 10:00 | model=x | task=T3${i} 完成`, '- 摘要: old', '');
+    writeFileSync(logPath, mixed.join('\n'));
+    const mixedRun = run(tmp, 'relay_archive_log', { confirm: true, keep: 3 });
+    ok(mixedRun.status === 0, '混合条目 keep=3 可归档', out(mixedRun).slice(0, 300));
+    const live = readFileSync(logPath, 'utf8');
+    const liveTasks = [...live.matchAll(/task=(T\d+) 完成/g)].map((m) => m[1]);
+    ok(liveTasks.includes('T201') && liveTasks.includes('T202') && liveTasks.includes('T203'),
+      '第 3 个任务会话在 keep 之外时扩展边界保留', liveTasks.join(','));
+    ok(liveTasks.length === 3, 'live 恰好保留 R7 实际计数的 3 个任务会话', liveTasks.join(','));
+    const r7 = out(run(tmp, 'relay_verify', { full: true }));
+    ok(/R7\s*\|\s*PASS/.test(r7) && /最近 3 条任务会话/.test(r7), '归档后 R7 仍有完整 3 会话窗口', r7.match(/R7[^\n]+/)?.[0] || '');
+  }
 
   console.log('\n== R7 不可被归档洗绿(P0-3) ==');
   writeFileSync(tasksPath, ['# 任务队列', '', '## 进行中', '', '## 待办', '', '## 已完成',
@@ -128,6 +150,64 @@ try {
     ok(readdirSync(outside).length === 0, '仓库外目录未出现归档文件');
     rmSync(outside, { recursive: true, force: true });
   } finally { rmSync(tmp2, { recursive: true, force: true }); }
+
+  console.log('\n== 归档文件叶子符号链接 → 拒绝写穿 ==');
+  const tmp3 = mkdtempSync(path.join(tmpdir(), 'relay-archive-leaf-'));
+  try {
+    run(tmp3, 'relay_init', { name: 'archive-leaf' });
+    const outside = mkdtempSync(path.join(tmpdir(), 'relay-leaf-outside-'));
+    const d = new Date();
+    const today = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+    const archiveDir = path.join(tmp3, 'docs', 'archive');
+    mkdirSync(archiveDir, { recursive: true });
+    symlinkSync(outside, path.join(archiveDir, `LOG-${today}.md`), process.platform === 'win32' ? 'junction' : 'dir');
+    writeFileSync(path.join(tmp3, 'LOG.md'), makeLog(30));
+    const leafRun = run(tmp3, 'relay_archive_log', { confirm: true });
+    ok(leafRun.status === 1 && /符号链接|拒绝/.test(out(leafRun)),
+      '归档目标叶子是符号链接 → 拒绝写穿', out(leafRun).slice(0, 300));
+    ok(readdirSync(outside).length === 0, '仓库外目录未出现归档内容');
+    rmSync(outside, { recursive: true, force: true });
+  } finally { rmSync(tmp3, { recursive: true, force: true }); }
+
+  console.log('\n== 相同正文的两次合法归档不能把第二次误判为半写重试 ==');
+  {
+    const dupRoot = mkdtempSync(path.join(tmpdir(), 'relay-archive-duplicate-'));
+    try {
+      run(dupRoot, 'relay_init', { name: 'duplicate history' });
+      const oneEntry = '## 2026-01-03 10:00 | model=x | task=维护\n- 摘要: repeated body\n';
+      const sameLog = ['# 会话日志(最新在上)', '', ...Array.from({ length: 10 }, () => oneEntry)].join('\n');
+      writeFileSync(path.join(dupRoot, 'LOG.md'), sameLog);
+      const first = run(dupRoot, 'relay_archive_log', { confirm: true, keep: 3 });
+      ok(first.status === 0, '相同正文首次归档成功', out(first).slice(0, 300));
+      const live1 = readFileSync(path.join(dupRoot, 'LOG.md'), 'utf8');
+      const rel1 = pointerOf(live1);
+      const archive1 = readFileSync(path.join(dupRoot, rel1), 'utf8');
+      const secondSource = live1.replace(/^(# 会话日志\(最新在上\)\n\n)/, `$1${Array.from({ length: 7 }, () => oneEntry).join('')}`);
+      writeFileSync(path.join(dupRoot, 'LOG.md'), secondSource);
+      const beforeSecond = entryCount(secondSource) + entryCount(archive1);
+      const second = run(dupRoot, 'relay_archive_log', { confirm: true, keep: 3 });
+      ok(second.status === 0 && /实际追加 7 条/.test(out(second)), '第二次相同正文仍实际追加,不谎报幂等', out(second).slice(0, 500));
+      const live2 = readFileSync(path.join(dupRoot, 'LOG.md'), 'utf8');
+      const rel2 = pointerOf(live2);
+      const archive2 = readFileSync(path.join(dupRoot, rel2), 'utf8');
+      ok(entryCount(live2) + entryCount(archive2) === beforeSecond, '相同正文两次归档条目总数守恒',
+        `${beforeSecond} vs ${entryCount(live2)}+${entryCount(archive2)}`);
+    } finally { rmSync(dupRoot, { recursive: true, force: true }); }
+  }
+
+  console.log('\n== 归档保留第一个条目之前的人工标题与说明 ==');
+  {
+    const preRoot = mkdtempSync(path.join(tmpdir(), 'relay-archive-preamble-'));
+    try {
+      run(preRoot, 'relay_init', { name: 'archive preamble' });
+      const custom = ['# 自定义 LOG 标题', '', '> 必须保留的人工说明: 这个仓库把 LOG 用于审计', '', makeLog(10).split('\n').slice(2).join('\n')].join('\n');
+      writeFileSync(path.join(preRoot, 'LOG.md'), custom);
+      const ar = run(preRoot, 'relay_archive_log', { confirm: true, keep: 3 });
+      ok(ar.status === 0, '带人工前言归档成功', out(ar).slice(0, 300));
+      const after = readFileSync(path.join(preRoot, 'LOG.md'), 'utf8');
+      ok(/^# 自定义 LOG 标题/m.test(after) && /必须保留的人工说明/.test(after), '人工 H1 与说明原样保留', after.slice(0, 300));
+    } finally { rmSync(preRoot, { recursive: true, force: true }); }
+  }
 
   console.log('\n== 幂等:低于保留条件 → no-op ==');
   writeFileSync(logPath, ['# 会话日志(最新在上)', '', '## 2026-01-01 10:00 | model=x | task=维护', '- 摘要: only one', ''].join('\n'));

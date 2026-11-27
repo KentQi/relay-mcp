@@ -1,6 +1,8 @@
-// relay-mcp — src/util.mjs (W2)
+// relay-mcp — 公共文件/Git/锁/结果助手
 // 零依赖公共助手:fs / git / 时间戳。仅使用 node: 内置模块。
-import { readFile, writeFile, mkdir, rename, stat, lstat, unlink, utimes, open as fsOpen2 } from 'node:fs/promises';
+import {
+  access, readFile, readdir, writeFile, mkdir, rename, link, stat, lstat, unlink, utimes, open as fsOpen2,
+} from 'node:fs/promises';
 import { writeFileSync } from 'node:fs';
 import { realpath } from 'node:fs/promises';
 import path from 'node:path';
@@ -36,14 +38,31 @@ if (TRACE_FILE) {
 export const templatesDir = () =>
   path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', 'templates');
 
+export const toolOk = (text) => ({ content: [{ type: 'text', text }], isError: false });
+export const toolError = (text) => ({ content: [{ type: 'text', text }], isError: true });
+export const toolText = (text, isError = false) => isError ? toolError(text) : { content: [{ type: 'text', text }] };
+
+export const pathExists = async (p) => {
+  try { await access(p); return true; } catch { return false; }
+};
+
+export const firstLine = (value, maxLength = 160) =>
+  (String(value || '').trim().split('\n')[0] || '').slice(0, maxLength);
+
 // 读文件,不存在(或不可读)返回 fallback
-export const readFileSafe = async (p, fallback = null) => {
+export const readFileSafe = async (p, fallback = null, { onlyMissing = false } = {}) => {
   traceRead(p);
   try {
     return await readFile(p, 'utf8');
-  } catch {
+  } catch (e) {
+    if (onlyMissing && e?.code !== 'ENOENT') throw e;
     return fallback;
   }
+};
+
+export const readTextOrNull = async (p) => {
+  const text = await readFileSafe(p, null);
+  return typeof text === 'string' ? text : null;
 };
 
 // 已存在则返回 false 不覆盖;成功写入返回 true;其余错误向上抛
@@ -55,6 +74,29 @@ export const writeFileIfAbsent = async (p, content) => {
     if (e && e.code === 'EEXIST') return false;
     throw e;
   }
+};
+
+// 自动备份最多保留 20 份。备份是运行时恢复面,不能无限增长;按文件名中的
+// 秒级时间戳和同秒序号保留最新,不让旧备份长期挤占工作树。
+export const MAX_BACKUP_FILES = 20;
+export const pruneBackupFiles = async (target) => {
+  const dir = path.dirname(target);
+  const prefix = `${path.basename(target)}.relay-bak-`;
+  const escaped = prefix.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const engineGenerated = new RegExp(
+    `^${escaped}(?:\\d{14}(?:-\\d+)?|new-\\d+-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$`,
+  );
+  const names = (await readdir(dir)).filter((name) => engineGenerated.test(name));
+  const ranked = await Promise.all(names.map(async (name) => {
+    const st = await stat(path.join(dir, name)).catch(() => null);
+    return { name, mtimeMs: st?.mtimeMs || 0 };
+  }));
+  names.sort((a, b) => {
+    const at = ranked.find((row) => row.name === a)?.mtimeMs || 0;
+    const bt = ranked.find((row) => row.name === b)?.mtimeMs || 0;
+    return bt - at || b.localeCompare(a);
+  });
+  await Promise.all(names.slice(MAX_BACKUP_FILES).map((name) => unlink(path.join(dir, name)).catch(() => {})));
 };
 
 // 存在则改名为 <p>.relay-bak-<yyyyMMddHHmmss>,返回新路径;不存在返回 null
@@ -73,11 +115,24 @@ export const backupFile = async (p) => {
     `${pad(d.getHours())}${pad(d.getMinutes())}${pad(d.getSeconds())}`;
   // 同一秒内多次 force/onboard(CI、脚本循环)会撞名:rename 到已存在路径会**覆盖**前一份备份。
   // 加序号保证每次备份都独立存在(审计 P2:原 LOG 的备份被后一份覆盖丢失)。
-  let backup = `${p}.relay-bak-${ts}`;
-  for (let i = 2; i < 1000; i++) {
-    try { await lstat(backup); backup = `${p}.relay-bak-${ts}-${i}`; } catch { break; }
+  const sameSecond = (await readdir(path.dirname(p)))
+    .map((name) => name.match(new RegExp(`^${path.basename(p).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\.relay-bak-${ts}(?:-(\\d+))?$`)))
+    .filter(Boolean)
+    .map((match) => Number(match[1]) || 1);
+  const nextSequence = sameSecond.length ? Math.max(...sameSecond) + 1 : 1;
+  let backup = nextSequence === 1
+    ? `${p}.relay-bak-${ts}`
+    : `${p}.relay-bak-${ts}-${nextSequence}`;
+  for (let i = nextSequence; ; i++) {
+    try {
+      await lstat(backup);
+      backup = `${p}.relay-bak-${ts}-${i + 1}`;
+    } catch {
+      break;
+    }
   }
   await rename(p, backup);
+  await pruneBackupFiles(p).catch(() => {});
   return backup;
 };
 
@@ -133,6 +188,13 @@ export const gitRun = async (root, ...rest) => {
   }
 };
 
+// NUL 分隔保留文件名原样;关闭 rename 推断使重命名的两端各自成为独立记录。
+export const gitStatusPaths = async (root) => {
+  const status = await gitRun(root, 'status', '--porcelain', '-z', '--no-renames', '-uall');
+  const paths = status.ok ? status.stdout.split('\0').filter(Boolean).map((record) => record.slice(3)) : [];
+  return { ...status, paths };
+};
+
 // recursive mkdir
 export const ensureDir = async (p) => {
   await mkdir(p, { recursive: true });
@@ -167,28 +229,36 @@ export const nowIso = () => new Date().toISOString();
 // —— 疑似密钥文件守卫(H3/H-B):在场即不自动提交,强制人类过目 ——
 // 单一实现,session_end / init / onboard / restructure 各自动提交点共用
 export const SECRET_RULES = [
-  [/(^|\/)\.env(\..+)?$/i, '.env 疑似密钥'],
+  [/(^|\/)\.env(\.[^/]+)?$/i, '.env 疑似密钥'],
   [/(^|\/)[^/]*secret[^/]*$/i, '文件名含 secret'],
   [/(^|\/)[^/]*credential[^/]*$/i, '文件名含 credential'],
   [/\.(key|pem)$/i, '*.key / *.pem 私钥'],
-  [/(^|\/)id_rsa(\..+)?$/i, 'id_rsa 私钥'],
+  [/(^|\/)id_rsa(\.[^/]+)?$/i, 'id_rsa 私钥'],
 ];
+/** @internal 旧 porcelain 文本调用方兼容。引擎使用 findSensitivePaths 处理原始路径。 */
 export const findSensitiveChanges = (statusLines) => {
-  const hits = new Map();
+  const paths = [];
   for (const line of statusLines || []) {
     if (line.length < 4) continue;
     for (const raw of line.slice(3).split(' -> ')) {
       let p = raw.trim();
       if (p.length >= 2 && p.startsWith('"') && p.endsWith('"')) p = p.slice(1, -1);
-      const rule = SECRET_RULES.find(([re]) => re.test(p));
-      if (rule) hits.set(p, rule[1]);
+      paths.push(p);
     }
+  }
+  return findSensitivePaths(paths);
+};
+export const findSensitivePaths = (paths) => {
+  const hits = new Map();
+  for (const p of paths) {
+    const rule = SECRET_RULES.find(([re]) => re.test(p));
+    if (rule) hits.set(p, rule[1]);
   }
   return [...hits.entries()].map(([path, why]) => ({ path, why })).sort((a, b) => a.path.localeCompare(b.path));
 };
 
 // —— 协议文件内容级密钥扫描(R11)——
-// 上面的 SECRET_RULES/findSensitiveChanges 只看路径,不看内容;这里补内容级。
+// SECRET_RULES/findSensitivePaths 只看路径;这里补内容级扫描。
 // 规则刻意窄:宁可漏掉冷门格式,也不要误报把出场绿闸变成噪音源。
 // 一行只报一条,preview 只保留前 4 字符——扫描结果会进简报/LOG,绝不能回显完整密钥。
 export const SECRET_OK_MARKER = 'relay:secret-ok';
@@ -310,12 +380,28 @@ export const assertNotSymlinkFile = async (p, label = '') => {
 };
 
 // 原子写:同目录临时文件 + rename,失败清理;可选 fencing 回调在 rename 之前复核锁仍属于本会话。
-export const writeFileAtomic = async (target, content, { fencing = null, label = '' } = {}) => {
+export const writeFileAtomic = async (
+  target,
+  content,
+  { fencing = null, label = '', createOnly = false, expectedHash = null } = {},
+) => {
   await assertNotSymlinkFile(target, label);
   const dir = path.dirname(target);
   const dirStat = await lstat(dir).catch(() => null);
   if (dirStat && dirStat.isSymbolicLink()) {
     throw new Error(`${label || target} 所在目录是符号链接(${dir}),拒绝写入`);
+  }
+  const initialStat = expectedHash == null ? null : await lstat(target).catch((e) => {
+    if (e?.code === 'ENOENT') return null;
+    throw e;
+  });
+  if (expectedHash != null) {
+    const current = await readFile(target, 'utf8').catch((e) => {
+      if (e?.code === 'ENOENT') return '';
+      throw e;
+    });
+    const actual = sha256Hex(current);
+    if (actual !== expectedHash) throw new ProtocolConflictError(label || path.basename(target), { expected: expectedHash, actual });
   }
   const tmp = path.join(dir, `.${path.basename(target)}.relay-tmp-${process.pid}-${randomUUID()}`);
   try {
@@ -326,7 +412,38 @@ export const writeFileAtomic = async (target, content, { fencing = null, label =
         throw new Error(`锁 fencing 校验失败:${verdict?.warning || '写入前发现仓库锁已不属于当前会话'}`);
       }
     }
-    await rename(tmp, target);
+    if (expectedHash != null) {
+      // 便携式 Node 没有原子的内容 compare-and-swap。这里在发布前重读内容、inode、
+      // mtime 与 size,把 check→rename 窗口压到最小;非协作写入仍可能在最后一条指令前抢入,
+      // 但正常编辑器和并发 relay 进程会在确定性测试覆盖的窗口内被拒绝。
+      const finalStat = await lstat(target).catch((e) => {
+        if (e?.code === 'ENOENT') return null;
+        throw e;
+      });
+      const sameIdentity = initialStat == null
+        ? finalStat == null
+        : !!finalStat
+          && finalStat.dev === initialStat.dev
+          && finalStat.ino === initialStat.ino
+          && finalStat.size === initialStat.size
+          && finalStat.mtimeMs === initialStat.mtimeMs;
+      const current = await readFile(target, 'utf8').catch((e) => {
+        if (e?.code === 'ENOENT') return '';
+        throw e;
+      });
+      const actual = sha256Hex(current);
+      if (!sameIdentity || actual !== expectedHash) {
+        throw new ProtocolConflictError(label || path.basename(target), { expected: expectedHash, actual });
+      }
+    }
+    if (!createOnly) {
+      await rename(tmp, target);
+    } else {
+      // link 同样原子发布完整内容,且目标已存在时不会替换原文件。
+      try { await link(tmp, target); }
+      catch (e) { if (e?.code === 'EEXIST') return false; throw e; }
+    }
+    return true;
   } finally {
     await unlink(tmp).catch(() => { /* 已 rename 或写失败 */ });
   }
@@ -338,6 +455,7 @@ export const checkProtocolFilesSafe = async (root) => {
   try {
     for (const name of PROTOCOL_FILE_NAMES) await assertNotSymlinkFile(path.join(root, name), name);
     await assertNoSymlinkComponents(root, '.relay', '.relay 目录');
+    await assertNotSymlinkFile(path.join(root, '.relay', 'last-failure.json'), '.relay/last-failure.json');
     return { ok: true, error: '' };
   } catch (e) {
     return { ok: false, error: e?.message || String(e) };
@@ -370,7 +488,7 @@ export class ProtocolConflictError extends Error {
 export const writeProtocolFile = async (root, name, content, { token = '', lockLabel = '仓库写锁', expectedHash = '' } = {}) => {
   // 崩溃点矩阵(测试钩子):RELAY_CRASH_AT_WRITE=N 在第 N+1 次协议写之前立刻退出,
   // 用来验证「半途崩溃后重跑必收敛」。生产环境不设置该变量时行为完全不变。
-  if (process.env.RELAY_CRASH_AT_WRITE != null) {
+  if (process.env.RELAY_TEST_HOOKS === '1' && process.env.RELAY_CRASH_AT_WRITE != null) {
     const n = Number(process.env.RELAY_CRASH_AT_WRITE);
     globalThis.__relayProtocolWrites = (globalThis.__relayProtocolWrites || 0) + 1;
     if (Number.isFinite(n) && globalThis.__relayProtocolWrites > n) process.exit(137);
@@ -378,13 +496,9 @@ export const writeProtocolFile = async (root, name, content, { token = '', lockL
   const hits = scanSecrets(content); // 不接受标记豁免:模型可写的标记不能当绕过凭证
   if (hits.length) throw new ProtocolSecretError(hits, name);
   const target = path.join(root, name);
-  if (expectedHash) {
-    const current = await readFileSafe(target, null);
-    const actual = sha256Hex(current == null ? '' : current);
-    if (actual !== expectedHash) throw new ProtocolConflictError(name, { expected: expectedHash, actual });
-  }
   await writeFileAtomic(target, content, {
     label: name,
+    expectedHash: expectedHash || null,
     fencing: token
       ? async () => {
         const verdict = await verifyRepoLock(root, token);
@@ -409,8 +523,6 @@ const numEnv = (name, fallback, min) => {
 };
 let lockHeartbeatMs = numEnv('RELAY_LOCK_HEARTBEAT_MS', 20_000, 50);
 let emptyLockGraceMs = numEnv('RELAY_LOCK_EMPTY_GRACE_MS', 2_000, 10);
-/** @internal 零调用:仅保留为诊断/兼容面,不属于公共 API;计划 v2.0 删除。 */
-export const lockTiming = () => ({ heartbeatMs: lockHeartbeatMs, emptyGraceMs: emptyLockGraceMs });
 // 仅供冒烟测试缩短心跳/宽限(不改默认行为);返回还原函数。
 export const __setLockTimingForTest = ({ heartbeatMs, emptyGraceMs } = {}) => {
   const prev = { heartbeatMs: lockHeartbeatMs, emptyGraceMs: emptyLockGraceMs };
@@ -458,11 +570,39 @@ export const parseLockContent = (raw) => {
   return { holder, token, acquiredAt, legacy: true, empty: !token, corrupt: !token };
 };
 
+// 认领锁(heartbeat:false)以锁内 acquiredAt 为唯一年龄真相源;仓库写锁用心跳刷新的 mtime。
+// 无法证明过期时绝不接管:旧文本缺时间、空锁/损坏锁都交给宽限期或人工诊断。
+export const DEFAULT_CLAIM_TTL_MINUTES = 240;
+export const claimLockExpiry = (info, { now = Date.now(), defaultTtlMinutes = DEFAULT_CLAIM_TTL_MINUTES, overrideTtlMinutes = null } = {}) => {
+  // 优先级:调用方本次显式 TTL(ttl_minutes 覆盖)> 锁内记录的真实 TTL > 默认 240。
+  // 若固定优先锁内值,调用方传更短 TTL 想强制接管时会被旧锁记录的 240 分钟挡住。
+  const hasOverride = Number.isFinite(overrideTtlMinutes) && overrideTtlMinutes > 0;
+  const hasLockTtl = Number.isFinite(info?.ttlMinutes) && info.ttlMinutes > 0;
+  const ttlMinutes = hasOverride ? overrideTtlMinutes : (hasLockTtl ? info.ttlMinutes : defaultTtlMinutes);
+  const ttlSource = hasOverride ? 'override' : (hasLockTtl ? 'lock' : 'default');
+  if (!info?.token) return { expired: false, ageMinutes: null, ttlMinutes, ttlSource, reason: 'missing-token' };
+  const acquiredMs = info.acquiredAt ? Date.parse(info.acquiredAt) : NaN;
+  if (!Number.isFinite(acquiredMs)) {
+    return { expired: false, ageMinutes: null, ttlMinutes, ttlSource, reason: 'missing-or-invalid-acquiredAt' };
+  }
+  const ageMinutes = Math.max(0, now - acquiredMs) / 60000;
+  return {
+    expired: ageMinutes > ttlMinutes,
+    ageMinutes, ttlMinutes, ttlSource,
+    reason: ageMinutes > ttlMinutes ? 'ttl-expired' : 'within-ttl',
+  };
+};
+
 const readLockSnapshot = async (file) => {
-  // 锁路径被替换成符号链接:拒绝按内容接管/释放(可能把操作引到仓库外)。
-  const lst = await lstat(file).catch(() => null);
-  if (lst && lst.isSymbolicLink()) {
+  // 锁路径必须是稳定普通文件。读取前后各取一次 lstat,把 symlink/inode 替换
+  // 和边读边改写压成 fail-closed,供 acquire/check/release 共用。
+  const before = await lstat(file).catch(() => null);
+  if (!before) return null;
+  if (before.isSymbolicLink()) {
     return { unsafe: 'symlink', raw: '', info: { holder: '(符号链接)', token: '', acquiredAt: '', legacy: false, empty: false, corrupt: true }, ageMs: 0 };
+  }
+  if (!before.isFile()) {
+    return { unsafe: 'not-file', raw: '', info: { holder: '(非普通文件)', token: '', acquiredAt: '', legacy: false, empty: false, corrupt: true }, ageMs: 0 };
   }
   let raw;
   try {
@@ -471,11 +611,43 @@ const readLockSnapshot = async (file) => {
     if (e && e.code === 'ENOENT') return null;
     throw e;
   }
-  const st = await stat(file).catch(() => null);
+  const after = await lstat(file).catch(() => null);
+  if (!after || after.isSymbolicLink() || !after.isFile()) {
+    return {
+      unsafe: !after ? 'disappeared' : (after.isSymbolicLink() ? 'symlink' : 'not-file'),
+      raw: '', info: parseLockContent(raw), ageMs: 0,
+    };
+  }
+  const sameIdentity = before.dev === after.dev
+    && before.ino === after.ino
+    && before.size === after.size
+    && before.mtimeMs === after.mtimeMs;
+  if (!sameIdentity) {
+    return { unsafe: 'changed', raw: '', info: parseLockContent(raw), ageMs: Math.max(0, Date.now() - after.mtimeMs) };
+  }
   const info = parseLockContent(raw);
-  const ageMs = st ? Math.max(0, Date.now() - st.mtimeMs) : 0;
-  return { raw, info, ageMs };
+  const ageMs = Math.max(0, Date.now() - after.mtimeMs);
+  return {
+    raw, info, ageMs,
+    dev: after.dev, ino: after.ino, size: after.size, mtimeMs: after.mtimeMs,
+  };
 };
+
+const lockUnsafeReason = (unsafe) => {
+  if (unsafe === 'symlink') return '符号链接';
+  if (unsafe === 'not-file') return '非普通文件';
+  if (unsafe === 'changed') return '同路径的其他文件';
+  if (unsafe === 'disappeared') return '已消失';
+  return String(unsafe || '未知变化');
+};
+
+const sameLockSnapshot = (a, b) => !!a && !!b
+  && !a.unsafe && !b.unsafe
+  && a.dev === b.dev
+  && a.ino === b.ino
+  && a.size === b.size
+  && a.mtimeMs === b.mtimeMs
+  && a.raw === b.raw;
 
 // 通用文件锁(仓库写锁 / 认领锁共用):
 //   · O_EXCL 创建后立刻写 JSON;写失败清理锁文件(不留空锁)
@@ -502,14 +674,16 @@ export const acquireFileLock = async (root, relPath, holder, {
   const token = randomUUID();
   const acquiredAt = new Date().toISOString();
   const deadline = Date.now() + waitMs;
+  const newLockTtl = ttlMinutes ?? (heartbeat ? null : staleMs / 60000);
   let tookOver = '';
+  let waitSignalSent = false;
   for (;;) {
     let handle = null;
     let opened = false;
     try {
       handle = await fsOpen2(file, 'wx');
       opened = true;
-      await handle.writeFile(serializeLock({ holder, token, acquiredAt, ttlMinutes }), 'utf8');
+      await handle.writeFile(serializeLock({ holder, token, acquiredAt, ttlMinutes: newLockTtl }), 'utf8');
       await handle.close();
       handle = null;
       return makeLockHandle({ root: rootAbs, relPath, file, token, holder, created: true, tookOver, label, heartbeat });
@@ -522,38 +696,79 @@ export const acquireFileLock = async (root, relPath, holder, {
         throw e;
       }
     }
-    const snap = await readLockSnapshot(file).catch(() => null);
+    // 所有循环路径共享同一 deadline;ENOENT 可立即重试,其余读取错误(含 EACCES)直接有界失败,
+    // 不再把异常吞成 continue 形成永久忙等。非 ENOENT 不 unlink,避免误删他人锁。
+    if (Date.now() >= deadline && waitMs > 0) {
+      const timedOutSnap = await readLockSnapshot(file).catch(() => null);
+      const holder = timedOutSnap?.info?.holder || '(未知)';
+      return { ok: false, holder, ageMs: timedOutSnap?.ageMs || 0, ageMin: (timedOutSnap?.ageMs || 0) / 60000, staleMs, label, warning: `${label}等待超时(${waitMs}ms)` };
+    }
+    let snap;
+    try {
+      snap = await readLockSnapshot(file);
+    } catch (e) {
+      if (e && e.code === 'ENOENT') continue;
+      throw e;
+    }
     if (!snap) continue; // 锁刚好消失 → 立即重试抢位
-    if (snap.unsafe) throw new Error(`${label}路径是符号链接,拒绝接管:${file}`);
+    if (snap.unsafe) {
+      // 获取路径上的 changed/disappeared 是另一个进程正在 O_EXCL 创建或刚释放的
+      // 瞬态;在总 deadline 内重试。symlink/非普通文件仍是安全拒绝。
+      if (snap.unsafe === 'changed' || snap.unsafe === 'disappeared') continue;
+      const why = snap.unsafe === 'symlink'
+        ? '路径是符号链接'
+        : `路径在读取期间变为 ${lockUnsafeReason(snap.unsafe)}`;
+      throw new Error(`${label}${why},拒绝接管`);
+    }
     const lockHolder = snap.info.holder || '(未知持有者)';
     if (sameHolder && sameHolder(snap.info.holder)) {
       // 同持有者幂等:沿用既有 token;旧格式缺 token 时原子补写(不再用非原子 writeFile)
       let adoptToken = snap.info.token;
       if (!adoptToken) {
         adoptToken = token;
-        await writeFileAtomic(file, serializeLock({ holder: lockHolder, token: adoptToken, acquiredAt: snap.info.acquiredAt || acquiredAt }), { label });
+        await writeFileAtomic(file, serializeLock({
+          holder: lockHolder, token: adoptToken, acquiredAt: snap.info.acquiredAt || acquiredAt, ttlMinutes: newLockTtl,
+        }), { label, expectedHash: sha256Hex(snap.raw) });
       }
       return makeLockHandle({ root: rootAbs, relPath, file, token: adoptToken, holder: lockHolder, created: false, tookOver: '', label, heartbeat });
     }
     const halfInitialized = !snap.info.token;
-    const staleThreshold = halfInitialized ? emptyLockGraceMs : staleMs;
-    if (snap.ageMs > staleThreshold) {
-      // 删除前复核内容,避免把等待期间换上的新锁当成旧锁;换上的新锁内容不同 → 不删。
+    // 空锁仍走 mtime 宽限期(acquiredAt 不存在);完整认领锁只按 acquiredAt 的精确毫秒裁决。
+    const expiry = !heartbeat && !halfInitialized
+      ? claimLockExpiry(snap.info, {
+        defaultTtlMinutes: Number.isFinite(staleMs) ? staleMs / 60000 : DEFAULT_CLAIM_TTL_MINUTES,
+        overrideTtlMinutes: Number.isFinite(ttlMinutes) && ttlMinutes > 0 ? ttlMinutes : null,
+      })
+      : null;
+    const canTakeOver = halfInitialized
+      ? snap.ageMs > emptyLockGraceMs
+      : expiry ? expiry.expired : snap.ageMs > staleMs;
+    if (canTakeOver) {
+      // 删除前复核内容与 inode;等待期间换上的新锁即使正文完全相同也不能删。
       try {
-        const rawAgain = String(await readFile(file, 'utf8'));
-        if (rawAgain === snap.raw) {
+        const finalSnap = await readLockSnapshot(file);
+        if (sameLockSnapshot(snap, finalSnap)) {
           await unlink(file);
           tookOver = lockHolder;
           if (onTakeover) onTakeover(lockHolder);
         }
-      } catch { /* 别的等待者已接管 */ }
+      } catch (e) {
+        // ENOENT = 别的等待者已删除;EACCES/其它错误不能伪装成「已接管」。
+        if (!e || e.code !== 'ENOENT') throw e;
+      }
       continue;
     }
+    if (!waitSignalSent && process.env.RELAY_TEST_HOOKS === '1' && process.env.RELAY_TEST_LOCK_WAIT_SIGNAL) {
+      await writeFile(process.env.RELAY_TEST_LOCK_WAIT_SIGNAL, `${holder}\n${lockHolder}\n`, 'utf8');
+      waitSignalSent = true;
+    }
     if (Date.now() >= deadline) {
+      const ageMs = expiry && expiry.ageMinutes != null ? expiry.ageMinutes * 60000 : snap.ageMs;
       return {
-        ok: false, holder: lockHolder, ageMs: snap.ageMs, ageMin: snap.ageMs / 60000,
+        ok: false, holder: snap.info.holder || '(未知持有者)', ageMs, ageMin: ageMs / 60000,
+        ttlMin: expiry?.ttlMinutes,
         staleMs, label,
-        warning: `${label}被 ${lockHolder} 持有(约 ${Math.round(snap.ageMs / 1000)}s)`,
+        warning: `${label}被 ${snap.info.holder || '(未知持有者)'} 持有(约 ${Math.round(ageMs / 1000)}s)${expiry ? `;${expiry.reason}` : ''}`,
       };
     }
     await new Promise((r) => setTimeout(r, 200));
@@ -563,6 +778,7 @@ export const acquireFileLock = async (root, relPath, holder, {
 const makeLockHandle = ({ root, relPath, file, token, holder, created, tookOver, label, heartbeat = true }) => {
   let lost = false;
   let heartbeatTimer = null;
+  let heartbeatInFlight = null;
   const check = async () => {
     const snap = await readLockSnapshot(file).catch(() => null);
     if (!snap) {
@@ -571,7 +787,7 @@ const makeLockHandle = ({ root, relPath, file, token, holder, created, tookOver,
     }
     if (snap.unsafe) {
       lost = true;
-      return { ok: false, held: false, warning: `${label}路径被替换为符号链接` };
+      return { ok: false, held: false, warning: `${label}路径在复核期间变为${lockUnsafeReason(snap.unsafe)}` };
     }
     if (snap.info.token !== token) {
       // 兼容:旧格式/半初始化锁若已被同持有者补写 token,以内容为准
@@ -590,10 +806,18 @@ const makeLockHandle = ({ root, relPath, file, token, holder, created, tookOver,
   };
   const stopHeartbeat = () => { if (heartbeatTimer) { clearInterval(heartbeatTimer); heartbeatTimer = null; } };
   if (heartbeat && lockHeartbeatMs > 0) {
-    heartbeatTimer = setInterval(() => { touch().catch(() => {}); }, lockHeartbeatMs);
+    heartbeatTimer = setInterval(() => {
+      if (heartbeatInFlight) return;
+      heartbeatInFlight = touch().catch(() => {}).finally(() => { heartbeatInFlight = null; });
+    }, lockHeartbeatMs);
     if (heartbeatTimer && typeof heartbeatTimer.unref === 'function') heartbeatTimer.unref();
   }
-  const release = async () => { stopHeartbeat(); return releaseFileLock(root, relPath, token, label); };
+  const release = async () => {
+    stopHeartbeat();
+    // 等已在途的心跳结算,避免 release 首个快照后又发生 utimes,把自家的正常释放误判为替换。
+    if (heartbeatInFlight) await heartbeatInFlight;
+    return releaseFileLock(root, relPath, token, label);
+  };
   return {
     ok: true, created, tookOver, token, holder, label, file, relPath,
     check, release, stopHeartbeat,
@@ -608,9 +832,38 @@ export const releaseFileLock = async (root, relPath, token, label = '文件锁')
   const snap = await readLockSnapshot(file).catch((e) => ({ error: e }));
   if (snap && snap.error) return { ok: false, released: false, warning: `${label}释放失败:${snap.error?.message || String(snap.error)}` };
   if (!snap) return { ok: true, released: false, warning: '' };
-  if (snap.unsafe) return { ok: false, released: false, warning: `${label}路径是符号链接,拒绝释放:${file}` };
+  if (snap.unsafe) return { ok: false, released: false, warning: `${label}路径在读取期间变为${lockUnsafeReason(snap.unsafe)},拒绝释放:${file}` };
   if (snap.info.token !== token) {
     return { ok: false, released: false, warning: `${label}未释放:token 不匹配(当前持有者 ${snap.info.holder || '(未知)'}),锁可能已被接管` };
+  }
+  if (process.env.RELAY_TEST_HOOKS === '1' && process.env.RELAY_TEST_RELEASE_LOCK_SIGNAL) {
+    const signal = process.env.RELAY_TEST_RELEASE_LOCK_SIGNAL;
+    const go = process.env.RELAY_TEST_RELEASE_LOCK_GO;
+    try {
+      await writeFile(signal, `${snap.info.token}\n`, 'utf8');
+      const waitUntil = Date.now() + 10_000;
+      while (Date.now() < waitUntil) {
+        if (go && await pathExists(go)) break;
+        await new Promise((done) => setTimeout(done, 10));
+      }
+    } catch (e) {
+      return { ok: false, released: false, warning: `${label}释放复核屏障失败:${e?.message || String(e)}` };
+    }
+  }
+  const finalSnap = await readLockSnapshot(file).catch((e) => ({ error: e }));
+  if (finalSnap?.error) {
+    return { ok: false, released: false, warning: `${label}最终复核失败:${finalSnap.error?.message || String(finalSnap.error)}` };
+  }
+  if (!finalSnap) return { ok: true, released: false, warning: `${label}已被其他进程释放` };
+  if (finalSnap.unsafe) {
+    return { ok: false, released: false, warning: `${label}路径在释放前变为${lockUnsafeReason(finalSnap.unsafe)},拒绝删除:${file}` };
+  }
+  if (!sameLockSnapshot(snap, finalSnap) || finalSnap.info.token !== token) {
+    return {
+      ok: false,
+      released: false,
+      warning: `${label}在释放前被替换或改写(当前持有者 ${finalSnap.info.holder || '(未知)'}),未删除他人锁`,
+    };
   }
   try {
     await unlink(file);
@@ -625,7 +878,7 @@ export const verifyRepoLock = async (root, token) => {
   const file = path.join(path.resolve(root), REPO_LOCK_REL);
   const snap = await readLockSnapshot(file).catch(() => null);
   if (!snap) return { ok: true, held: false, warning: '仓库锁不在场' };
-  if (snap.unsafe) return { ok: false, held: false, warning: '仓库锁路径是符号链接,拒绝按内容校验归属' };
+  if (snap.unsafe) return { ok: false, held: false, warning: `仓库锁路径在读取期间变为${lockUnsafeReason(snap.unsafe)},拒绝按内容校验归属` };
   if (snap.info.token !== token) {
     return { ok: false, held: false, holder: snap.info.holder, warning: `仓库锁现持有者 ${snap.info.holder || '(未知)'}` };
   }

@@ -1,11 +1,12 @@
 #!/usr/bin/env node
 // worktree 生命周期与锁所有权端到端回归。
-import { mkdtempSync, rmSync, existsSync, readFileSync, writeFileSync, mkdirSync, realpathSync, renameSync, chmodSync, readdirSync, symlinkSync, utimesSync, statSync } from 'node:fs';
+import { mkdtempSync, rmSync, existsSync, readFileSync, writeFileSync, appendFileSync, mkdirSync, realpathSync, renameSync, chmodSync, readdirSync, symlinkSync, utimesSync, statSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { execFileSync } from 'node:child_process';
 import { dispatch } from '../src/contract.mjs';
+import { listUnmergedTaskBranches } from '../src/engines/worktree.mjs';
 import { acquireRepoLock, releaseRepoLock, serializeLock, writeProtocolFile, __setLockTimingForTest } from '../src/util.mjs';
 
 const RELAY = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -34,9 +35,19 @@ const freshRepo = async (tag) => {
   return root;
 };
 const resultText = (result) => result?.content?.[0]?.text || '';
-const git = (root, ...args) => execFileSync('git', ['-C', root, ...args], { encoding: 'utf8' }).trim();
+const gitExecutable = () => process.platform === 'win32' ? 'git' : String.raw`$(command -v git)`;
+// 夹具直接执行 git(不经 shell),用于建 worktree / 读 HEAD / 造 hook。
+const git = (cwd, ...args) => execFileSync('git', ['-C', cwd, ...args], { encoding: 'utf8' }).trim();
 const OLD = '2000-01-01T00:00:00.000Z';
-const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+const waitUntil = async (predicate, { timeoutMs = 2000, intervalMs = 10 } = {}) => {
+  const deadline = Date.now() + timeoutMs;
+  for (;;) {
+    const value = await predicate();
+    if (value) return value;
+    if (Date.now() >= deadline) return value;
+    await new Promise((resolve) => setTimeout(resolve, intervalMs));
+  }
+};
 const lockFileOf = (root) => path.join(root, '.relay', 'relay.lock');
 const addWorktree = (root, task, recordPath = `.relay/worktrees/${task}`) => {
   const target = path.resolve(root, recordPath);
@@ -53,7 +64,16 @@ try {
   {
     const root = await freshRepo('ttl');
     await dispatch('relay_claim', { root, task: 'T003', model: 'model-A' });
-    await new Promise((resolve) => setTimeout(resolve, 20));
+    // TTL 按锁内 acquiredAt 的精确毫秒判定。轮询锁记录本身,避免用固定 sleep 猜测边界。
+    const claimPath = path.join(root, '.relay', 'claims', 'T003.lock');
+    await waitUntil(() => {
+      try {
+        const acquiredAt = Date.parse(JSON.parse(readFileSync(claimPath, 'utf8')).acquiredAt);
+        return Number.isFinite(acquiredAt) && Date.now() >= acquiredAt + 0.06;
+      } catch {
+        return false;
+      }
+    }, { timeoutMs: 1_000, intervalMs: 1 });
     const takeover = await dispatch('relay_claim', { root, task: 'T003', model: 'model-B', ttl_minutes: 0.000001 });
     ok(!takeover.isError && readFileSync(path.join(root, 'TASKS.md'), 'utf8').includes('[~] T003'), 'L1: 另一模型可在 TTL 到期后接管', resultText(takeover));
   }
@@ -276,8 +296,18 @@ try {
     const root = await freshRepo('ownership-race');
     await dispatch('relay_claim', { root, task: 'T003', model: 'model-A', worktree: false });
     const waiting = await acquireRepoLock(root, 'ownership-race-barrier', { waitMs: 0 });
+    const waitSignal = path.join(root, '.relay', 'ownership-race-waiting');
+    const previousTestHooks = process.env.RELAY_TEST_HOOKS;
+    const previousWaitSignal = process.env.RELAY_TEST_LOCK_WAIT_SIGNAL;
+    process.env.RELAY_TEST_HOOKS = '1';
+    process.env.RELAY_TEST_LOCK_WAIT_SIGNAL = waitSignal;
     const pending = dispatch('relay_session_end', { root, model: 'model-A', summary: '等待锁期间被接管', done_task: 'T003' });
-    await new Promise((resolve) => setTimeout(resolve, 100));
+    const waitObserved = await waitUntil(() => existsSync(waitSignal), { timeoutMs: 3_000 });
+    if (previousTestHooks == null) delete process.env.RELAY_TEST_HOOKS;
+    else process.env.RELAY_TEST_HOOKS = previousTestHooks;
+    if (previousWaitSignal == null) delete process.env.RELAY_TEST_LOCK_WAIT_SIGNAL;
+    else process.env.RELAY_TEST_LOCK_WAIT_SIGNAL = previousWaitSignal;
+    ok(waitObserved, 'L4: session_end 已到达仓库锁等待点', waitSignal);
     const tasksPath = path.join(root, 'TASKS.md');
     writeFileSync(tasksPath, readFileSync(tasksPath, 'utf8').replace(/\(model-A, /, '(model-B, '));
     writeFileSync(path.join(root, '.relay', 'claims', 'T003.lock'), `model-B\n${new Date().toISOString()}\nowner-B\n`);
@@ -325,6 +355,82 @@ try {
     ok(bad.isError && /伪 SHA|baseSha/.test(resultText(bad)), 'L5-B: HEAD==baseSha 且无改动 → 伪 SHA 拒绝', resultText(bad));
     ok(/\[~\] T003/.test(tasks) && !/\[x\] T003/.test(tasks) && existsSync(path.join(root, '.relay', 'claims', 'T003.lock')), 'L5-B: 伪 SHA 不盖完成章、不释放认领锁');
   }
+  {
+    // 已提交到任务分支的 TASKS/LOG 漂移也属于控制面越权,不能只靠 git status 干净绕过。
+    const root = await freshRepo('committed-protocol-drift');
+    await dispatch('relay_claim', { root, task: 'T003', model: 'model-A' });
+    const executionRoot = path.join(root, '.relay', 'worktrees', 'T003');
+    mkdirSync(path.join(executionRoot, 'src'), { recursive: true });
+    writeFileSync(path.join(executionRoot, 'src', 'drift.js'), 'export const drift = 1;\n');
+    appendFileSync(path.join(executionRoot, 'TASKS.md'), '\n- [x] T999 伪造完成  (2026-11-28)\n');
+    appendFileSync(path.join(executionRoot, 'LOG.md'), '\n## 2026-11-28 00:00 | model=fake | task=T999 完成\n');
+    let driftCommitError = '';
+    try {
+      git(executionRoot, 'add', '-A');
+      git(executionRoot, '-c', 'user.name=p', '-c', 'user.email=p@x', 'commit', '-q', '-m', 'manual: protocol drift');
+    } catch (e) {
+      driftCommitError = e?.stderr || e?.stdout || e?.message || String(e);
+    }
+    ok(!driftCommitError, 'L5: 任务分支协议漂移夹具已提交', driftCommitError);
+    const ended = await dispatch('relay_session_end', {
+      root: executionRoot, model: 'model-A', summary: '已提交协议漂移', done_task: 'T003',
+    });
+    ok(ended.isError && /已提交协议文件改动|TASKS\.md\/LOG\.md/.test(resultText(ended)),
+      'L5: 已提交的协议文件漂移被拒', resultText(ended));
+    ok(/\[~\] T003/.test(readFileSync(path.join(root, 'TASKS.md'), 'utf8'))
+      && existsSync(path.join(root, '.relay', 'claims', 'T003.lock')), 'L5: 已提交漂移拒绝后不落完成、不释放锁');
+  }
+  {
+    // baseSha 不能只要求“是 HEAD 的祖先”:伪造到任务途中会吞掉之前提交里的协议漂移。
+    const root = await freshRepo('forged-base');
+    await dispatch('relay_claim', { root, task: 'T003', model: 'model-A' });
+    const executionRoot = path.join(root, '.relay', 'worktrees', 'T003');
+    mkdirSync(path.join(executionRoot, 'src'), { recursive: true });
+    writeFileSync(path.join(executionRoot, 'src', 'feature.js'), 'export const feature = 1;\n');
+    appendFileSync(path.join(executionRoot, 'TASKS.md'), '\n- [x] T997 伪造任务  (2026-11-28)\n');
+    git(executionRoot, 'add', '-A');
+    git(executionRoot, '-c', 'user.name=p', '-c', 'user.email=p@x', 'commit', '-q', '-m', 'manual: hidden protocol drift');
+    const forgedBase = git(executionRoot, 'rev-parse', 'HEAD');
+    const registryPath = path.join(root, '.relay', 'worktrees.json');
+    const registry = JSON.parse(readFileSync(registryPath, 'utf8'));
+    registry.worktrees.find((w) => w.task === 'T003').baseSha = forgedBase;
+    writeFileSync(registryPath, `${JSON.stringify(registry, null, 2)}\n`);
+    const ended = await dispatch('relay_session_end', {
+      root: executionRoot, model: 'model-A', summary: '伪造 registry base', done_task: 'T003',
+    });
+    ok(ended.isError && /baseSha|merge-base/.test(resultText(ended)),
+      'L5: registry baseSha 必须是真实 merge-base,不能截断任务历史', resultText(ended));
+    ok(/\[~\] T003/.test(readFileSync(path.join(root, 'TASKS.md'), 'utf8'))
+      && existsSync(path.join(root, '.relay', 'claims', 'T003.lock')),
+    'L5: 伪造 baseSha 拒绝后不标完成且保留认领锁');
+  }
+  {
+    // 协议文件“先改后回退”净 diff 为空,但历史提交已越权;必须按提交历史拒绝。
+    const root = await freshRepo('reverted-protocol-drift');
+    await dispatch('relay_claim', { root, task: 'T003', model: 'model-A' });
+    const executionRoot = path.join(root, '.relay', 'worktrees', 'T003');
+    const registry = JSON.parse(readFileSync(path.join(root, '.relay', 'worktrees.json'), 'utf8'));
+    const baseSha = registry.worktrees.find((w) => w.task === 'T003').baseSha;
+    appendFileSync(path.join(executionRoot, 'TASKS.md'), '\n- [x] T996 临时漂移  (2026-11-28)\n');
+    appendFileSync(path.join(executionRoot, 'LOG.md'), '\n## 2026-11-28 00:00 | model=fake | task=T996 完成\n');
+    git(executionRoot, 'add', '--', 'TASKS.md', 'LOG.md');
+    git(executionRoot, '-c', 'user.name=p', '-c', 'user.email=p@x', 'commit', '-q', '-m', 'manual: transient protocol drift');
+    git(executionRoot, 'checkout', baseSha, '--', 'TASKS.md', 'LOG.md');
+    mkdirSync(path.join(executionRoot, 'src'), { recursive: true });
+    writeFileSync(path.join(executionRoot, 'src', 'feature.js'), 'export const feature = 1;\n');
+    git(executionRoot, 'add', '-A');
+    git(executionRoot, '-c', 'user.name=p', '-c', 'user.email=p@x', 'commit', '-q', '-m', 'feat: source after revert');
+    ok(git(executionRoot, 'diff', '--name-only', baseSha, 'HEAD', '--', 'TASKS.md', 'LOG.md') === '',
+      'L5: 协议漂移回退后净 diff 为空(夹具真实覆盖历史扫描需求)');
+    const ended = await dispatch('relay_session_end', {
+      root: executionRoot, model: 'model-A', summary: '提交历史中曾有协议漂移', done_task: 'T003',
+    });
+    ok(ended.isError && /历史提交.*TASKS\.md\/LOG\.md|协议文件改动/.test(resultText(ended)),
+      'L5: 协议文件先改后回退仍按完整提交历史拒绝', resultText(ended));
+    ok(/\[~\] T003/.test(readFileSync(path.join(root, 'TASKS.md'), 'utf8'))
+      && existsSync(path.join(root, '.relay', 'claims', 'T003.lock')),
+    'L5: 回退后的历史漂移拒绝不标完成且保留认领锁');
+  }
 
   console.log('\n== L6: 双提交与成对证据 ==');
   {
@@ -362,7 +468,7 @@ try {
     ok(git(root, 'status', '--porcelain') === '' && git(root, 'log', '-1', '--format=%s').includes('session end'), 'L6: managed 维护出场后 controlRoot 干净(LOG 已提交)');
   }
   {
-    // autoCommit=false:代码需人工提交;控制面明确标注"未提交",不得伪装成已落账
+    // autoCommit=false 可用于维护,但受管完成必须双提交;不得以 controlSha=null 假完成。
     const root = await freshRepo('autocommit-off');
     const manifestPath = path.join(root, '.relay', 'manifest.json');
     const manifest = JSON.parse(readFileSync(manifestPath, 'utf8'));
@@ -374,10 +480,16 @@ try {
     writeFileSync(path.join(executionRoot, 'src', 'manual.js'), 'export const manual = 1;\n');
     git(executionRoot, 'add', '-A');
     git(executionRoot, '-c', 'user.name=p', '-c', 'user.email=p@x', 'commit', '-m', 'manual: task code', '--quiet');
+    const tasksBefore = readFileSync(path.join(root, 'TASKS.md'), 'utf8');
+    const logBefore = readFileSync(path.join(root, 'LOG.md'), 'utf8');
     const ended = await dispatch('relay_session_end', { root: executionRoot, model: 'model-A', summary: 'autoCommit 关闭', done_task: 'T003' });
     const text = resultText(ended);
-    ok(!ended.isError && /控制面未提交/.test(text) && /autoCommit/.test(text), 'L6: autoCommit=false 时明确标注控制面未提交', text.slice(0, 1200));
-    ok(git(root, 'status', '--porcelain', '-uall').includes('TASKS.md') && git(root, 'status', '--porcelain', '-uall').includes('LOG.md'), 'L6: autoCommit=false 时 controlRoot 协议面确实未提交(如所标注)');
+    ok(ended.isError && /双提交|autoCommit/.test(text), 'L6: autoCommit=false 的受管完成 fail-closed', text.slice(0, 1200));
+    ok(readFileSync(path.join(root, 'TASKS.md'), 'utf8') === tasksBefore
+      && readFileSync(path.join(root, 'LOG.md'), 'utf8') === logBefore,
+    'L6: autoCommit=false 拒绝发生在协议面写盘之前');
+    ok(/\[~\] T003/.test(readFileSync(path.join(root, 'TASKS.md'), 'utf8'))
+      && existsSync(path.join(root, '.relay', 'claims', 'T003.lock')), 'L6: autoCommit=false 拒绝后保留任务与认领锁');
   }
   {
     // managed 出场时 controlRoot 上的误写代码:必须显式告警,不得伪装成"已提交"
@@ -425,6 +537,32 @@ try {
     ok(rv.isError && /R2/.test(text) && /双根模式/.test(text) && /controlRoot/.test(text) && /executionRoot 任务树/.test(text), 'L7: relay_verify 在 executionRoot 内同时检查双根并报任务树 R2 ERROR', text.slice(0, 1200));
     const ended = await dispatch('relay_session_end', { root: executionRoot, model: 'model-A', summary: '任务树违规', done_task: 'T003' });
     ok(ended.isError && /R2/.test(resultText(ended)) && /executionRoot/.test(resultText(ended)) && !/\[x\] T003/.test(readFileSync(path.join(root, 'TASKS.md'), 'utf8')), 'L7: 出场绿闸覆盖 executionRoot 任务树(R2 ERROR 阻断)', resultText(ended));
+  }
+  {
+    // 注册表投毒:任意外部 linked worktree + 错任务分支不得被当作受管完成授权。
+    const root = await freshRepo('registry-poison');
+    const claim = await dispatch('relay_claim', { root, task: 'T003', model: 'model-A', worktree: false });
+    ok(!claim.isError, 'L7: 注册表投毒前置 claim', resultText(claim));
+    const external = mkTmp('registry-poison-external');
+    rmSync(external, { recursive: true, force: true });
+    git(root, 'worktree', 'add', '-b', 'relay/T888', external, 'HEAD');
+    const registryPath = path.join(root, '.relay', 'worktrees.json');
+    const registry = {
+      version: 1,
+      worktrees: [{
+        task: 'T003', path: external, branch: 'relay/T888', baseSha: '0'.repeat(40),
+        owner: 'model-A', status: 'active', createdAt: OLD, lastUsedAt: OLD,
+      }],
+    };
+    writeFileSync(registryPath, `${JSON.stringify(registry, null, 2)}\n`);
+    const poisoned = await dispatch('relay_session_end', {
+      root: external, model: 'model-A', summary: '伪造受管记录', done_task: 'T003',
+    });
+    ok(poisoned.isError && /注册表|登记|受管/.test(resultText(poisoned)), 'L7: 外部路径/错任务分支注册记录被拒', resultText(poisoned));
+    ok(/\[~\] T003/.test(readFileSync(path.join(root, 'TASKS.md'), 'utf8'))
+      && existsSync(path.join(root, '.relay', 'claims', 'T003.lock')), 'L7: 投毒记录拒绝后不标完成且保留认领锁');
+    const after = JSON.parse(readFileSync(registryPath, 'utf8')).worktrees.find((w) => w.task === 'T003');
+    ok(after.status === 'active' && after.branch === 'relay/T888', 'L7: 投毒记录未被受管收尾改写');
   }
   {
     // 未合并 relay/T### 分支在 claim / session_start / cleanup 输出中可见
@@ -584,18 +722,20 @@ try {
     const rejectedSamples = [];
     const isolationSamples = [];
     for (const value of badValues) {
-      const m = JSON.parse(readFileSync(manifestPath, 'utf8'));
+      // 每轮独立仓库:同一 root 复用会继承上一轮的 [~] 认领态,导致后续轮次报「已被认领」而非 cacheDir 错误。
+      const caseRoot = await freshRepo(`cache-dir-${badValues.indexOf(value)}`);
+      const caseManifest = path.join(caseRoot, '.relay', 'manifest.json');
+      const m = JSON.parse(readFileSync(caseManifest, 'utf8'));
       m.worktree = { enabled: true, cacheDir: value, ttlHours: 24, autoCleanup: true };
-      writeFileSync(manifestPath, `${JSON.stringify(m, null, 2)}\n`);
-      const bad = await dispatch('relay_claim', { root, task: 'T003', model: 'model-A' });
-      if (!(bad.isError && /cacheDir/.test(resultText(bad)))) {
-        rejectedSamples.push(`${JSON.stringify(value)} → ${resultText(bad).slice(0, 160)}`);
+      writeFileSync(caseManifest, `${JSON.stringify(m, null, 2)}\n`);
+      const bad = await dispatch('relay_claim', { root: caseRoot, task: 'T003', model: 'model-A' });
+      ok(bad.isError && /cacheDir/.test(resultText(bad)), `非法 cacheDir ${JSON.stringify(value)} 被拒`, resultText(bad));
+      if (existsSync(path.join(caseRoot, '.relay', 'claims', 'T003.lock'))) {
+        isolationSamples.push(`${JSON.stringify(value)} → 校验失败留下了认领锁`);
       }
-      const single = await dispatch('relay_claim', { root, task: 'T003', model: 'model-A', worktree: false });
-      if (single.isError) isolationSamples.push(`${JSON.stringify(value)} → ${resultText(single).slice(0, 160)}`);
     }
     ok(rejectedSamples.length === 0, 'L8-P3-01: 非法 cacheDir 全部拒绝(含控制字符/换行/绝对/盘符相对/../.git/空/.)', rejectedSamples.join(' | '));
-    ok(isolationSamples.length === 0, 'L8-P3-01: 非法 cacheDir 不连累 worktree:false 单根认领', isolationSamples.join(' | '));
+    ok(isolationSamples.length === 0, 'L8-P3-01: 损坏 manifest 时 worktree:false 也不得绕过 fail-closed', isolationSamples.join(' | '));
     ok(!existsSync(path.join(root, '.relay', 'worktrees')), 'L8-P3-01: 校验失败发生在任何 ensureDir 之前(未创建缓存目录)');
 
     // R-07:合法自定义 cacheDir → 创建成功,并幂等补 .gitignore(实际 cacheDir + 注册表 + 锁),重复 claim 不重复追加
@@ -607,8 +747,8 @@ try {
     const custom = await dispatch('relay_claim', { root, task: 'T004', model: 'model-A' });
     const giText = readFileSync(giPath, 'utf8');
     ok(!custom.isError && existsSync(path.join(root, '.relay', 'wt-custom', 'T004'))
-      && giText.includes('.relay/wt-custom/') && giText.includes('.relay/worktrees.json') && giText.includes('.relay/worktrees.lock'),
-      'L8-R07: 自定义 cacheDir 创建成功并幂等补 .gitignore 三行', resultText(custom));
+      && giText.includes('.relay/wt-custom/') && giText.includes('.relay/worktrees.json') && !giText.includes('.relay/worktrees.lock'),
+      'L8-R07: 自定义 cacheDir 创建成功并补真实运行时忽略行(无幽灵锁)', resultText(custom));
     await dispatch('relay_claim', { root, task: 'T004', model: 'model-A' });
     const giAfter = readFileSync(giPath, 'utf8').split('\n');
     ok(giAfter.filter((l) => l === '.relay/worktrees.json').length === 1
@@ -701,7 +841,7 @@ try {
     try {
       const c = await acquireRepoLock(hbRoot, 'holder-C');
       const before = statSync(lockFileOf(hbRoot)).mtimeMs;
-      await sleep(320);
+      await waitUntil(() => statSync(lockFileOf(hbRoot)).mtimeMs > before, { timeoutMs: 1000 });
       const after = statSync(lockFileOf(hbRoot)).mtimeMs;
       ok(after > before, 'L9-R04: 持锁心跳刷新锁 mtime(长临界区不被 120s 判死)', `${before} -> ${after}`);
       writeFileSync(lockFileOf(hbRoot), serializeLock({ holder: 'thief', token: 'thief-token-0001' }));
@@ -724,7 +864,7 @@ try {
       await dispatch('relay_claim', { root, task: 'T003', model: 'model-A', worktree: false });
       const claimFile = path.join(root, '.relay', 'claims', 'T003.lock');
       const m1 = statSync(claimFile).mtimeMs;
-      await sleep(260);
+      await waitUntil(() => Date.now() >= m1 + 250, { timeoutMs: 1000 });
       const m2 = statSync(claimFile).mtimeMs;
       ok(m2 === m1, 'L9-R04: 认领锁不心跳(保留 240min TTL 崩溃恢复语义)', `${m1} -> ${m2}`);
     } finally { restoreClaimTiming(); }
@@ -808,7 +948,8 @@ try {
     writeFileSync(regPath, `${JSON.stringify(reg, null, 2)}\n`);
     const exe = path.join(root, '.relay/worktrees/T003');
     const e = await dispatch('relay_session_end', { root: exe, model: 'model-A', summary: '缺 baseSha 零改动完成', done_task: 'T003' });
-    ok(e.isError && /baseSha/.test(resultText(e)), 'L9-strict: 受管记录缺 baseSha 时零改动完成被拒', resultText(e));
+    ok(e.isError && /baseSha|registryState=corrupt/.test(resultText(e)),
+      'L9-strict: 受管记录缺 baseSha 时零改动完成被拒', resultText(e));
     ok(/\[~\] T003/.test(readFileSync(path.join(root, 'TASKS.md'), 'utf8')), 'L9-strict: 缺 baseSha 拒绝后 TASKS 保持 [~]');
   }
   {
@@ -866,6 +1007,57 @@ try {
     ok(!good.isError && /\[x\] T003/.test(readFileSync(path.join(root, 'TASKS.md'), 'utf8')),
       'L9-strict: 单根(worktree:false)完成不受严格根错配影响', resultText(good));
     ok(!existsSync(path.join(root, '.relay/worktrees.json')), 'L9-strict: 单根完成不产生受管注册记录');
+  }
+  {
+    // 未合并分支必须是单次 git 查询;覆盖 linked worktree 的 + 标记、已合并与不存在的分支语义。
+    const root = await freshRepo('unmerged-single-git');
+    const base = git(root, 'rev-parse', 'HEAD');
+    git(root, 'branch', 'relay/T101');
+    git(root, 'branch', 'relay/T102');
+    // 分支必须真的领先 HEAD 才会出现在 --no-merged 里;同点创建的分支是已合并状态。
+    git(root, 'checkout', '-q', 'relay/T101');
+    writeFileSync(path.join(root, 't101.txt'), 'a\n');
+    git(root, 'add', '-A');
+    git(root, '-c', 'user.name=t', '-c', 'user.email=t@t', 'commit', '-qm', 't101 work');
+    git(root, 'checkout', '-q', 'relay/T102');
+    writeFileSync(path.join(root, 't102.txt'), 'b\n');
+    git(root, 'add', '-A');
+    git(root, '-c', 'user.name=t', '-c', 'user.email=t@t', 'commit', '-qm', 't102 work');
+    // 不能假设初始分支叫 main:relay_init 的 git init 在不同 git/平台默认值不同(CI 实测非 main)。
+    // 用「切回初始分支起点」的方式恢复:直接 checkout 回 base 提交所在的本地分支。
+    const initialBranch = git(root, 'for-each-ref', '--format=%(refname:short)', '--points-at', base)
+      .split('\n').map((l) => l.trim()).filter(Boolean)[0];
+    git(root, 'checkout', '-q', initialBranch);
+    const wt = path.join(root, '.relay', 'worktrees', 'T101');
+    mkdirSync(path.dirname(wt), { recursive: true });
+    git(root, 'worktree', 'add', wt, 'relay/T101');
+    const tracePath = path.join(root, 'git-trace.jsonl');
+    writeFileSync(tracePath, '');
+    const shimDir = mkTmp('unmerged-git-shim');
+    const shim = path.join(shimDir, 'git');
+    // shim 必须转发到真正的 git 绝对路径:若写 $(command -v git),shim 自身在 PATH 首位会再次命中自己。
+    const realGit = execFileSync(process.platform === 'win32' ? 'where' : 'sh', process.platform === 'win32' ? ['git'] : ['-c', 'command -v git'], { encoding: 'utf8' }).trim().split('\n')[0];
+    writeFileSync(shim, `#!/bin/sh\nprintf '%s\\n' "$*" >> "$RELAY_GIT_TRACE"\n"${realGit}" "$@"\n`);
+    chmodSync(shim, 0o755);
+    const oldPath = process.env.PATH;
+    process.env.PATH = `${shimDir}${path.delimiter}${oldPath}`;
+    process.env.RELAY_GIT_TRACE = tracePath;
+    let counted = [];
+    try { counted = await listUnmergedTaskBranches(root); } finally {
+      process.env.PATH = oldPath;
+      delete process.env.RELAY_GIT_TRACE;
+    }
+    const calls = readFileSync(tracePath, 'utf8').split('\n').filter(Boolean);
+    ok(counted.length === 2 && counted.includes('relay/T101') && counted.includes('relay/T102'), '单次查询保留全部未合并 relay 分支', counted.join(','));
+    ok(calls.length === 1 && /branch --no-merged HEAD(?: |$)/.test(calls[0]), 'listUnmergedTaskBranches 只调用一次 git branch', calls.join(' | '));
+    ok(git(root, 'branch', '--no-merged', 'HEAD').split('\n').some((l) => /^\+ relay\/T101$/.test(l)), 'linked worktree 分支保留原生 + 标记');
+    git(root, 'merge', '--ff-only', 'relay/T101');
+    const afterMerge = await listUnmergedTaskBranches(root);
+    ok(!afterMerge.includes('relay/T101') && afterMerge.includes('relay/T102'), '已并入 HEAD 的分支不再列为未合并', afterMerge.join(','));
+    git(root, 'branch', '-D', 'relay/T102');
+    const afterDelete = await listUnmergedTaskBranches(root);
+    ok(!afterDelete.includes('relay/T102'), '不存在的分支不会作为未合并结果返回', afterDelete.join(','));
+    ok(git(root, 'rev-parse', '--verify', 'refs/heads/relay/T101').length === 40 && base !== git(root, 'rev-parse', 'HEAD'), '查询不修改分支或 HEAD');
   }
 
 } catch (e) {

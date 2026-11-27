@@ -10,7 +10,13 @@ coverage/
 .relay/relay.lock
 .relay/worktrees/
 .relay/worktrees.json
-.relay/worktrees.lock
 .relay/last-failure.json
 *.relay-bak-*
 .relay/rescue/
+
+# 本机 harness / 工具运行时状态:不是项目结构,也不进入打包与 R2 顶层集。
+# .claude 同时覆盖 settings.local.json 这类本机凭证型配置(绝不能入库)。
+.v2c/
+.zcode/
+out/
+.claude/

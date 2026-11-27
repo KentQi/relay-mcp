@@ -10,14 +10,17 @@
 // - 移动后 import 路径修复是模型工作,不是机械工作——以任务形式交给下一棒,绿闸验收。
 // 零依赖:仅 node: 内置。
 
-import { readdir, stat, writeFile } from 'node:fs/promises';
+import { readdir, lstat } from 'node:fs/promises';
+import { randomUUID } from 'node:crypto';
 import { basename, dirname, extname, join, resolve } from 'node:path';
 import {
-  acquireRepoLock, backupFile, ensureDir, findSensitiveChanges, gitIdentityArgs, gitRun, isGitRepoAsync, nowIso,
-  readFileSafe, releaseRepoLock, stamp, scanSecrets,
+  acquireRepoLock, assertNoSymlinkComponents, assertNotSymlinkFile, backupFile, ensureDir, findSensitivePaths, gitStatusPaths,
+  firstLine, gitIdentityArgs, gitRun, isGitRepoAsync, pathExists, readFileSafe, releaseRepoLock, scanSecrets, sha256Hex,
+  stamp, toolError as err, toolOk as ok, writeFileAtomic, writeProtocolFile,
 } from '../util.mjs';
 
-// 与 writeProtocolFile 同一口径:restructure 直接写 TASKS/LOG/DECISIONS,不能成为密钥闸的绕过路径。
+// 与协议写入同一口径:TASKS/LOG 经 writeProtocolFile(CAS+atomic+fencing),
+// DECISIONS 经原子写并在写前复核同一把仓库锁;任何裸写都不得绕过这些护栏。
 const assertNoSecrets = (text, label) => {
   const hits = scanSecrets(text);
   if (hits.length) {
@@ -25,11 +28,6 @@ const assertNoSecrets = (text, label) => {
   }
 };
 import { ensureGitignoreBaseline } from '../config.mjs';
-
-const ok = (text) => ({ content: [{ type: 'text', text }], isError: false });
-const err = (text) => ({ content: [{ type: 'text', text }], isError: true });
-
-const firstLine = (s) => (String(s || '').trim().split('\n')[0] || '').slice(0, 160);
 
 // ── 分类表(保守:宁可列入人工,不可猜错) ─────────────────────────────
 const KEEP_DIRS = new Set([
@@ -103,15 +101,23 @@ const analyzeTop = async (root) => {
   return { moves, manual, keep };
 };
 
-const exists = async (p) => {
-  try { await stat(p); return true; } catch { return false; }
+// 写前复核同一把锁:fencing 不能只保护 TASKS/LOG,manifest/DECISIONS/.gitignore 同样在临界区内。
+const writeAtomicWithFence = async (target, content, lock, label) => {
+  const fence = async () => {
+    const verdict = await lock.check();
+    return verdict.held ? { ok: true } : { ok: false, warning: verdict.warning || '仓库锁已不属于当前会话' };
+  };
+  // fence 先验一次,随后原子写原语在 rename 前再验一次。
+  const first = await fence();
+  if (!first.ok) throw new Error(`${label} 写入前锁 fencing 校验失败:${first.warning}`);
+  await writeFileAtomic(target, content, { label, fencing: fence });
 };
 
 // 移动目标碰撞检测:目标路径已存在(文件或目录)→ 降级人工
 const resolveCollisions = async (root, moves, manual) => {
   const out = [];
   for (const m of moves) {
-    if (await exists(join(root, m.to))) {
+    if (await pathExists(join(root, m.to))) {
       manual.push(`${m.from} → ${m.to} 目标已存在,人工处理`);
       continue;
     }
@@ -121,9 +127,11 @@ const resolveCollisions = async (root, moves, manual) => {
 };
 
 // ── 协议记录:DECISIONS 追加 / TASKS 插任务 / LOG 记条目 ──────────────
-const appendDecisions = async (root, moved) => {
+const appendDecisions = async (root, moved, lock, expectedHash) => {
   const p = join(root, 'DECISIONS.md');
+  await assertNotSymlinkFile(p, 'DECISIONS.md');
   const raw = await readFileSafe(p, '');
+  if (sha256Hex(raw) !== expectedHash) throw new Error('DECISIONS.md 在读取后被修改(内容 CAS 失败),已阻断写入;请重读后重试');
   const entry = [
     '', `## ${stamp().slice(0, 10)} — 目录标准化(relay_restructure)`,
     '- 理由: 统一到 relay 标准结构(src/tests/scripts),多模型接力时槽位可预测',
@@ -132,12 +140,14 @@ const appendDecisions = async (root, moved) => {
   ].join('\n');
   const next = `${raw.replace(/\s*$/, '')}\n${entry}\n`;
   assertNoSecrets(next, 'DECISIONS.md');
-  await writeFile(p, next, 'utf8');
+  await writeAtomicWithFence(p, next, lock, 'DECISIONS.md');
 };
 
-const insertTask = async (root, movedCount) => {
+const insertTask = async (root, movedCount, lock, expectedHash) => {
   const p = join(root, 'TASKS.md');
+  await assertNotSymlinkFile(p, 'TASKS.md');
   const raw = await readFileSafe(p, '');
+  if (sha256Hex(raw) !== expectedHash) throw new Error('TASKS.md 在读取后被修改(内容 CAS 失败),已阻断写入;请重读后重试');
   const nums = [...raw.matchAll(/T(\d+)/g)].map((m) => Number(m[1]));
   const next = (nums.length ? Math.max(...nums) : 0) + 1;
   const id = `T${String(next).padStart(3, '0')}`;
@@ -150,13 +160,15 @@ const insertTask = async (root, movedCount) => {
   if (/^## 待办$/m.test(raw)) out = raw.replace(/^## 待办$/m, `## 待办\n${block}`);
   else out = `${raw.replace(/\s*$/, '')}\n\n## 待办\n${block}\n`;
   assertNoSecrets(out, 'TASKS.md');
-  await writeFile(p, out, 'utf8');
+  await writeProtocolFile(root, 'TASKS.md', out, { token: lock.token, lockLabel: '仓库写锁', expectedHash: sha256Hex(raw) });
   return id;
 };
 
-const insertLog = async (root, movedCount, taskId) => {
+const insertLog = async (root, movedCount, taskId, lock, expectedHash) => {
   const p = join(root, 'LOG.md');
+  await assertNotSymlinkFile(p, 'LOG.md');
   const raw = await readFileSafe(p, '');
+  if (sha256Hex(raw) !== expectedHash) throw new Error('LOG.md 在读取后被修改(内容 CAS 失败),已阻断写入;请重读后重试');
   const lines = raw.split('\n');
   const titleIdx = lines.findIndex((l) => l.startsWith('# '));
   const entry = [
@@ -167,7 +179,7 @@ const insertLog = async (root, movedCount, taskId) => {
   lines.splice(titleIdx + 1, 0, ...entry);
   const nextLog = lines.join('\n');
   assertNoSecrets(nextLog, 'LOG.md');
-  await writeFile(p, nextLog, 'utf8');
+  await writeProtocolFile(root, 'LOG.md', nextLog, { token: lock.token, lockLabel: '仓库写锁', expectedHash: sha256Hex(raw) });
 };
 
 // ── 主入口 ────────────────────────────────────────────────────────────
@@ -175,10 +187,24 @@ export const relayRestructure = async (args = {}) => {
   const a = args || {};
   const root = resolve(a.root || process.cwd());
   const confirm = a.confirm === true;
+  const protocolNames = ['TASKS.md', 'LOG.md', 'DECISIONS.md'];
   try {
-    const manifestRaw = await readFileSafe(join(root, '.relay', 'manifest.json'), null);
+    const manifestPath = join(root, '.relay', 'manifest.json');
+    // 协议文件与 manifest 都必须在任何移动/写入之前通过符号链接布局闸。
+    for (const name of protocolNames) await assertNotSymlinkFile(join(root, name), name);
+    await assertNoSymlinkComponents(root, '.relay', '.relay 目录');
+    await assertNotSymlinkFile(manifestPath, '.relay/manifest.json');
+    const manifestRaw = await readFileSafe(manifestPath, null);
     if (manifestRaw === null) {
       return err('未找到 `.relay/manifest.json`。先 `relay_init`(新项目)或 `relay_onboard`(老项目),再谈目录标准化。');
+    }
+    let manifest;
+    try {
+      manifest = JSON.parse(manifestRaw);
+      if (!manifest || typeof manifest !== 'object' || Array.isArray(manifest)) throw new Error('manifest 必须是 JSON 对象');
+      if (!Array.isArray(manifest.allowedTopLevel)) throw new Error('allowedTopLevel 必须是数组');
+    } catch (e) {
+      return err(`.relay/manifest.json 损坏(${firstLine(e && e.message)}):拒绝猜测或重建最小配置。请先人工修复/恢复备份,再重跑 relay_restructure。`);
     }
 
     const r0 = await analyzeTop(root);
@@ -208,38 +234,99 @@ export const relayRestructure = async (args = {}) => {
     if (!moves.length) {
       return ok([head, '', '结构已达标,无可移动项;人工清单:', ...manualRows].join('\n'));
     }
+    // 先验证工作区与移动目标,再生成任何协议/manifest 内容;任何失败都不得留下半套记录。
     if (!(await isGitRepoAsync(root))) return err('非 git 仓库:拒绝执行(无历史可保、无法回滚)。先 `git init` 并提交当前状态。');
-    const st = await gitRun(root, 'status', '--porcelain', '-uall');
+    const st = await gitRun(root, 'status', '--porcelain', '-z', '-uall');
     if (!st.ok) return err(`无法读取 git 状态:${firstLine(st.stderr)}`);
-    if (st.stdout.trim()) return err(['工作区不干净,拒绝执行:', ...st.stdout.trim().split('\n').slice(0, 5).map((l) => `- ${l}`), '先提交或暂存(git stash)再来。'].join('\n'));
+    if (st.stdout.length > 0) return err(['工作区不干净,拒绝执行:', ...st.stdout.split('\0').filter(Boolean).slice(0, 5).map((l) => `- ${l}`), '先提交或暂存(git stash)再来。'].join('\n'));
+    const plannedPaths = [...new Set(moves.flatMap((m) => [m.from, m.to]))];
+    for (const rel of plannedPaths) {
+      const dirRel = dirname(rel);
+      if (dirRel !== '.') await assertNoSymlinkComponents(root, dirRel, '移动目标目录');
+      // 移动的源/目标本身可以是目录(restructure 就是移动目录);这里只拒绝符号链接,
+      // 不能用 assertNotSymlinkFile(它要求普通文件,会把待移动目录误判为非法)。
+      const lst = await lstat(join(root, rel)).catch((e) => {
+        if (e && e.code === 'ENOENT') return null;
+        throw e;
+      });
+      if (lst && lst.isSymbolicLink()) {
+        throw new Error(`${rel} 是符号链接,拒绝移动(符号链接可把移动/写入引到仓库外)`);
+      }
+    }
 
     // 仓库级写锁:重构期间独占 TASKS/LOG/manifest(与 session_end / claim 同一把)
     const rLock = await acquireRepoLock(root, 'restructure');
     if (!rLock.ok) return err(`另一会话(**${rLock.holder}**)正在本仓库出场/认领,请稍后重试。`);
+    let moveStarted = false;
+    const cleanupJournal = join(root, '.relay', `restructure-${process.pid}-${randomUUID()}.json`);
     try {
+    // 锁取得后再复核:等待期间协议文件可能已被替换成符号链接。
+    for (const name of protocolNames) await assertNotSymlinkFile(join(root, name), name);
+    await assertNoSymlinkComponents(root, '.relay', '.relay 目录');
+    await assertNotSymlinkFile(manifestPath, '.relay/manifest.json');
+    const lockedRaw = await readFileSafe(manifestPath, null);
+    if (lockedRaw !== manifestRaw) throw new Error('.relay/manifest.json 在等待锁期间被修改(内容 CAS 失败),已阻断;请重读后重试');
+    const decisionsRaw = await readFileSafe(join(root, 'DECISIONS.md'), '');
+    const tasksRaw = await readFileSafe(join(root, 'TASKS.md'), '');
+    const logRaw = await readFileSafe(join(root, 'LOG.md'), '');
+    const hashes = {
+      'DECISIONS.md': sha256Hex(decisionsRaw),
+      'TASKS.md': sha256Hex(tasksRaw),
+      'LOG.md': sha256Hex(logRaw),
+    };
+
+    // 预生成全部内容:任务号只计算一次,后续不再读改写,避免三段写入顺序造成分叉/重试重复。
+    const nums = [...tasksRaw.matchAll(/T(\d+)/g)].map((m) => Number(m[1]));
+    const taskId = `T${String((nums.length ? Math.max(...nums) : 0) + 1).padStart(3, '0')}`;
+    const taskBlock = [
+      `- [ ] ${taskId} 修复目录重构后的引用路径`,
+      '  验收: 全部测试通过(`node --test` 或 `npm test`)',
+      `  备注: relay_restructure 移动了 ${moves.length} 个顶层条目,import/脚本引用需逐个修复`,
+    ].join('\n');
+    const tasksOut = /^## 待办$/m.test(tasksRaw)
+      ? tasksRaw.replace(/^## 待办$/m, `## 待办\n${taskBlock}`)
+      : `${tasksRaw.replace(/\s*$/, '')}\n\n## 待办\n${taskBlock}\n`;
+    const decisionsEntry = [
+      '', `## ${stamp().slice(0, 10)} — 目录标准化(relay_restructure)`,
+      '- 理由: 统一到 relay 标准结构(src/tests/scripts),多模型接力时槽位可预测',
+      `- 否决: 保持原状(顶层目录分歧会在接力中持续制造摩擦;本次移动 ${moves.length} 项,git mv 保历史)`,
+      '- 状态: 现行',
+    ].join('\n');
+    const decisionsOut = `${decisionsRaw.replace(/\s*$/, '')}\n${decisionsEntry}\n`;
+    const logLines = logRaw.split('\n');
+    const titleIdx = logLines.findIndex((l) => l.startsWith('# '));
+    logLines.splice(titleIdx + 1, 0,
+      `## ${stamp()} | model=relay | task=restructure 标准化目录(${moves.length} 项移动)`,
+      '- 摘要: 源码/测试/脚本目录归位到标准槽位,manifest 白名单已修宪',
+      `- 留给下一个: 修复 import 引用路径(${taskId}),验收见 TASKS.md`,
+    );
+    const logOut = logLines.join('\n');
+    assertNoSecrets(tasksOut, 'TASKS.md');
+    assertNoSecrets(decisionsOut, 'DECISIONS.md');
+    assertNoSecrets(logOut, 'LOG.md');
+    const newTop = await readdir(root); // 失败必须向上抛,绝不能以 [] 静默收窄白名单
+    const allowed = [...new Set([...(manifest.allowedTopLevel || []), ...newTop])].sort();
+    const manifestOut = { ...manifest, allowedTopLevel: allowed };
+    const manifestText = `${JSON.stringify(manifestOut, null, 2)}\n`;
+    assertNoSecrets(manifestText, '.relay/manifest.json');
+
+    moveStarted = true;
+    await writeFileAtomic(cleanupJournal, JSON.stringify({ moves, protocolHashes: hashes }, null, 2) + '\n', { label: 'restructure 恢复日志' });
     const done = [];
     for (const m of moves) {
       await ensureDir(join(root, dirname(m.to)));
       const mv = await gitRun(root, 'mv', m.from, m.to);
-      if (!mv.ok) return err(`git mv ${m.from} → ${m.to} 失败:${firstLine(mv.stderr)}(已移动项保持原状,可 git status 查看;修复后重试)`);
+      if (!mv.ok) throw new Error(`git mv ${m.from} → ${m.to} 失败:${firstLine(mv.stderr)}(已移动项保持原状,可 git status 查看;修复后重试)`);
       done.push(m);
     }
 
-    // manifest 修宪:白名单只增不减(并集),旧条目残留无害
-    let manifest = {};
-    try { manifest = JSON.parse(manifestRaw); } catch { /* 损坏则重建最小骨架 */ }
-    const newTop = await readdir(root).then((xs) => xs).catch(() => []);
-    const allowed = [...new Set([...(manifest.allowedTopLevel || []), ...newTop])].sort();
-    manifest.allowedTopLevel = allowed;
-    manifest.restructuredAt = nowIso();
-    const manifestPath = join(root, '.relay', 'manifest.json');
+    // manifest 与其他协议写入共用 fencing/CAS;顺序固定为 manifest → TASKS → DECISIONS → LOG。
     const bak = await backupFile(manifestPath);
     await ensureDir(join(root, '.relay'));
-    await writeFile(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`, 'utf8');
-
-    const taskId = await insertTask(root, done.length);
-    await appendDecisions(root, done);
-    await insertLog(root, done.length, taskId);
+    await writeAtomicWithFence(manifestPath, manifestText, rLock, '.relay/manifest.json');
+    await writeProtocolFile(root, 'TASKS.md', tasksOut, { token: rLock.token, lockLabel: '仓库写锁', expectedHash: hashes['TASKS.md'] });
+    await writeProtocolFile(root, 'DECISIONS.md', decisionsOut, { token: rLock.token, lockLabel: '仓库写锁', expectedHash: hashes['DECISIONS.md'] });
+    await writeProtocolFile(root, 'LOG.md', logOut, { token: rLock.token, lockLabel: '仓库写锁', expectedHash: hashes['LOG.md'] });
     // 升级/修复入口:目录标准化提交前幂等补齐 .gitignore 运行时基线(worktree 缓存/注册表等),
     // 避免移动目录后首次 enable worktree 被误提交或护栏误报。
     const gi = await ensureGitignoreBaseline(root);
@@ -250,8 +337,9 @@ export const relayRestructure = async (args = {}) => {
         : '.gitignore 基线已齐全';
 
     // 密钥安检(H-B):移动/提交不搬运疑似密钥文件,转人工(与 session_end 同一条规则)
-    const stSec = await gitRun(root, '-c', 'core.quotePath=false', 'status', '--porcelain', '-uall');
-    const sens = stSec.ok ? findSensitiveChanges(stSec.stdout.split('\n').map((s) => s.replace(/\r$/, '')).filter((s) => s.length >= 3)) : [];
+    const status = await gitStatusPaths(root);
+    if (!status.ok) return err('无法检查 Git 工作区路径;移动与协议记录已完成,修复 Git 状态后请人工提交');
+    const sens = findSensitivePaths(status.paths);
     if (sens.length) {
       return err(`提交跳过:发现疑似密钥/敏感文件,拒绝卷入 git 历史(需人工处理):${sens.slice(0, 3).map((s) => s.path).join(', ')}。移动与协议记录已完成,提交请人工执行`);
     }
@@ -274,7 +362,11 @@ export const relayRestructure = async (args = {}) => {
       '',
       '### 下一棒', `1. \`relay_session_start\` 进场 → 认领 ${taskId},逐个修复 import/脚本引用`, '2. `relay_verify` 全绿 + 测试通过后 `relay_session_end` 出场',
     ].join('\n'));
+    } catch (e) {
+      return err(`relay_restructure 执行失败:${firstLine(e && e.message) || String(e)}${moveStarted ? '(移动已开始;已写内容保持原状,请按 git status 检查,不要盲目重跑)' : ''}`);
     } finally {
+      // 成功、提交跳过、异常都清掉本机恢复日志;清理失败不覆盖原结果。
+      if (moveStarted) await import('node:fs/promises').then(({ unlink }) => unlink(cleanupJournal).catch(() => {}));
       await releaseRepoLock(root, rLock.token);
     }
   } catch (e) {

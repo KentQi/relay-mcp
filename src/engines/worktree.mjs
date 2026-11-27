@@ -6,6 +6,7 @@ import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import {
   acquireRepoLock, assertNoSymlinkComponents, assertNotSymlinkFile, ensureDir, gitRun, nowIso, readFileSafe,
+  toolText as textResult,
 } from '../util.mjs';
 import { DEFAULT_WORKTREE_CONFIG, ensureGitignoreBaseline, readManifestConfig } from '../config.mjs';
 import { TASK_LINE_RE } from './verify.mjs';
@@ -19,8 +20,6 @@ const contained = (root, candidate, allowEqual = false) => {
   const rel = path.relative(root, candidate);
   return (allowEqual && rel === '') || (rel !== '' && rel !== '..' && !rel.startsWith(`..${path.sep}`) && !path.isAbsolute(rel));
 };
-const textResult = (text, isError = false) => ({ content: [{ type: 'text', text }], isError });
-
 // cacheDir 是唯一允许在 controlRoot 内落目录的配置项:必须在任何 ensureDir 之前做严格静态校验。
 // 拒绝空/`.`/控制字符(含换行)/POSIX 或 Windows 绝对路径/盘符相对路径(如 `C:tmp`)/
 // `..` 段/`.git` 前缀——这些都能把任务目录写到 controlRoot 之外或写进 Git 管理区。
@@ -47,11 +46,15 @@ const normalizeCacheDir = (value) => {
 // T026:manifest 可由调用方预解析传入,避免同一轮会话里重复读盘(单轮 manifest 读取恒为 1)。
 export const readWorktreeConfigRaw = async (root, { manifest } = {}) => {
   const cfg = await readManifestConfig(root, { manifest });
+  if (cfg.manifestCorrupt) {
+    throw new Error(`${cfg.manifestError}。修复:备份并修复 .relay/manifest.json 后重试;relay 不会在 manifest 损坏时猜测 worktree 配置。`);
+  }
   const raw = cfg.manifest && cfg.manifest.worktree && typeof cfg.manifest.worktree === 'object'
     ? cfg.manifest.worktree : {};
   const ttl = Number(raw.ttlHours);
   const cacheDirProvided = Object.prototype.hasOwnProperty.call(raw, 'cacheDir');
   return {
+    manifest: cfg.manifest,
     enabled: raw.enabled === true,
     cacheDirRaw: cacheDirProvided ? raw.cacheDir : DEFAULT_WORKTREE_CONFIG.cacheDir,
     cacheDirProvided,
@@ -66,6 +69,7 @@ export const readWorktreeConfig = async (root, { manifest } = {}) => {
     throw new Error(`worktree.cacheDir 必须是字符串相对路径,收到 ${JSON.stringify(raw.cacheDirRaw).slice(0, 40)}。修复:改为 controlRoot 内的相对路径(默认 .relay/worktrees)`);
   }
   return {
+    manifest: raw.manifest,
     enabled: raw.enabled,
     cacheDir: normalizeCacheDir(raw.cacheDirRaw),
     ttlHours: raw.ttlHours,
@@ -73,11 +77,53 @@ export const readWorktreeConfig = async (root, { manifest } = {}) => {
   };
 };
 
+const normalizedRegistryPath = (value) =>
+  String(value ?? '').replace(/\\/g, '/').replace(/^\.\//, '').replace(/\/+$/, '');
+
+// 受管身份是可执行授权,不是普通提示:任何一条记录要参与 claim/session/cleanup 决策,
+// 都必须同时满足任务号、cacheDir/task 路径、relay/task 分支与 40-hex baseSha 契约。
+export const managedRecordShapeError = (record, cacheDir) => {
+  const task = String(record?.task ?? '');
+  if (!/^T\d+$/.test(task)) return '注册表记录 task 非 T### 形态';
+  const expected = path.posix.join(normalizeCacheDir(cacheDir), task);
+  if (normalizedRegistryPath(record?.path) !== expected) {
+    return `注册表记录 path=${JSON.stringify(record?.path)} 与受管路径 ${expected} 不一致`;
+  }
+  if (String(record?.branch ?? '') !== `relay/${task}`) {
+    return `注册表记录 branch=${JSON.stringify(record?.branch)} 与任务 ${task} 不匹配`;
+  }
+  if (!/^[0-9a-f]{40}$/.test(String(record?.baseSha ?? ''))) {
+    return `注册表记录 baseSha 不是完整 40 位提交 SHA`;
+  }
+  if (!['active', 'completed'].includes(String(record?.status ?? ''))) {
+    return `注册表记录 status=${JSON.stringify(record?.status)} 非法`;
+  }
+  return '';
+};
+
+// shape 合法还不够:baseSha 必须是 controlRoot 与任务 HEAD 的真实 merge-base。
+// 只验证“是祖先”会允许把基点伪造到任务途中的提交,从而吞掉此前的协议漂移与事实范围。
+export const managedRecordBaseError = async (controlRoot, executionRoot, record) => {
+  const taskHead = await gitRun(executionRoot, 'rev-parse', 'HEAD');
+  if (!taskHead.ok || !/^[0-9a-f]{40}$/.test(taskHead.stdout.trim())) {
+    return `无法读取任务分支 HEAD:${taskHead.stderr || taskHead.stdout || '未知错误'}`;
+  }
+  const mergeBase = await gitRun(controlRoot, 'merge-base', 'HEAD', taskHead.stdout.trim());
+  if (!mergeBase.ok || !/^[0-9a-f]{40}$/.test(mergeBase.stdout.trim())) {
+    return `无法计算 controlRoot/任务分支真实 merge-base:${mergeBase.stderr || mergeBase.stdout || '无共同祖先'}`;
+  }
+  const expected = mergeBase.stdout.trim();
+  if (record?.baseSha !== expected) {
+    return `baseSha ${String(record?.baseSha || '(空)').slice(0, 12)} 不是 controlRoot/任务分支的真实 merge-base ${expected.slice(0, 12)}`;
+  }
+  return '';
+};
+
 // R-07:worktree 启用时幂等补 .gitignore(实际 cacheDir + 注册表 + 锁),
 // 只追加缺失行,绝不删改用户条目;供 claim 在创建缓存目录之前调用。
 export const ensureWorktreeGitignore = async (root, cfg) => {
   const cacheLine = `${String(cfg.cacheDir).replace(/\/+$/, '')}/`;
-  return ensureGitignoreBaseline(root, [cacheLine, WORKTREE_REGISTRY_REL, '.relay/worktrees.lock']);
+  return ensureGitignoreBaseline(root, [cacheLine, WORKTREE_REGISTRY_REL]);
 };
 
 const emptyRegistry = () => ({ version: 1, worktrees: [] });
@@ -85,9 +131,12 @@ const emptyRegistry = () => ({ version: 1, worktrees: [] });
 // fail-closed 读取:把「缺失 / 损坏」与「合法但为空」区分开。
 // 受管身份完全依赖该 gitignored 文件,不能把不可读一律当作 managed=false 静默降级。
 export const readWorktreeRegistryState = async (controlRoot) => {
-  const raw = await readFileSafe(path.join(controlRoot, WORKTREE_REGISTRY_REL), null);
-  if (raw == null) return { state: 'missing', registry: emptyRegistry(), error: '' };
   try {
+    await assertNoSymlinkComponents(controlRoot, '.relay', '.relay');
+    const target = path.join(controlRoot, WORKTREE_REGISTRY_REL);
+    await assertNotSymlinkFile(target, WORKTREE_REGISTRY_REL);
+    const raw = await readFileSafe(target, null, { onlyMissing: true });
+    if (raw == null) return { state: 'missing', registry: emptyRegistry(), error: '' };
     const parsed = JSON.parse(raw);
     if (!parsed || typeof parsed !== 'object' || !Array.isArray(parsed.worktrees)) {
       return { state: 'corrupt', registry: emptyRegistry(), error: `${WORKTREE_REGISTRY_REL} 格式无效:缺少 worktrees 数组` };
@@ -98,7 +147,7 @@ export const readWorktreeRegistryState = async (controlRoot) => {
       error: '',
     };
   } catch (e) {
-    return { state: 'corrupt', registry: emptyRegistry(), error: `${WORKTREE_REGISTRY_REL} 解析失败:${e?.message || String(e)}` };
+    return { state: 'corrupt', registry: emptyRegistry(), error: `${WORKTREE_REGISTRY_REL} 读取或解析失败(${e?.code || e?.name || '无效文件'})` };
   }
 };
 
@@ -241,14 +290,69 @@ export const resolveRelayRoots = async (root) => {
   }
   const { state, registry } = await readWorktreeRegistryState(controlRoot);
   if (state === 'ok') {
+    let wtCfg;
+    try {
+      wtCfg = await readWorktreeConfig(controlRoot);
+    } catch (e) {
+      return {
+        controlRoot, executionRoot, managed: false, linkedWorktree: true, registryState: 'corrupt',
+        registryError: e?.message || String(e),
+      };
+    }
+    const matching = [];
     for (const record of registry.worktrees) {
       if (typeof record.path !== 'string') continue;
       const candidate = await realPath(path.resolve(controlRoot, record.path));
-      if (candidate === executionRoot) {
-        return { controlRoot, executionRoot, managed: true, linkedWorktree: true, registryState: 'ok', record };
-      }
+      if (candidate === executionRoot) matching.push(record);
     }
-    return { controlRoot, executionRoot, managed: false, linkedWorktree: true, registryState: 'unregistered' };
+    if (matching.length > 1) {
+      return {
+        controlRoot, executionRoot, managed: false, linkedWorktree: true, registryState: 'corrupt',
+        registryError: `当前 executionRoot 命中 ${matching.length} 条注册记录,受管身份不唯一`,
+      };
+    }
+    if (matching.length === 1) {
+      const record = matching[0];
+      const shapeError = managedRecordShapeError(record, wtCfg.cacheDir);
+      if (shapeError) {
+        return {
+          controlRoot, executionRoot, managed: false, linkedWorktree: true, registryState: 'corrupt',
+          registryError: shapeError,
+        };
+      }
+      const taskRecords = registry.worktrees.filter((row) => row && row.task === record.task);
+      if (taskRecords.length !== 1) {
+        return {
+          controlRoot, executionRoot, managed: false, linkedWorktree: true, registryState: 'corrupt',
+          registryError: `任务 ${record.task} 在注册表中出现 ${taskRecords.length} 条记录,受管身份不唯一`,
+        };
+      }
+      try {
+        const expectedRel = path.posix.join(wtCfg.cacheDir, record.task);
+        await assertNoSymlinkComponents(controlRoot, expectedRel, '受管 worktree 路径');
+        const expectedReal = await realPath(path.resolve(controlRoot, expectedRel));
+        if (expectedReal !== executionRoot) throw new Error(`登记路径解析后是 ${expectedReal},不是当前 executionRoot`);
+        const actualBranch = await gitRun(executionRoot, 'symbolic-ref', '-q', '--short', 'HEAD');
+        if (!actualBranch.ok || actualBranch.stdout.trim() !== record.branch) {
+          throw new Error(`实际分支 ${actualBranch.stdout.trim() || '(detached/未知)'} 与登记分支 ${record.branch} 不一致`);
+        }
+        const baseError = await managedRecordBaseError(controlRoot, executionRoot, record);
+        if (baseError) throw new Error(baseError);
+      } catch (e) {
+        return {
+          controlRoot, executionRoot, managed: false, linkedWorktree: true, registryState: 'corrupt',
+          registryError: e?.message || String(e),
+        };
+      }
+      return {
+        controlRoot, executionRoot, managed: true, linkedWorktree: true, registryState: 'ok', record,
+        manifest: wtCfg.manifest,
+      };
+    }
+    return {
+      controlRoot, executionRoot, managed: false, linkedWorktree: true, registryState: 'unregistered',
+      manifest: wtCfg.manifest,
+    };
   }
   return { controlRoot, executionRoot, managed: false, linkedWorktree: true, registryState: state };
 };
@@ -259,7 +363,7 @@ export const resolveRelayRoots = async (root) => {
 //   2) 受管缓存路径 <cacheDir>/<task> 在磁盘上仍存在;
 //   3) 调用方提供的注册表里存在该任务的非 completed 记录且其路径仍存在。
 // 注意:仅「分支存在」不算痕迹——契约规定清理后分支保留,不能因此永远阻止单根完成。
-export const findManagedWorktreeEvidence = async (controlRoot, task, { registry = null } = {}) => {
+export const findManagedWorktreeEvidence = async (controlRoot, task, { registry = null, manifest } = {}) => {
   const evidence = { found: false, worktreePath: '', reasons: [] };
   const id = String(task || '');
   if (!/^T\d+$/.test(id)) return evidence;
@@ -279,7 +383,7 @@ export const findManagedWorktreeEvidence = async (controlRoot, task, { registry 
   }
   if (!evidence.found) {
     let cacheDir = DEFAULT_WORKTREE_CONFIG.cacheDir;
-    try { cacheDir = (await readWorktreeConfig(controlRoot)).cacheDir; } catch { /* 配置非法时回退默认受管路径 */ }
+    try { cacheDir = (await readWorktreeConfig(controlRoot, { manifest })).cacheDir; } catch { /* 配置非法时回退默认受管路径 */ }
     const expected = path.resolve(controlRoot, cacheDir, id);
     if (existsSync(expected)) {
       evidence.found = true;
@@ -432,21 +536,8 @@ export const rollbackTaskWorktree = async (controlRoot, task, info, { fencing = 
   await writeWorktreeRegistry(controlRoot, registry, { fencing });
 };
 
-// P2-12 注册表投毒防护:清理只信任「task===T###、path===cacheDir/task、branch===relay/task」的严格记录。
-// 注册表是 gitignored 的本地文件,可能被手工编辑/伪造;不严格匹配的记录一律只保留不清理。
-const registryRecordMismatch = (record, recordPath, cacheDir) => {
-  const task = String(record?.task ?? '');
-  if (!/^T\d+$/.test(task)) return '注册表记录 task 非 T### 形态(疑似伪造),拒绝清理';
-  const normRel = String(recordPath).replace(/\\/g, '/').replace(/^\.\//, '').replace(/\/+$/, '');
-  const expected = path.join(cacheDir, task).replace(/\\/g, '/');
-  if (normRel !== expected) {
-    return `注册表记录 path 与受管路径不一致(期望 ${path.join(cacheDir, task)}),疑似伪造,拒绝清理`;
-  }
-  if (String(record.branch ?? '') !== `relay/${task}`) {
-    return `注册表记录 branch 与任务号不一致(期望 relay/${task}),疑似伪造,拒绝清理`;
-  }
-  return '';
-};
+const registryRecordMismatch = (record, recordPath, cacheDir) =>
+  managedRecordShapeError({ ...record, path: recordPath }, cacheDir);
 
 const activeTaskIds = async (controlRoot, preloadedText = null) => {
   const raw = preloadedText != null ? preloadedText : await readFileSafe(path.join(controlRoot, 'TASKS.md'), '');
@@ -707,24 +798,23 @@ export const cleanupWorktrees = async (controlRoot, options = {}) => {
     return report;
   } finally {
     const rel = await lock.release();
-    if (!rel.ok && rel.warning) process.stderr.write(`[relay] cleanup 仓库锁释放告警:${rel.warning}\n`);
+    if (!rel.ok && rel.warning) {
+      report.errors.push({ task: '(lock)', path: '.relay/relay.lock', reason: `仓库锁释放失败:${rel.warning}` });
+    }
   }
 };
 
 // 「完成≠合并」的可观测性:列出尚未并入 controlRoot HEAD 的 relay/T### 任务分支。
 // 只读;用于 claim / session_start / cleanup / worktree_cleanup 的输出提示。
+// 单次 git:git branch 自己计算 merged/unmerged,不再对每个分支起 merge-base。
+// 返回短分支名(与既有调用方/文案契约一致);linked worktree 的 + 标记由原生 branch 输出另行验证。
 export const listUnmergedTaskBranches = async (controlRoot) => {
-  const refs = await gitRun(controlRoot, 'for-each-ref', '--format=%(refname:short)', 'refs/heads/relay/');
-  if (!refs.ok) return [];
-  const out = [];
-  for (const raw of refs.stdout.split('\n')) {
-    const branch = raw.trim();
-    if (!branch) continue;
-    const ancestor = await gitRun(controlRoot, 'merge-base', '--is-ancestor', branch, 'HEAD');
-    if (ancestor.ok) continue; // 已并入 HEAD
-    out.push(branch);
-  }
-  return out;
+  // git 参数必须分开写:`--no-merged=HEAD`/`--list=relay/*` 会被当成无法识别的选项而整条失败。
+  const result = await gitRun(controlRoot, 'branch', '--no-merged', 'HEAD', '--list', 'relay/*');
+  if (!result.ok) return [];
+  return result.stdout.split('\n')
+    .map((line) => line.replace(/^[*+]\s+/, '').trim())
+    .filter(Boolean);
 };
 
 export const formatUnmergedBranchesNote = (branches, { indent = '' } = {}) => {

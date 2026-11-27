@@ -4,7 +4,7 @@
 //   引擎走 DEFAULT_* 分支,行为与补丁前完全相同。
 // 配置面全部落在 .relay/manifest.json(仓库属主任意文本即代码),不接受环境变量——
 //   护栏若可被环境绕过,就不是护栏。
-import { readFileSafe, assertNotSymlinkFile, writeFileAtomic } from './util.mjs';
+import { readFileSafe, assertNoSymlinkComponents, assertNotSymlinkFile, writeFileAtomic } from './util.mjs';
 import { join } from 'node:path';
 
 // —— 默认值(= v1.0.0 原值,勿随手改)——
@@ -13,6 +13,7 @@ export const DEFAULT_DOCS_ROOTS = ['docs'];                    // verify.mjs R6 
 export const DEFAULT_COMMIT_TEMPLATE = 'relay: session end — {{task}}{{summary}}';
 // 简报字符预算(T015 使用):超限只告警、不裁剪(裁剪=静默降级,违反公理)。
 export const DEFAULT_CONTEXT_BUDGET = 6000;
+export const DEFAULT_ACCEPTANCE_TIMEOUT_MS = 180000;
 // 抢救扫描默认值(T048):7 天窗口、单份 transcript 8 MiB 上限。两者都可在 manifest.rescue 覆盖。
 export const DEFAULT_RESCUE_MAX_AGE_DAYS = 7;
 export const DEFAULT_RESCUE_MAX_BYTES = 8 * 1024 * 1024;
@@ -34,17 +35,29 @@ export const KNOWN_MANIFEST_KEYS = Object.freeze([
   'relayHome', 'restructuredAt', 'strictDocs', 'worktree', 'facts', 'acceptance',
   'commitMessageTemplate', 'autoCommit', 'entryFilesTakeover', 'codeRoots', 'docsRoots',
   'docsIgnore', 'protectedPaths', 'logBoundary', 'structure', 'contextBudget', 'rescue',
+  'runtimeTopLevel',
 ]);
 export const KNOWN_NESTED_KEYS = Object.freeze({
   worktree: ['enabled', 'cacheDir', 'ttlHours', 'autoCleanup'],
-  facts: ['enabled', 'since', 'strict'],
+  facts: ['enabled', 'since', 'baselineSha', 'strict'],
   logBoundary: ['strict'],
   structure: ['strict'],
-  acceptance: ['commands'],
+  acceptance: ['commands', 'timeoutMs'],
   rescue: ['sources', 'maxAgeDays', 'maxBytes', 'profiles', 'autoLaunch'],
 });
+export const KNOWN_DEEP_KEYS = Object.freeze({
+  'rescue.autoLaunch': ['enabled', 'command', 'cwd', 'timeoutMs', 'maxOutputBytes'],
+});
+export const KNOWN_ARRAY_OBJECT_KEYS = Object.freeze({
+  'rescue.sources': ['profile', 'root'],
+  'rescue.profiles': ['id', 'title', 'kind', 'roots', 'filePattern', 'metaFile', 'fieldMap', 'tables', 'session', 'message', 'part', 'maxRows'],
+  'rescue.profiles.tables': ['session', 'message', 'part'],
+  'rescue.profiles.session': ['id', 'directory', 'parentId', 'title'],
+  'rescue.profiles.message': ['sessionId', 'data', 'sequence', 'id'],
+  'rescue.profiles.part': ['sessionId', 'messageId', 'data', 'sequence', 'id'],
+});
 
-// 收集 manifest 里的未知键(顶层 + 四个已知对象内)。纯函数,不做 I/O。
+// 收集 manifest 里的未知键(顶层 + 已知对象层级)。纯函数,不做 I/O。
 export const collectUnknownManifestKeys = (m) => {
   const unknown = [];
   if (!m || typeof m !== 'object' || Array.isArray(m)) return unknown;
@@ -53,6 +66,39 @@ export const collectUnknownManifestKeys = (m) => {
     const obj = m[parent];
     if (obj && typeof obj === 'object' && !Array.isArray(obj)) {
       for (const k of Object.keys(obj)) if (!keys.includes(k)) unknown.push(`${parent}.${k}`);
+    }
+  }
+  for (const [parent, keys] of Object.entries(KNOWN_DEEP_KEYS)) {
+    const obj = parent.split('.').reduce((cur, key) => (
+      cur && typeof cur === 'object' && !Array.isArray(cur) ? cur[key] : null
+    ), m);
+    if (obj && typeof obj === 'object' && !Array.isArray(obj)) {
+      for (const k of Object.keys(obj)) if (!keys.includes(k)) unknown.push(`${parent}.${k}`);
+    }
+  }
+  const collectArrayObjects = (arr, prefix, keys) => {
+    if (!Array.isArray(arr)) return;
+    for (let i = 0; i < arr.length; i += 1) {
+      const obj = arr[i];
+      if (!obj || typeof obj !== 'object' || Array.isArray(obj)) continue;
+      for (const k of Object.keys(obj)) if (!keys.includes(k)) unknown.push(`${prefix}[${i}].${k}`);
+    }
+  };
+  const rescue = m.rescue && typeof m.rescue === 'object' && !Array.isArray(m.rescue) ? m.rescue : null;
+  collectArrayObjects(rescue?.sources, 'rescue.sources', KNOWN_ARRAY_OBJECT_KEYS['rescue.sources']);
+  if (Array.isArray(rescue?.profiles)) {
+    collectArrayObjects(rescue.profiles, 'rescue.profiles', KNOWN_ARRAY_OBJECT_KEYS['rescue.profiles']);
+    for (let i = 0; i < rescue.profiles.length; i += 1) {
+      const spec = rescue.profiles[i];
+      if (!spec || typeof spec !== 'object' || Array.isArray(spec)) continue;
+      for (const nested of ['tables', 'session', 'message', 'part']) {
+        const obj = spec[nested];
+        if (!obj || typeof obj !== 'object' || Array.isArray(obj)) continue;
+        const keys = KNOWN_ARRAY_OBJECT_KEYS[`rescue.profiles.${nested}`];
+        for (const k of Object.keys(obj)) {
+          if (!keys.includes(k)) unknown.push(`rescue.profiles[${i}].${nested}.${k}`);
+        }
+      }
     }
   }
   return unknown.sort();
@@ -66,7 +112,7 @@ export const collectUnknownManifestKeys = (m) => {
 export const GITIGNORE_BASELINE = Object.freeze([
   '.env', '.env.*', '*.key', '*.pem', 'node_modules/', '.DS_Store',
   '.relay/claims/', '.relay/relay.lock',
-  '.relay/worktrees/', '.relay/worktrees.json', '.relay/worktrees.lock',
+  '.relay/worktrees/', '.relay/worktrees.json',
   '.relay/last-failure.json',
   // 抢救接力单(T048):本机运行时状态,内含 transcript 副本与工作区快照锚点。
   // 必须忽略:.relay/** 是受保护路径,不忽略会让下一次出场触发护栏而拒绝提交。
@@ -126,17 +172,30 @@ export const matchesIgnore = (ignores, rel, isDir = false) =>
 
 const strArr = (v) => (Array.isArray(v) ? v.filter((x) => typeof x === 'string' && x.trim()) : []);
 
-// 读 manifest 并归一全部策略项。manifest 缺失/损坏 → 全部走默认(= 补丁前行为)。
+// 读 manifest 并归一全部策略项。缺失仍走默认值;损坏则返回 manifestCorrupt/manifestError,
+// 由状态变更入口 fail-closed。只读诊断可继续检查,但绝不能把损坏误当成合法默认配置。
 // manifest 可预解析传入(T022):runChecks 已经把 manifest.json 读/解析一次,
 // 这里不再重复读盘——单轮 verify 对 manifest 的读取次数恒为 1。
 export const readManifestConfig = async (root, { manifest: preloaded } = {}) => {
   let m = null;
-  if (preloaded && typeof preloaded === 'object') {
+  let manifestCorrupt = false;
+  let manifestError = '';
+  if (preloaded !== undefined) {
     m = preloaded;
   } else {
-    const raw = await readFileSafe(join(root, '.relay', 'manifest.json'), null);
-    if (raw != null) {
-      try { const p = JSON.parse(raw); if (p && typeof p === 'object') m = p; } catch { m = null; }
+    const target = join(root, '.relay', 'manifest.json');
+    try {
+      await assertNoSymlinkComponents(root, '.relay', '.relay');
+      await assertNotSymlinkFile(target, '.relay/manifest.json');
+      const raw = await readFileSafe(target, null, { onlyMissing: true });
+      if (raw != null) {
+        const p = JSON.parse(raw);
+        if (!p || typeof p !== 'object' || Array.isArray(p)) throw new Error('应是 JSON 对象');
+        m = p;
+      }
+    } catch (e) {
+      manifestCorrupt = true;
+      manifestError = `.relay/manifest.json 读取或解析失败(${e?.code || e?.name || '无效文件'})`;
     }
   }
   const codeRoots = strArr(m && m.codeRoots);
@@ -144,14 +203,19 @@ export const readManifestConfig = async (root, { manifest: preloaded } = {}) => 
   const docsIgnore = strArr(m && m.docsIgnore);
   const protectedPaths = strArr(m && m.protectedPaths);
   const acceptanceCmds = strArr(m && m.acceptance && m.acceptance.commands);
+  const timeout = m?.acceptance?.timeoutMs;
   return {
     manifest: m,
+    manifestCorrupt,
+    manifestError,
     unknownManifestKeys: collectUnknownManifestKeys(m),
     codeRoots: codeRoots.length ? codeRoots : [...DEFAULT_CODE_ROOTS],
     docsRoots: docsRoots.length ? docsRoots : [...DEFAULT_DOCS_ROOTS],
     docsIgnore: docsIgnore.map((p) => ({ pattern: p, re: globToRegExp(p) })),
     protectedPaths: protectedPaths.map((p) => ({ pattern: p, re: globToRegExp(p) })),
     acceptanceCommands: acceptanceCmds,
+    acceptanceTimeoutMs: Number.isInteger(timeout) && timeout > 0 && timeout <= 2147483647
+      ? timeout : DEFAULT_ACCEPTANCE_TIMEOUT_MS,
     commitMessageTemplate:
       typeof (m && m.commitMessageTemplate) === 'string' && m.commitMessageTemplate.trim()
         ? m.commitMessageTemplate
@@ -167,8 +231,8 @@ export const readManifestConfig = async (root, { manifest: preloaded } = {}) => 
     facts: {
       enabled: !!(m && m.facts && m.facts.enabled === true),
       since: m && m.facts && typeof m.facts.since === 'string' && m.facts.since.trim() ? m.facts.since.trim() : null,
-      // 已废弃(T023 起 R10 不再读取):保留解析仅为兼容旧 manifest,不产生任何行为;计划 v2.0 移除。
-      strict: !!(m && m.facts && m.facts.strict === true),
+      baselineSha: m && m.facts && typeof m.facts.baselineSha === 'string' && /^[0-9a-f]{40}$/.test(m.facts.baselineSha)
+        ? m.facts.baselineSha : null,
     },
     // LOG 边界(T024/R12):活跃区行数/完成条目数超限 → WARN;strict 同 facts.strict 风格可升 ERROR。
     // 阈值固定(150 行 / 20 完成条目),不做可配置——避免"把阈值调大"成为消音手段。

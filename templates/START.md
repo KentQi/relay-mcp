@@ -26,7 +26,7 @@
 ## 红线
 
 - 受保护路径(`verify`、`.relay/`、`tests/`、`*.test.*`、`*.spec.*`)的改动不会自动提交,需人类批准;疑似密钥文件(`.env*`、`*secret*`、`*.key`、`*.pem`)同理
-- 协议文件(`TASKS.md`/`LOG.md`)内容里的密钥样式串会被 R11 阻断(误报同行标注 `relay:secret-ok` 豁免)
-- 出场绿闸会实际执行可执行验收(`test:` 路径跑 `node --test`;有 `package.json` 的 `scripts.test` 就跑 `npm test`)——不绿不提交
-- LOG 连续 3 条任务会话(维护会话不计入)无「T### 完成」(R7)→ 停机升级人类仲裁,不要硬干;维护型出场传 maintenance:true
+- 协议文件(`TASKS.md`/`LOG.md`)内容里的密钥样式串会被 R11 阻断;同行 `relay:secret-ok` 只对 R11 检测生效,协议写入路径一律拒绝
+- 出场绿闸会实际执行可执行验收(`test:` 路径跑 `node --test`;逐字符命中 `manifest.acceptance.commands` 的 `test:<命令>` 经 shell 执行;有 `package.json` 的 `scripts.test` 就跑 `npm test`)——不绿不提交
+- LOG 连续 3 条任务会话(task=维护/无 不计入)无「T### 完成」(R7)→ 停机升级人类仲裁,不要硬干;维护型出场传 `maintenance:true`,该字段与 `relay_claim` 的 `ttl_minutes` 均进入 MCP inputSchema
 - 验收标准不可执行 = 没有验收标准;一个会话内搞不定 → LOG 写负结果,换路或拆任务

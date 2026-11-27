@@ -69,7 +69,9 @@ try {
   const tst = spawnSync('node', ['--test'], { cwd: tmpA, encoding: 'utf8' });
   ok(tst.status === 0, 'preset 骨架测试交付即全绿(node --test)', (tst.stdout || tst.stderr || '').slice(-200));
   const mfA = JSON.parse(readFileSync(path.join(tmpA, '.relay/manifest.json'), 'utf8'));
-  ok(mfA.preset === 'node', 'manifest 记录 preset=node');
+  // manifest.preset 已按审计结论停写(写入但从不读取的死配置);preset 只作为 relay_init 的入参存在,
+  // 骨架是否真的按 node 生成由上面的 package.json / node --test 断言覆盖。
+  ok(!('preset' in mfA), 'manifest 不再写死配置 preset(死键清理)');
   const giA = readFileSync(path.join(tmpA, '.gitignore'), 'utf8');
   ok(giA.includes('.relay/claims/') && giA.includes('.env') && giA.includes('*.pem'), 'H3: gitignore 基线(密钥/认领锁/私钥)');
   const stTxt = readFileSync(path.join(tmpA, 'START.md'), 'utf8');

@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// relay-mcp — src/index.mjs (W2)
+// relay-mcp — MCP stdio 入口
 // 入口:启动 MCP stdio server,把 contract.mjs 的定义表接到 rpc.mjs 的分派上。
 // stdout 只允许出现协议响应;一切日志/诊断走 stderr。
 import { readFileSync } from 'node:fs';

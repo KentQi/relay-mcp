@@ -1,4 +1,4 @@
-// relay-mcp · W3 — relay_sync + 入口文件生成(供 init/onboard 复用)
+// relay-mcp — relay_sync + 入口文件生成(供 init/onboard 复用)
 // 依据 CONTRACT.md「仓库文件格式」「安全与降级」「工具清单」:
 // - 入口文件模板在运行时从 templates/<name>.tpl 读取,占位符
 //   {{PROJECT_NAME}} / {{TODAY}} / __RELAY_HOME__ 由本引擎替换,.tpl 去后缀落盘;
@@ -7,10 +7,12 @@
 // - 非破坏:任何重写前先 backupFile,永不删除用户文件;manifest 缺失/损坏 → isError。
 // 零依赖:仅 node: 内置。
 
-import { basename, dirname, join, relative, resolve } from 'node:path';
-import { access, writeFile } from 'node:fs/promises';
-import { acquireRepoLock, backupFile, readFileSafe, releaseRepoLock, stamp, templatesDir } from '../util.mjs';
-import { ensureGitignoreBaseline } from '../config.mjs';
+import { basename, join, dirname, relative, resolve } from 'node:path';
+import {
+  acquireRepoLock, assertNoSymlinkComponents, assertNotSymlinkFile, backupFile, firstLine, readFileSafe,
+  releaseRepoLock, stamp, templatesDir, toolError as err, toolOk as ok, writeFileAtomic,
+} from '../util.mjs';
+import { ensureGitignoreBaseline, readManifestConfig } from '../config.mjs';
 
 const MARKER_PREFIX = '<!-- relay:generated';
 const MARKER = '<!-- relay:generated v1 -->';
@@ -39,15 +41,6 @@ const composeProjection = (generated, current) => {
   if (gen != null) return gen === cur ? generated : generated.replace(gen, cur);
   return `${generated.replace(/\s*$/, '')}\n\n${cur}`;
 };
-
-const ok = (text) => ({ content: [{ type: 'text', text }], isError: false });
-const err = (text) => ({ content: [{ type: 'text', text }], isError: true });
-
-const pathExists = async (p) => {
-  try { await access(p); return true; } catch { return false; }
-};
-
-const firstLine = (s) => (String(s || '').trim().split('\n')[0] || '').slice(0, 160);
 
 const relOf = (root, p) => (p ? relative(root, p) : '(无)');
 
@@ -111,6 +104,13 @@ export const generateEntryFiles = async (root, ctx = {}) => {
 
   for (const name of files) {
     if (typeof name !== 'string' || !name) continue;
+    const portable = name.replace(/\\/g, '/');
+    if (portable.startsWith('/') || /^[A-Za-z]:/.test(portable) || portable.split('/').includes('..') || portable.includes('\0')) {
+      throw new Error(`入口文件名非法(${JSON.stringify(name)}):必须是仓库内相对路径`);
+    }
+    const parentRel = dirname(name);
+    if (parentRel !== '.') await assertNoSymlinkComponents(root, parentRel, `${name} 所在目录`);
+    await assertNotSymlinkFile(join(root, name), name);
     const generated = await renderTemplate(`${name}.tpl`, vars);
     if (generated === null) {
       result.notes.push(`templates/${name}.tpl 缺失,${name} 跳过`);
@@ -124,7 +124,7 @@ export const generateEntryFiles = async (root, ctx = {}) => {
         result.drift.push({ file: name, diff: '文件缺失(未生成)' });
         continue;
       }
-      await writeFile(target, generated, 'utf8');
+      await writeFileAtomic(target, generated, { label: name });
       result.created.push(name);
       continue;
     }
@@ -147,7 +147,7 @@ export const generateEntryFiles = async (root, ctx = {}) => {
     if (mode === 'init') {
       if (force) {
         const backup = await backupFile(target);
-        await writeFile(target, projection, 'utf8');
+        await writeFileAtomic(target, projection, { label: name });
         result.rewritten.push({ file: name, backup, note: 'force 重新初始化,原文件已备份(用户保留区已携带)' });
       } else {
         result.kept.push({ file: name, reason: '已存在,未改动(非破坏)' });
@@ -168,7 +168,7 @@ export const generateEntryFiles = async (root, ctx = {}) => {
           USER_END_LINE,
           '',
         ].join('\n');
-        await writeFile(target, merged, 'utf8');
+        await writeFileAtomic(target, merged, { label: name });
         result.rewritten.push({
           file: name,
           backup,
@@ -185,7 +185,7 @@ export const generateEntryFiles = async (root, ctx = {}) => {
       result.drift.push({ file: name, diff: diffSummary(current, projection) });
     } else { // sync:带标记 → 强制对齐模板投影(用户保留区原样携带);重写前必先备份
       const backup = await backupFile(target);
-      await writeFile(target, projection, 'utf8');
+      await writeFileAtomic(target, projection, { label: name });
       result.rewritten.push({
         file: name,
         backup,
@@ -200,19 +200,14 @@ export const generateEntryFiles = async (root, ctx = {}) => {
 export const relaySync = async (args = {}) => {
   const root = resolve((args && args.root) || process.cwd());
   try {
-    const manifestPath = join(root, '.relay', 'manifest.json');
-    const raw = await readFileSafe(manifestPath, null);
-    if (raw === null) {
+    const { manifest, manifestCorrupt, manifestError } = await readManifestConfig(root);
+    if (manifestCorrupt) return err(`${manifestError}。修复:恢复可读的 manifest JSON 后重跑 relay_sync。`);
+    if (!manifest) {
       return err([
         '未找到 .relay/manifest.json,无法对账入口文件。',
         '- 新项目请先运行 relay_init',
         '- 现有项目请先运行 relay_onboard',
       ].join('\n'));
-    }
-    let manifest = null;
-    try { manifest = JSON.parse(raw); }
-    catch (e) {
-      return err(`.relay/manifest.json 解析失败:${firstLine(e && e.message)}。请人工修复,或重新 relay_init / relay_onboard。`);
     }
     // AGENTS.md 永远必需;entryFiles 只控制其他适配入口,空数组不再表示「不投影任何入口」。
     const configured = Array.isArray(manifest.entryFiles) ? manifest.entryFiles : DEFAULT_ENTRY_FILES;
@@ -248,7 +243,7 @@ export const relaySync = async (args = {}) => {
     const factsHint = factsEnabled
       ? []
       : ['', '- 事实底账未启用(manifest.facts.enabled 缺失):出场不会写「事实(v2)」行,R10 会一直 SKIP。',
-        '  - 如需启用:在 .relay/manifest.json 写入 \"facts\": {\"enabled\": true, \"since\": \"' + stamp() + '\", \"strict\": false} 后重跑 relay_verify。'];
+        '  - 如需启用:在 .relay/manifest.json 写入 \"facts\": {\"enabled\": true, \"since\": \"' + stamp() + '\"} 后重跑 relay_verify。'];
 
     const lines = [
       `## relay:sync — 入口文件对账(${entryFiles.length} 个)`,
@@ -259,7 +254,7 @@ export const relaySync = async (args = {}) => {
     ];
     lines.push(...factsHint);
     if (gi.status === 'created') {
-      lines.push('', '- `.gitignore` 已按基线新建(含 `.relay/worktrees/`、`.relay/worktrees.json`、`.relay/worktrees.lock` 等运行时忽略项)');
+      lines.push('', '- `.gitignore` 已按基线新建(含 `.relay/worktrees/`、`.relay/worktrees.json` 等运行时忽略项)');
     } else if (gi.status === 'appended') {
       lines.push('', `- \`.gitignore\` 已幂等补 ${gi.added.length} 条基线:${gi.added.slice(0, 6).join(', ')}${gi.added.length > 6 ? '…' : ''}`);
     }
@@ -292,7 +287,9 @@ export const relaySync = async (args = {}) => {
       // P5:存在「未接管但与模板有出入」的项时,不得谎报「全部一致,无漂移」
       lines.push('', res.drift.length
         ? '未新建任何入口文件;其余入口文件要么已被 relay 投影,要么按非破坏原则保持原样(见上方「未接管」小节)。'
-        : '全部入口文件与模板再生内容一致,无漂移。');
+        : res.notes.length
+          ? '入口文件处理已完成,但有模板缺失被跳过(见上方说明),不能宣称全部与模板一致。'
+          : '全部入口文件与模板再生内容一致,无漂移。');
     } else {
       lines.push('', '存在缺失文件,已按模板重建。');
     }

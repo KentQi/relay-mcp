@@ -52,10 +52,18 @@ try {
   });
   ok(end.status === 1, 'session_end 被阻断(isError)', out(end).slice(0, 400));
   ok(/敏感内容闸/.test(out(end)), '输出含「敏感内容闸:已阻断」');
+  ok(!/标注 relay:secret-ok 豁免/.test(out(end)), '自动写入阻断的修复指引不提供无效豁免');
   ok(!/AKIAABCDEFGHIJKLMNOP/.test(out(end)), '阻断输出不回显完整密钥');
   ok(!readFileSync(logPath, 'utf8').includes('AKIAABCDEFGHIJKLMNOP'), 'LOG.md 未写入密钥');
   ok(readFileSync(path.join(tmp, 'TASKS.md'), 'utf8') === tasksBefore, 'TASKS.md 未被半写(前置闸生效)');
   ok(!/\[x\] T003/.test(readFileSync(path.join(tmp, 'TASKS.md'), 'utf8')), 'T003 未被标记完成');
+
+  const sensitiveName = 'id_rsa. -> placeholder';
+  writeFileSync(path.join(tmp, 'docs', sensitiveName), 'fixture only\n');
+  const guarded = cli('relay_session_end', { model: 'smoke-secret', summary: '路径级守卫检查' });
+  ok(/护栏:需人类批准/.test(out(guarded)) && out(guarded).includes(sensitiveName), '路径级守卫按完整文件名判定');
+  const committed = spawnSync('git', ['-C', tmp, 'ls-tree', '-r', '--name-only', 'HEAD'], { encoding: 'utf8' });
+  ok(committed.status === 0 && !committed.stdout.includes(sensitiveName), '受保护的文件名不会被自动提交');
 } finally {
   rmSync(tmp, { recursive: true, force: true });
 }

@@ -1,5 +1,5 @@
-// relay-mcp — W4 会话协议引擎:入场简报 / 出场绿闸 / 任务认领。
-// 依据 CONTRACT.md「仓库文件格式」「安全与降级」与 W4 分工。
+// relay-mcp — 会话协议引擎:入场简报 / 出场绿闸 / 任务认领。
+// 依据 CONTRACT.md「仓库文件格式」与「安全与降级」。
 // 任务行/日志条目正则统一取自 verify.mjs(与契约逐字符一致)。
 // 出场绿闸铁律:verify 全量有 ERROR → 不改任何文件、不提交;
 //   此外绿闸实际执行可执行验收(H1):test: 路径跑 node --test、package.json 有 scripts.test 就跑 npm test。
@@ -9,31 +9,28 @@
 // 疑似密钥文件(.env*/*secret*/*credential*/*.key/*.pem/id_rsa)在场:同护栏处理,不自动提交(H3)。
 import {
   acquireFileLock, acquireRepoLock, checkProtocolFilesSafe, parseLockContent, readFileSafe, isGitRepoAsync, gitIdentityArgs,
-  gitRun, findSensitiveChanges, releaseFileLock, stamp, nowIso, templatesDir,
-  writeProtocolFile, scanSecrets, SECRET_OK_MARKER, sha256Hex,
+  gitRun, gitStatusPaths, findSensitivePaths, releaseFileLock, stamp, nowIso, templatesDir,
+  writeProtocolFile, scanSecrets, sha256Hex, assertNotSymlinkFile, assertNoSymlinkComponents, DEFAULT_CLAIM_TTL_MINUTES,
+  readTextOrNull as readText, writeFileAtomic,
 } from '../util.mjs';
-import { stat as fsStat, writeFile as fsWriteFile, mkdir as fsMkdir, rm as fsRm } from 'node:fs/promises';
+import {
+  stat as fsStat, writeFile as fsWriteFile, mkdir as fsMkdir, lstat as fsLstat, realpath as fsRealpath,
+  unlink as fsUnlink,
+} from 'node:fs/promises';
 import { join, resolve, sep, isAbsolute as pathIsAbsolute } from 'node:path';
-import { execFile, exec } from 'node:child_process';
-import { promisify } from 'node:util';
-import { runChecks, formatChecks, runTaskTreeChecks, TASK_LINE_RE, LOG_TITLE_RE, parseLogEntries } from './verify.mjs';
-import { readManifestConfig, DEFAULT_COMMIT_TEMPLATE } from '../config.mjs';
+import { spawn } from 'node:child_process';
+import { runChecks, formatChecks, runTaskTreeChecks, TASK_LINE_RE, LOG_TITLE_RE, parseLogEntries, collectCompletionEvidence, completedTaskIds, completionWorktreePair } from './verify.mjs';
+import { readManifestConfig, DEFAULT_ACCEPTANCE_TIMEOUT_MS, DEFAULT_COMMIT_TEMPLATE } from '../config.mjs';
 import { deriveFacts, formatFactLine } from './facts.mjs';
 import {
   cleanupWorktrees, ensureTaskWorktree, ensureWorktreeGitignore, findManagedWorktreeEvidence, formatUnmergedBranchesNote,
-  listUnmergedTaskBranches, readWorktreeConfig, readWorktreeConfigRaw, readWorktreeRegistryState, registryRecoveryHint,
+  listUnmergedTaskBranches, managedRecordBaseError, readWorktreeConfig, readWorktreeConfigRaw, readWorktreeRegistryState, registryRecoveryHint,
   resolveRelayRoots, rollbackTaskWorktree, touchWorktree, upsertWorktreeRecord,
 } from './worktree.mjs';
-
-const execFileAsync = promisify(execFile);
 
 const SECTION_ORDER = ['进行中', '待办', '已完成'];
 
 // —— 小助手(一切读取走 readFileSafe,缺文件全部防御)——
-const readText = async (p) => {
-  const t = await readFileSafe(p, null);
-  return typeof t === 'string' ? t : null;
-};
 const readLines = async (p) => {
   const t = await readText(p);
   return t == null ? null : t.replace(/\r\n/g, '\n').split('\n');
@@ -64,7 +61,6 @@ const secretGateBlock = (label, text) => {
     ...(hits.length > 5 ? [`- 等 ${hits.length} 处`] : []),
     '',
     '修复:把该串替换为 [REDACTED](或移出协议文件);若该串曾进入 git 历史,立即轮换该密钥。',
-    `确属误报可在同一行标注 ${SECRET_OK_MARKER} 豁免。`,
     '',
     '本次未写入任何文件、未提交、未释放认领锁。',
   ].join('\n');
@@ -75,6 +71,8 @@ const parseTaskLine = (line) => {
   if (!m) return null;
   return { status: m[1], id: m[2], title: m[3], meta: m[4] || '' };
 };
+// 历史「无待办」占位行用于表达空队列,不是可执行工作;不得成为简报队首或被 claim 认领。
+const isPlaceholderTask = (title) => String(title ?? '').trim().startsWith('无待办');
 const findTaskIdx = (lines, id) => {
   for (let i = 0; i < lines.length; i++) {
     const p = parseTaskLine(lines[i]);
@@ -112,11 +110,6 @@ const nextTaskId = (lines) => {
   }
   return `T${String(max + 1).padStart(3, '0')}`;
 };
-const shortSha = async (root) => {
-  if (!(await isGitRepoAsync(root))) return 'nogit';
-  const r = await gitRun(root, 'rev-parse', '--short', 'HEAD');
-  return r.ok ? r.stdout.trim() : 'nogit';
-};
 // 模板兜底:运行时读 templates/,绝不硬编码模板内容(读不到才用最小骨架降级)
 const baseTemplateLines = async (name) => {
   const t = await readText(join(templatesDir(), name));
@@ -135,20 +128,15 @@ const PROTECTED_RULES = [
 ];
 // P2:manifest.protectedPaths 追加在 PROTECTED_RULES 之后(合并,非替换)——
 // 内置 5 条护栏任何时候都生效,manifest 只能加严不能放松。
-const findProtectedChanges = (statusLines, extra = []) => {
+const findProtectedChanges = (statusPaths, extra = []) => {
   const rules = [
     ...PROTECTED_RULES.map(([name, f]) => [name, f]),
     ...extra.map(({ pattern, re }) => [`manifest.protectedPaths(${pattern})`, (p) => re.test(p)]),
   ];
   const hits = new Map();
-  for (const line of statusLines || []) {
-    if (line.length < 4) continue;
-    for (const raw of line.slice(3).split(' -> ')) {
-      let p = raw.trim();
-      if (p.length >= 2 && p.startsWith('"') && p.endsWith('"')) p = p.slice(1, -1);
-      const rule = rules.find(([, f]) => f(p));
-      if (rule) hits.set(p, rule[0]);
-    }
+  for (const p of statusPaths) {
+    const rule = rules.find(([, f]) => f(p));
+    if (rule) hits.set(p, rule[0]);
   }
   return [...hits.entries()].map(([path, why]) => ({ path, why })).sort((a, b) => a.path.localeCompare(b.path));
 };
@@ -176,31 +164,85 @@ const sanitizeAcceptanceEnv = () => {
   }
   return env;
 };
-const runCmd = async (cmd, args, cwd, timeoutMs = 180000) => {
-  const env = sanitizeAcceptanceEnv();
-  try {
-    const { stdout, stderr } = await execFileAsync(cmd, args, { cwd, timeout: timeoutMs, maxBuffer: 4 * 1024 * 1024, env });
-    return { ok: true, out: `${stdout || ''}\n${stderr || ''}`.trim() };
-  } catch (e) {
-    if (e && e.code === 'ENOENT') return { ok: null, out: `未找到可执行文件 ${cmd}` };
-    if (e && (e.killed || e.signal === 'SIGTERM')) return { ok: false, out: `超时(${timeoutMs / 1000}s)被终止` };
-    return { ok: false, out: `${e?.stdout || ''}\n${e?.stderr || e?.message || '执行失败'}`.trim() };
+const MAX_ACCEPTANCE_OUTPUT = 4 * 1024 * 1024;
+const terminateProcessTree = async (child) => {
+  if (!child || !child.pid) return;
+  if (process.platform === 'win32') {
+    const killer = spawn('taskkill', ['/pid', String(child.pid), '/T', '/F'], { stdio: 'ignore', windowsHide: true });
+    await new Promise((resolve) => { killer.once('error', resolve); killer.once('close', resolve); });
+    return;
   }
+  try { process.kill(-child.pid, 'SIGKILL'); } catch { /* 进程组已退出 */ }
 };
+// POSIX 杀独立进程组,Windows 用 taskkill /T /F。给 close 有限时间,避免进程遗留的管道挂住出场。
+const executeAcceptance = (command, args, { cwd, timeoutMs, shell = false, env }) => new Promise((resolve) => {
+  let child;
+  try {
+    child = spawn(command, args, {
+      cwd, env, shell, detached: process.platform !== 'win32', windowsHide: true,
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+  } catch (e) {
+    resolve({ ok: e?.code === 'ENOENT' ? null : false, out: e?.code === 'ENOENT' ? `未找到可执行文件 ${command}` : String(e?.message || e) });
+    return;
+  }
+  let timedOut = false;
+  let spawnError = null;
+  let settled = false;
+  let closeTimer;
+  let remainingBytes = MAX_ACCEPTANCE_OUTPUT;
+  const stdout = [];
+  const stderr = [];
+  const capture = (chunks) => (chunk) => {
+    if (remainingBytes <= 0) return;
+    const retained = chunk.subarray(0, remainingBytes);
+    remainingBytes -= retained.length;
+    chunks.push(retained);
+  };
+  const timeoutResult = (confirmed) => ({
+    ok: false,
+    timedOut: true,
+    out: `超时(${timeoutMs / 1000}s)${confirmed ? '，已终止验收进程' : '，等待进程退出超时，请检查残留进程'}`,
+  });
+  const timer = setTimeout(() => {
+    timedOut = true;
+    closeTimer = setTimeout(() => {
+      settled = true;
+      child.stdout.destroy();
+      child.stderr.destroy();
+      child.unref();
+      resolve(timeoutResult(false));
+    }, 1000);
+    void terminateProcessTree(child).catch(() => {
+      try { child.kill('SIGKILL'); } catch { /* 进程已退出 */ }
+    });
+  }, timeoutMs);
+  timer.unref();
+  child.stdout.on('data', capture(stdout));
+  child.stderr.on('data', capture(stderr));
+  child.once('error', (e) => { spawnError = e; });
+  child.once('close', (code, signal) => {
+    clearTimeout(timer);
+    clearTimeout(closeTimer);
+    if (settled) return;
+    settled = true;
+    if (timedOut) { resolve(timeoutResult(true)); return; }
+    if (spawnError?.code === 'ENOENT') { resolve({ ok: null, out: `未找到可执行文件 ${command}` }); return; }
+    if (spawnError) { resolve({ ok: false, out: String(spawnError.message || spawnError) }); return; }
+    const out = `${Buffer.concat(stdout).toString()}\n${Buffer.concat(stderr).toString()}`.trim();
+    resolve({ ok: code === 0, out: out || (code === 0 ? '' : `执行失败(exit=${code ?? '?'},signal=${signal || '无'})`) });
+  });
+});
+const runCmd = (cmd, args, cwd, timeoutMs = DEFAULT_ACCEPTANCE_TIMEOUT_MS) => executeAcceptance(cmd, args, {
+  cwd, timeoutMs, env: sanitizeAcceptanceEnv(),
+});
 // —— 白名单命令执行器(P1):仅当命令串「逐字符」命中 manifest.acceptance.commands 才走到这里 ——
-// runCmd 用 execFile(无 shell,不解析元字符);这里显式开 shell 是执行复合命令串的必要妥协,
-// 边界写在 manifest 里:命令由仓库属主逐条签字,与「执行验收行里的自由文本」有本质区别。
-const execAsync = promisify(exec);
-const runWhitelistedCmd = async (cmdStr, cwd, timeoutMs = 180000) => {
-  try {
-    const { stdout, stderr } = await execAsync(cmdStr, { cwd, timeout: timeoutMs, maxBuffer: 4 * 1024 * 1024 });
-    return { ok: true, out: `${stdout || ''}\n${stderr || ''}`.trim() };
-  } catch (e) {
-    if (e && e.code === 'ENOENT') return { ok: null, out: `未找到可执行文件 ${cmdStr}` };
-    if (e && (e.killed || e.signal === 'SIGTERM')) return { ok: false, out: `超时(${timeoutMs / 1000}s)被终止` };
-    return { ok: false, out: `${e?.stdout || ''}\n${e?.stderr || e?.message || '执行失败'}`.trim() };
-  }
-};
+// runCmd 用 argv(无 shell,不解析元字符);白名单复合命令显式开 shell,授权边界由 manifest 定义。
+const runWhitelistedCmd = (cmdStr, cwd, timeoutMs = DEFAULT_ACCEPTANCE_TIMEOUT_MS) => executeAcceptance(cmdStr, [], {
+  cwd, timeoutMs, shell: true, env: sanitizeAcceptanceEnv(),
+});
+// @internal 仅供隔离冒烟验证进程组超时;生产调用走上面的验收门。
+export const __runAcceptanceForTest = { runCmd, runWhitelistedCmd };
 
 const tailOf = (s, n = 500) => {
   const t = String(s || '').trim();
@@ -213,16 +255,6 @@ const PROTOCOL_FILES = new Set(['TASKS.md', 'LOG.md']);
 // T001:控制面提交白名单 = 协议文件 + 归档目录(relay_archive_log 搬出的历史条目要能入库,
 // 否则指针指向的文件不在 git 里 = 新漂移;归档文件只增不改,不卷入其它改动)。
 const CONTROL_PLANE_PATHS = ['TASKS.md', 'LOG.md', 'docs/archive'];
-// porcelain 行:XY 定宽两字符 + 空格,其余是路径(rename 为 "old -> new")。只认协议文件本身。
-const statusPathOf = (line) => {
-  const raw = String(line || '').slice(3);
-  const tail = raw.includes(' -> ') ? raw.split(' -> ').pop() : raw;
-  let p = String(tail || '').trim();
-  if (p.length >= 2 && p.startsWith('"') && p.endsWith('"')) p = p.slice(1, -1);
-  return p;
-};
-const isProtocolStatusLine = (line) => PROTOCOL_FILES.has(statusPathOf(line));
-
 // registry 记录对应 worktree 的当前证据:脏改动 / 分支是否有新提交(用于根错配 fail-closed)。
 const taskWorktreeEvidence = async (controlRoot, record) => {
   const relPath = typeof record?.path === 'string' ? record.path : '';
@@ -255,31 +287,61 @@ const taskWorktreeEvidence = async (controlRoot, record) => {
 
 // 成对证据:managed 完成必须同时具备「任务分支代码提交」与「controlRoot 控制面提交」,
 // 且 LOG 记录 branch+代码 SHA。任何一项不满足都不得盖完成章。
-const verifyDualEvidence = async ({ controlRoot, executionRoot, doneTask, codeSha, controlSha, branch }) => {
+const verifyDualEvidence = async ({ controlRoot, executionRoot, doneTask, codeSha, controlSha, branch, historical = false }) => {
   const fails = [];
   const lines = [];
-  if (!codeSha) fails.push('缺少 executionRoot 代码提交 SHA');
-  const exHead = await gitRun(executionRoot, 'rev-parse', 'HEAD');
-  if (!exHead.ok || exHead.stdout.trim() !== codeSha) {
-    fails.push(`executionRoot HEAD(${exHead.stdout.trim() || '?'})≠代码提交 SHA(${codeSha || '?'})`);
+  if (!/^[0-9a-f]{40}$/.test(codeSha || '') || !/^[0-9a-f]{40}$/.test(controlSha || '')) {
+    return { fails: ['缺少有效的代码或控制面提交 SHA'], lines };
   }
-  if (!controlSha) fails.push('缺少 controlRoot 控制面提交 SHA');
-  const cMsg = await gitRun(controlRoot, 'log', '-1', '--format=%s');
-  if (!cMsg.ok || !cMsg.stdout.includes(`${doneTask} 完成`)) {
-    fails.push(`controlRoot 最新提交消息未含「${doneTask} 完成」:${cMsg.stdout.trim() || '(空)'}`);
+  const exHead = historical
+    ? await gitRun(executionRoot, 'merge-base', '--is-ancestor', codeSha, `refs/heads/${branch}`)
+    : await gitRun(executionRoot, 'rev-parse', 'HEAD');
+  if (!exHead.ok || (!historical && exHead.stdout.trim() !== codeSha)) {
+    fails.push('任务分支无法验证原代码提交');
   }
-  const cStat = await gitRun(controlRoot, 'status', '--porcelain', '--', 'TASKS.md', 'LOG.md');
-  if (!cStat.ok || cStat.stdout.trim()) {
-    fails.push(`controlRoot 的 TASKS.md/LOG.md 未提交干净:${cStat.stdout.trim() || cStat.stderr || '未知原因'}`);
+  if (historical) {
+    const inHistory = await gitRun(controlRoot, 'merge-base', '--is-ancestor', controlSha, 'HEAD');
+    if (!inHistory.ok) fails.push('控制面当前历史缺少原完成提交');
+  } else {
+    const cStat = await gitRun(controlRoot, 'status', '--porcelain', '--', 'TASKS.md', 'LOG.md');
+    if (!cStat.ok || cStat.stdout.trim()) fails.push('controlRoot 的 TASKS.md/LOG.md 未提交干净');
   }
-  const logText = String((await readText(join(controlRoot, 'LOG.md'))) || '');
-  if (!branch || !logText.includes(`branch=${branch}`) || !logText.includes(`sha=${codeSha}`)) {
-    fails.push(`LOG 未记录 branch(${branch || '?'}) 与代码 SHA(${codeSha || '?'})`);
-  }
+  const cMsg = await gitRun(controlRoot, 'log', '-1', '--format=%s', controlSha);
+  if (!cMsg.ok || !cMsg.stdout.includes(`${doneTask} 完成`)) fails.push(`控制面提交消息未含「${doneTask} 完成」`);
+  const ledger = await gitRun(controlRoot, 'show', `${controlSha}:LOG.md`);
+  const pair = ledger.ok ? completionWorktreePair(ledger.stdout, doneTask) : null;
+  if (!pair || pair[1] !== branch || pair[2] !== codeSha) fails.push('控制面提交的对应 LOG 条目缺少匹配的成对证据');
   if (!fails.length) {
     lines.push(`- 成对证据: branch=${branch}; codeSha=${codeSha}; controlSha=${controlSha}; LOG 记录 branch+sha; controlRoot TASKS/LOG 已提交`);
   }
   return { fails, lines };
+};
+
+// 崩溃恢复时 control HEAD 可能已经越过当时有效的完成提交。完成 SHA 只能由
+// “提交消息含 T### 完成 + 该提交中的 LOG 成对证据匹配 branch/codeSha”反查,
+// 不能盲取当前 HEAD,也不能信任注册表里尚未写入的 controlSha。
+const findControlCompletionCommit = async (controlRoot, executionRoot, doneTask, { branch, codeSha }) => {
+  const candidates = await gitRun(
+    controlRoot, 'log', 'HEAD', '--fixed-strings', '--format=%H%x09%s', '--grep', `${doneTask} 完成`, '--', 'LOG.md',
+  );
+  if (!candidates.ok) return { sha: '', error: candidates.stderr || candidates.stdout || 'git log 失败' };
+  const ancestors = [];
+  for (const line of candidates.stdout.split('\n')) {
+    const [sha, subject = ''] = line.split('\t');
+    if (!/^[0-9a-f]{40}$/.test(sha || '') || !subject.includes(`${doneTask} 完成`)) continue;
+    const committedLog = await gitRun(controlRoot, 'show', `${sha}:LOG.md`);
+    if (!committedLog.ok) continue;
+    const pair = completionWorktreePair(committedLog.stdout, doneTask);
+    if (!pair || pair[1] !== branch) continue;
+    if (pair[2] === codeSha) return { sha, codeSha: pair[2], branch: pair[1], error: '' };
+    const ancestor = await gitRun(executionRoot, 'merge-base', '--is-ancestor', pair[2], codeSha);
+    if (ancestor.ok) ancestors.push({ sha, codeSha: pair[2], branch: pair[1] });
+  }
+  if (ancestors.length === 1) return { ...ancestors[0], error: '' };
+  if (ancestors.length > 1) {
+    return { sha: '', error: `找到 ${ancestors.length} 个可匹配的历史完成提交,无法确定唯一 codeSha` };
+  }
+  return { sha: '', error: '当前 HEAD 历史中找不到与 branch/当前任务历史匹配的完成提交' };
 };
 
 // —— 验收测试路径安检(H-A):交接单上的 test: 路径必须是一枚"真测试文件"——
@@ -313,12 +375,16 @@ const classifyAcceptance = (raw, cfg) => {
 
 // —— 验收执行门(H1):完成声明必须有可执行的绿灯背书 ——
 // 返回 { lines: string[](已执行并通过), fails: string[](任何一条即拒绝出场), executed: number, notes: string[] }
-const acceptanceGate = async (root, doneTask, cfg, executionRoot = root) => {
+const acceptanceGate = async (root, doneTask, cfg, executionRoot = root, { runProjectTest = true } = {}) => {
   const lines = [];
   const fails = [];
   const notes = [];
   let executed = 0;
   let testPath = null;
+  const timeoutMs = cfg.acceptanceTimeoutMs;
+  const failure = (cmd, context, result) => result.timedOut
+    ? `\`${cmd}\` ${result.out}。核对实际耗时;确需延长时,由仓库属主调整 manifest.acceptance.timeoutMs。`
+    : `\`${cmd}\` 失败(${context}):\n${tailOf(result.out)}`;
   if (doneTask) {
     const tLines = await readLines(join(root, 'TASKS.md'));
     if (tLines) {
@@ -341,9 +407,9 @@ const acceptanceGate = async (root, doneTask, cfg, executionRoot = root) => {
         : classifyAcceptance(chk.raw, cfg); // P1 分支
     if (verdict.cmd) {
       executed += 1;
-      const r = await runWhitelistedCmd(verdict.cmd, executionRoot); // 超时沿用 180s
+      const r = await runWhitelistedCmd(verdict.cmd, executionRoot, timeoutMs);
       if (r.ok === null) notes.push(`验收 test:${testPath} 命中白名单,但无法执行(${r.out})——人工确认`);
-      else if (!r.ok) fails.push(`\`${verdict.cmd}\` 失败(验收 test: 不绿):\n${tailOf(r.out)}`);
+      else if (!r.ok) fails.push(failure(verdict.cmd, '验收 test: 不绿', r));
       else lines.push(`- 验收 \`test:\`:\`${verdict.cmd}\`(manifest.acceptance.commands 白名单)通过`);
     } else if (verdict.bad) {
       fails.push(`验收 test: 安检未通过——${verdict.bad}(裁判只执行真正的测试文件)`);
@@ -351,16 +417,16 @@ const acceptanceGate = async (root, doneTask, cfg, executionRoot = root) => {
       fails.push(`验收 \`${testPath}\` 的测试文件不存在——完成声明无法证实(红灯协议:完成时该测试必须存在且通过)`);
     } else if (/\.(m|c)?js$/i.test(chk.raw)) {
       executed += 1;
-      const r = await runCmd('node', ['--test', chk.raw], executionRoot);
+      const r = await runCmd('node', ['--test', chk.raw], executionRoot, timeoutMs);
       if (r.ok === null) notes.push(`验收 test:${testPath} 存在,但无法执行(${r.out})——人工确认`);
-      else if (!r.ok) fails.push(`\`node --test ${testPath}\` 失败(验收 test: 不绿):\n${tailOf(r.out)}`);
+      else if (!r.ok) fails.push(failure(`node --test ${testPath}`, '验收 test: 不绿', r));
       else lines.push(`- 验收 \`test:\`:node --test ${testPath} 通过`);
     } else {
       lines.push(`- 验收 \`test:\`:${testPath} 存在(ts 系测试,未自动执行,人工确认其通过)`);
     }
   }
   // b) 项目测试入口:package.json scripts.test → npm test
-  const pkg = await readText(join(executionRoot, 'package.json'));
+  const pkg = runProjectTest ? await readText(join(executionRoot, 'package.json')) : null;
   let hasTestScript = false;
   if (pkg) { try { hasTestScript = typeof JSON.parse(pkg)?.scripts?.test === 'string'; } catch { /* 非法 package.json 不影响本门 */ } }
   if (hasTestScript) {
@@ -368,13 +434,13 @@ const acceptanceGate = async (root, doneTask, cfg, executionRoot = root) => {
     // 命令串由引擎自造(常量),不是验收行里的自由文本。Windows 下 execFile 拉不起 npm.cmd(ENOENT)必须走 shell;
     // POSIX 保留 execFile(不经 shell),防 ~/.bashrc 的 alias npm=... 劫持语义
     const r = process.platform === 'win32'
-      ? await runWhitelistedCmd('npm test --silent', executionRoot, 180000)
-      : await runCmd('npm', ['test', '--silent'], executionRoot, 180000);
+      ? await runWhitelistedCmd('npm test --silent', executionRoot, timeoutMs)
+      : await runCmd('npm', ['test', '--silent'], executionRoot, timeoutMs);
     if (r.ok === null) notes.push(`发现 scripts.test 但无法执行(${r.out})——人工跑测试后手动提交`);
-    else if (!r.ok) fails.push(`\`npm test\` 失败(项目测试入口不绿):\n${tailOf(r.out)}`);
+    else if (!r.ok) fails.push(failure('npm test', '项目测试入口不绿', r));
     else lines.push('- 项目测试入口:`npm test` 通过');
   }
-  if (!executed) notes.push('未发现可执行验收(无 test: 路径、无 package.json scripts.test)——本次绿闸仅做结构检查,代码事实由人工验收兜底');
+  if (runProjectTest && !executed) notes.push('未发现可执行验收(无 test: 路径、无 package.json scripts.test)——本次绿闸仅做结构检查,代码事实由人工验收兜底');
   return { lines, fails, executed, notes };
 };
 
@@ -409,10 +475,10 @@ const redLightCheck = async (root, next, cfg, executionRoot = root) => {
 // 与仓库写锁共用 util 的锁协议:JSON v2(兼容旧文本)、写失败清理、空/半初始化锁安全接管、
 // token fencing。认领锁刻意关闭心跳(heartbeat:false):它的 TTL(240min)是崩溃恢复语义,
 // 持续续租会让「agent 崩溃但 server 仍存活」的认领永不过期;仓库写锁才需要心跳。
-const CLAIM_TTL_MIN = 240;
 const claimLockRel = (task) => `.relay/claims/${task}.lock`;
 const lockPathOf = (root, task) => join(root, claimLockRel(task));
-const acquireClaimLock = async (root, task, model, ttlMin = CLAIM_TTL_MIN) => {
+const acquireClaimLock = async (root, task, model, explicitTtl = null) => {
+  const ttlMin = explicitTtl ?? DEFAULT_CLAIM_TTL_MINUTES;
   let lock;
   try {
     lock = await acquireFileLock(root, claimLockRel(task), model, {
@@ -421,12 +487,12 @@ const acquireClaimLock = async (root, task, model, ttlMin = CLAIM_TTL_MIN) => {
       sameHolder: (holder) => holder === model,
       label: `任务 ${task} 认领锁`,
       heartbeat: false,
-      ttlMinutes: ttlMin,
+      ttlMinutes: explicitTtl,
     });
   } catch (e) {
     return { ok: false, holder: '(锁路径异常)', ageMin: 0, ttlMin, warning: e?.message || String(e) };
   }
-  if (!lock.ok) return { ok: false, holder: lock.holder, ageMin: lock.ageMin, ttlMin, warning: lock.warning };
+  if (!lock.ok) return { ok: false, holder: lock.holder, ageMin: lock.ageMin, ttlMin: lock.ttlMin ?? ttlMin, warning: lock.warning };
   return { ok: true, created: lock.created, token: lock.token, tookOver: lock.tookOver, handle: lock };
 };
 const releaseClaimLock = async (root, task, token) => releaseFileLock(root, claimLockRel(task), token, `任务 ${task} 认领锁`);
@@ -439,6 +505,21 @@ const ownedClaimToken = async (root, task, model) => {
 const claimLockCheck = async (lock, task) => {
   const verdict = await lock.check();
   return verdict.held ? '' : `任务 ${task} 的认领锁已不属于当前会话(${verdict.warning || '已被接管'})`;
+};
+
+// 只有未提交的完成戳且无完成 LOG/归档证据,并且仍有原认领锁,才可走正常 TTL 接管。
+const interruptedCompletion = async (root, task) => {
+  const lockPath = lockPathOf(root, task);
+  await assertNoSymlinkComponents(root, '.relay/claims', '任务认领锁');
+  await assertNotSymlinkFile(lockPath, '任务认领锁');
+  const lock = parseLockContent(await readFileSafe(lockPath, null, { onlyMissing: true }));
+  if (lock.corrupt || !lock.token || !lock.holder) return false;
+  const committedTasks = await gitRun(root, 'show', 'HEAD:TASKS.md');
+  if (!committedTasks.ok || completedTaskIds(committedTasks.stdout).includes(task)) return false;
+  const liveLog = await readFileSafe(join(root, 'LOG.md'), null, { onlyMissing: true });
+  if (liveLog == null) return false;
+  const evidence = await collectCompletionEvidence(root, liveLog);
+  return !evidence.archiveUnreadable && !evidence.completed.has(task) && !evidence.archived.has(task);
 };
 
 const text = (s) => (Array.isArray(s) ? s.join('\n') : s);
@@ -460,7 +541,9 @@ export const relaySessionStart = async (args = {}) => {
   // 生效配置回显(P2-23):worktree 由 worktree.mjs 单独解析,必须回显真实生效值,
   // 否则 manifest 写成字符串 "true"(静默失效)时简报会误导 agent 以为 worktree 已开启。
   let briefWt = null;
-  try { briefWt = await readWorktreeConfig(root, { manifest }); } catch { briefWt = null; }
+  if (!briefCfg.manifestCorrupt) {
+    try { briefWt = await readWorktreeConfig(root, { manifest }); } catch { briefWt = null; }
+  }
   const startText = await readText(join(root, 'START.md'));
   if (startText == null) {
     return {
@@ -479,7 +562,9 @@ export const relaySessionStart = async (args = {}) => {
   }
 
   const lifecycleNotes = [];
-  if (roots.managed) {
+  if (briefCfg.manifestCorrupt) {
+    lifecycleNotes.push(`- ${briefCfg.manifestError};修复配置后才执行 worktree 维护`);
+  } else if (roots.managed) {
     try { await touchWorktree(root, executionRoot); }
     catch (e) { lifecycleNotes.push(`- worktree 活跃时间更新失败(不阻断): ${e?.message || String(e)}`); }
   } else {
@@ -488,8 +573,7 @@ export const relaySessionStart = async (args = {}) => {
       lifecycleNotes.push(`- ⚠ linked worktree 未登记(registryState=${roots.registryState}):完成出场将被 fail-closed 拒绝;${registryRecoveryHint(root, roots.registryState)}`);
     }
     try {
-      const wtConfig = await readWorktreeConfig(root, { manifest });
-      if (wtConfig.enabled && wtConfig.autoCleanup) {
+      if (briefWt?.enabled && briefWt.autoCleanup) {
         const cleaned = await cleanupWorktrees(root, { confirm: true, currentRoot: executionRoot, manifest, tasksText });
         lifecycleNotes.push(`- 自动清理: 移除 ${cleaned.removed.length} 个,保留 ${cleaned.kept.length} 个,错误 ${cleaned.errors.length} 个${cleaned.errors.length ? '(不阻断简报)' : ''}`);
       }
@@ -498,12 +582,9 @@ export const relaySessionStart = async (args = {}) => {
     }
   }
   // 依赖隔离 + 未合并分支:双根的核心认知,必须在进场时就说清
-  try {
-    const wtCfg = await readWorktreeConfig(root, { manifest });
-    if (wtCfg.enabled) {
-      lifecycleNotes.push('- 依赖隔离:任务 worktree 不携带 node_modules/.env 等 gitignored 文件;需要依赖时在 executionRoot 内安装(或 symlink),不要依赖 controlRoot 的旧依赖(嵌套目录可能被 Node 向上解析到 controlRoot/node_modules)');
-    }
-  } catch { /* 配置不可读不阻断简报 */ }
+  if (briefWt?.enabled) {
+    lifecycleNotes.push('- 依赖隔离:任务 worktree 不携带 node_modules/.env 等 gitignored 文件;需要依赖时在 executionRoot 内安装(或 symlink),不要依赖 controlRoot 的旧依赖(嵌套目录可能被 Node 向上解析到 controlRoot/node_modules)');
+  }
   let unmergedBranches = [];
   try { unmergedBranches = await listUnmergedTaskBranches(root); } catch { /* 只读提示,失败不阻断 */ }
 
@@ -535,7 +616,7 @@ export const relaySessionStart = async (args = {}) => {
   const todos = [];
   for (let i = 0; i < tasksLines.length; i++) {
     const p = parseTaskLine(tasksLines[i]);
-    if (!p) continue;
+    if (!p || isPlaceholderTask(p.title)) continue;
     let acceptance = '';
     if (i + 1 < tasksLines.length) {
       const am = tasksLines[i + 1].match(/^ {2}验收:\s*(.*)$/);
@@ -784,7 +865,9 @@ export const relayClaim = async (args = {}) => {
   // 不能静默按「非受管」继续(会丢失受管 worktree 的提交/状态语义)。
   const regStatePre = await readWorktreeRegistryState(root);
   // P3-01:这里只读「是否启用」,不校验 cacheDir——显式 worktree:false 时配置非法也不能连累普通认领。
-  const wtRawPre = await readWorktreeConfigRaw(root);
+  let wtRawPre;
+  try { wtRawPre = await readWorktreeConfigRaw(root); }
+  catch (e) { return fail(e?.message || 'manifest 无法读取'); }
   const useWorktreePre = typeof args.worktree === 'boolean' ? args.worktree : wtRawPre.enabled;
   if (useWorktreePre && regStatePre.state === 'corrupt') {
     return fail(`worktree 注册表损坏,拒绝认领(无法安全判定受管状态):${regStatePre.error}`, [
@@ -806,148 +889,161 @@ export const relayClaim = async (args = {}) => {
   let lock = null;
   let taskWorktree = null;
   try {
-  const fence0 = await claimLock.check();
-  if (!fence0.held) return fail(`仓库写锁在认领期间被接管(${fence0.warning || '锁已不属于当前会话'}),未做任何写入;请重试。`);
-  // T002:读一次原文并留哈希,写入前做内容 CAS(防人类手改 / 旧版本进程 / 接管窗口的丢更新)。
-  const tasksRaw = await readText(join(root, 'TASKS.md'));
-  const tasksHash = sha256Hex(tasksRaw == null ? '' : tasksRaw);
-  const lines = tasksRaw == null ? null : tasksRaw.replace(/\r\n/g, '\n').split('\n');
-  if (lines == null) {
-    return fail('未找到 TASKS.md:该仓库尚未接入接力协议。', ['', '修复: 先 relay_init(0→1)或 relay_onboard(老项目)。']);
-  }
-  const idx = findTaskIdx(lines, task);
-  if (idx < 0) {
-    return fail(`TASKS.md 中未找到任务 ${task}:任务行须匹配契约正则 \`/^- \\[( |~|x)\\] (T\\d+) (.*?)(?:  \\((.*)\\))?$/\`。`, ['', `修复: 核对任务号(注意补零,如 T004 不是 T4);若任务尚不存在,先在待办区定义并写明「验收:」行。`]);
-  }
-  const p = parseTaskLine(lines[idx]);
-  if (p.status === 'x') {
-    return fail(`${task} 已完成(${p.meta || '无完成信息'}),不能认领。`, ['', '修复: 从待办区选择其他任务,或让人类定义新任务。']);
-  }
-  // 是否可接管由认领锁的 TTL 裁决;TASKS.md 的持有者文本不能抢先把过期接管拒掉。
-  const range = taskBlockRange(lines, idx);
-  // 认领锁(M3):O_EXCL 原子创建,同模型幂等,TTL 到期可接管;防并行 read-modify-write 竞态
-  const ttlMin = Number(args.ttl_minutes) > 0 ? Number(args.ttl_minutes) : CLAIM_TTL_MIN;
-  const sameClaimant = p.meta === model || p.meta.startsWith(`${model}, `);
-  if (p.status === '~' && !sameClaimant && !(await existsFile(lockPathOf(root, task)))) {
-    // 锁文件被人为清理或崩溃恢复丢失时,TASKS 时间戳是仅剩的接管依据。
-    const claimedAt = p.meta.match(/(\d{4}-\d{2}-\d{2} \d{2}:\d{2})\s*$/);
-    const claimedMs = claimedAt ? new Date(`${claimedAt[1].replace(' ', 'T')}:00`).getTime() : NaN;
-    const ageMin = (Date.now() - claimedMs) / 60000;
-    if (!Number.isFinite(ageMin) || ageMin < ttlMin) {
-      return fail(`${task} 的认领锁不在场,TASKS.md 仍显示持有者为 **${p.meta || '(未知)'}**,且尚无证据证明认领已过期。`, [
-        '', `修复:等待认领超过 TTL(${ttlMin} 分钟)后重试;不要通过删除锁绕过持有权。`,
-      ]);
+    const fence0 = await claimLock.check();
+    if (!fence0.held) return fail(`仓库写锁在认领期间被接管(${fence0.warning || '锁已不属于当前会话'}),未做任何写入;请重试。`);
+    // T002:读一次原文并留哈希,写入前做内容 CAS(防人类手改 / 旧版本进程 / 接管窗口的丢更新)。
+    const tasksRaw = await readText(join(root, 'TASKS.md'));
+    const tasksHash = sha256Hex(tasksRaw == null ? '' : tasksRaw);
+    const lines = tasksRaw == null ? null : tasksRaw.replace(/\r\n/g, '\n').split('\n');
+    if (lines == null) {
+      return fail('未找到 TASKS.md:该仓库尚未接入接力协议。', ['', '修复: 先 relay_init(0→1)或 relay_onboard(老项目)。']);
     }
-  }
-  lock = await acquireClaimLock(root, task, model, ttlMin);
-  if (!lock.ok) {
-    return fail(`${task} 的认领锁被 **${lock.holder}** 持有(已持有约 ${Math.round(lock.ageMin)} 分钟,TTL ${lock.ttlMin} 分钟)。并行协议下不得抢占。`, [
-      '',
-      `修复: 选择待办区其他未被认领的任务;确信持有方已崩溃,等锁超过 TTL(${lock.ttlMin} 分钟)后自动可接管,或传 ttl_minutes 覆盖。`,
-      ...(lock.warning ? ['', `锁诊断:${lock.warning}`] : []),
-    ]);
-  }
-  // P3-01 / R-06 / R-07:worktree 的三个前置条件互不连累——
-  //   · 显式 worktree:false 完全不读/校验 worktree 配置(非法 cacheDir 不连累普通认领)
-  //   · 无 Git / 无可用 HEAD → 降级单根 + WARN(不硬失败,保持补丁前的单根可用性)
-  //   · 启用时先幂等补 .gitignore(实际 cacheDir + 注册表 + 锁),再创建缓存目录
-  const worktreeNotes = [];
-  const useWorktree = useWorktreePre;
-  if (useWorktree) {
-    let wtConfig = null;
-    try {
-      wtConfig = await readWorktreeConfig(root);
-    } catch (e) {
-      let releaseWarning = '';
-      if (lock?.token && (lock.created || lock.tookOver)) {
-        const rel = await releaseClaimLock(root, task, lock.token);
-        if (!rel.ok && rel.warning) releaseWarning = rel.warning;
+    const idx = findTaskIdx(lines, task);
+    if (idx < 0) {
+      return fail(`TASKS.md 中未找到任务 ${task}:任务行须匹配契约正则 \`/^- \\[( |~|x)\\] (T\\d+) (.*?)(?:  \\((.*)\\))?$/\`。`, ['', `修复: 核对任务号(注意补零,如 T004 不是 T4);若任务尚不存在,先在待办区定义并写明「验收:」行。`]);
+    }
+    const p = parseTaskLine(lines[idx]);
+    if (isPlaceholderTask(p.title)) {
+      return fail(`${task} 是「无待办」空队列占位行,不是可认领任务。`, ['', '修复: 与人类定义真实任务(含验收行)后再认领;不要认领占位行。']);
+    }
+    if (p.status === 'x') {
+      if (regStatePre.state === 'corrupt' || !(await interruptedCompletion(root, task))) {
+        return fail(`${task} 已完成(${p.meta || '无完成信息'}),不能认领。`, ['', '修复: 从待办区选择其他任务,或让人类定义新任务。']);
       }
-      return fail(`worktree 配置非法,拒绝创建任务 worktree:${e?.message || String(e)}`, [
+      if (!useWorktreePre) {
+        const evidence = await findManagedWorktreeEvidence(root, task, { registry: regStatePre.registry });
+        if (evidence.found) return fail(`${task} 的中断出场来自受管 worktree。修复:传 worktree:true 重新认领并在任务树补交。`);
+      }
+    }
+    // 是否可接管由认领锁的 TTL 裁决;TASKS.md 的持有者文本不能抢先把过期接管拒掉。
+    const range = taskBlockRange(lines, idx);
+    // 认领锁(M3):O_EXCL 原子创建,同模型幂等,TTL 到期可接管;防并行 read-modify-write 竞态
+    const requestedTtl = Number(args.ttl_minutes);
+    const explicitTtl = Number.isFinite(requestedTtl) && requestedTtl > 0 ? requestedTtl : null;
+    const ttlMin = explicitTtl ?? DEFAULT_CLAIM_TTL_MINUTES;
+    const sameClaimant = p.meta === model || p.meta.startsWith(`${model}, `);
+    if (p.status === '~' && !sameClaimant && !(await existsFile(lockPathOf(root, task)))) {
+      // 锁文件被人为清理或崩溃恢复丢失时,TASKS 时间戳是仅剩的接管依据。
+      const claimedAt = p.meta.match(/(\d{4}-\d{2}-\d{2} \d{2}:\d{2})\s*$/);
+      const claimedMs = claimedAt ? new Date(`${claimedAt[1].replace(' ', 'T')}:00`).getTime() : NaN;
+      const ageMin = (Date.now() - claimedMs) / 60000;
+      if (!Number.isFinite(ageMin) || ageMin < ttlMin) {
+        return fail(`${task} 的认领锁不在场,TASKS.md 仍显示持有者为 **${p.meta || '(未知)'}**,且尚无证据证明认领已过期。`, [
+          '', `修复:等待认领超过 TTL(${ttlMin} 分钟)后重试;不要通过删除锁绕过持有权。`,
+        ]);
+      }
+    }
+    lock = await acquireClaimLock(root, task, model, explicitTtl);
+    if (!lock.ok) {
+      return fail(`${task} 的认领锁被 **${lock.holder}** 持有(已持有约 ${Math.round(lock.ageMin)} 分钟,TTL ${lock.ttlMin} 分钟)。并行协议下不得抢占。`, [
         '',
-        '修复: 按提示修正 .relay/manifest.json 的 worktree.cacheDir(controlRoot 内相对路径,不含 ..、控制字符、绝对/盘符路径、.git 前缀)后重试;',
-        '或传 `worktree: false` 显式走单根认领(该路径完全不读取 cacheDir 配置)。',
-        ...(releaseWarning ? ['', `锁告警:${releaseWarning}`] : []),
+        `修复: 选择待办区其他未被认领的任务;确信持有方已崩溃,等锁超过 TTL(${lock.ttlMin} 分钟)后自动可接管,或传 ttl_minutes 覆盖。`,
+        ...(lock.warning ? ['', `锁诊断:${lock.warning}`] : []),
       ]);
     }
-    const headCheck = (await isGitRepoAsync(root)) ? await gitRun(root, 'rev-parse', '--verify', 'HEAD') : { ok: false, stdout: '' };
-    if (!headCheck.ok || !String(headCheck.stdout || '').trim()) {
-      worktreeNotes.push('- ⚠ worktree 降级单根: 当前仓库不是 Git 仓库或尚无可用 HEAD(无提交),未创建 executionRoot;完成首次提交后重新 relay_claim 即可获得任务 worktree');
-    } else {
+    // P3-01 / R-06 / R-07:worktree 的三个前置条件互不连累——
+    //   · 显式 worktree:false 完全不读/校验 worktree 配置(非法 cacheDir 不连累普通认领)
+    //   · 无 Git / 无可用 HEAD → 降级单根 + WARN(不硬失败,保持补丁前的单根可用性)
+    //   · 启用时先幂等补 .gitignore(实际 cacheDir + 注册表 + 锁),再创建缓存目录
+    const worktreeNotes = [];
+    const useWorktree = useWorktreePre;
+    if (useWorktree) {
+      let wtConfig = null;
       try {
-        const gi = await ensureWorktreeGitignore(root, wtConfig);
-        if (gi.added.length) worktreeNotes.push(`- .gitignore: 已幂等补 ${gi.added.length} 条运行时忽略行(${gi.added.join(', ')}),避免缓存目录被 controlRoot 的提交卷入`);
-        taskWorktree = await ensureTaskWorktree(root, task, model, wtConfig, {
-          fencing: async () => {
-            const verdict = await claimLock.check();
-            return verdict.held ? { ok: true } : { ok: false, warning: verdict.warning };
-          },
-        });
-        if (taskWorktree.rescuedOrphan) {
-          worktreeNotes.push(`- ⚠ 发现未被 Git 登记的孤儿目录,已安全移至 \`${taskWorktree.rescuedOrphan}\` 后按分支重建;确认无未提交价值后可手工删除该 orphan 目录`);
-        }
+        wtConfig = await readWorktreeConfig(root);
       } catch (e) {
-        const msg = e?.message || String(e);
-        if (/无法读取当前 HEAD|not a git repository/i.test(msg)) {
-          // R-06:Git 环境不可用属于环境问题,降级单根而不是让认领硬失败
-          worktreeNotes.push(`- ⚠ worktree 降级单根: ${msg}。未创建 executionRoot;修复 Git 环境后重新 relay_claim 即可获得任务 worktree`);
-        } else {
-          throw e;
+        let releaseWarning = '';
+        // 配置非法 = 本次认领没有成立,任何由本会话持有的锁都必须释放(含同 model 幂等沿用的旧锁);
+        // 否则一次失败会留下锁,后续同 model 重试沿用该锁且永不再走释放分支 → 持续泄漏。
+        if (lock?.token) {
+          const rel = await releaseClaimLock(root, task, lock.token);
+          if (!rel.ok && rel.warning) releaseWarning = rel.warning;
+        }
+        return fail(`worktree 配置非法,拒绝创建任务 worktree:${e?.message || String(e)}`, [
+          '',
+          '修复: 按提示修正 .relay/manifest.json 的 worktree.cacheDir(controlRoot 内相对路径,不含 ..、控制字符、绝对/盘符路径、.git 前缀)后重试;',
+          '或传 `worktree: false` 显式走单根认领(该路径完全不读取 cacheDir 配置)。',
+          ...(releaseWarning ? ['', `锁告警:${releaseWarning}`] : []),
+        ]);
+      }
+      const headCheck = (await isGitRepoAsync(root)) ? await gitRun(root, 'rev-parse', '--verify', 'HEAD') : { ok: false, stdout: '' };
+      if (!headCheck.ok || !String(headCheck.stdout || '').trim()) {
+        worktreeNotes.push('- ⚠ worktree 降级单根: 当前仓库不是 Git 仓库或尚无可用 HEAD(无提交),未创建 executionRoot;完成首次提交后重新 relay_claim 即可获得任务 worktree');
+      } else {
+        try {
+          const gi = await ensureWorktreeGitignore(root, wtConfig);
+          if (gi.added.length) worktreeNotes.push(`- .gitignore: 已幂等补 ${gi.added.length} 条运行时忽略行(${gi.added.join(', ')}),避免缓存目录被 controlRoot 的提交卷入`);
+          taskWorktree = await ensureTaskWorktree(root, task, model, wtConfig, {
+            fencing: async () => {
+              const verdict = await claimLock.check();
+              return verdict.held ? { ok: true } : { ok: false, warning: verdict.warning };
+            },
+          });
+          if (taskWorktree.rescuedOrphan) {
+            worktreeNotes.push(`- ⚠ 发现未被 Git 登记的孤儿目录,已安全移至 \`${taskWorktree.rescuedOrphan}\` 后按分支重建;确认无未提交价值后可手工删除该 orphan 目录`);
+          }
+        } catch (e) {
+          const msg = e?.message || String(e);
+          if (/无法读取当前 HEAD|not a git repository/i.test(msg)) {
+            // R-06:Git 环境不可用属于环境问题,降级单根而不是让认领硬失败
+            worktreeNotes.push(`- ⚠ worktree 降级单根: ${msg}。未创建 executionRoot;修复 Git 环境后重新 relay_claim 即可获得任务 worktree`);
+          } else {
+            throw e;
+          }
         }
       }
     }
-  }
-  // fencing:worktree 创建等耗时步骤期间仓库锁可能被接管;写 TASKS 前复核 token 仍是自己的,
-  // 否则宁可整次认领失败回滚,也不能把任务行写进别人的锁窗口。
-  const fenceBeforeWrite = await claimLock.check();
-  if (!fenceBeforeWrite.held) {
-    throw new Error(`仓库写锁在认领期间被接管(${fenceBeforeWrite.warning || '锁已不属于当前会话'}),未写入 TASKS`);
-  }
-  const claimLease = await claimLockCheck(lock.handle, task);
-  if (claimLease) throw new Error(claimLease);
-  const blockLines = [`- [~] ${p.id} ${p.title}  (${model}, ${stamp()})`, ...lines.slice(idx + 1, range.end)];
-  lines.splice(idx, range.end - idx);
-  insertIntoSection(lines, '进行中', blockLines);
-  // 测试专用(T002):模拟「读完 TASKS 后被外部写入者修改」,用于确定性验证内容 CAS;
-  // 仅当 RELAY_TEST_EXTERNAL_TASKS_WRITE 存在时生效,生产路径无此变量、行为不变。
-  if (process.env.RELAY_TEST_EXTERNAL_TASKS_WRITE) {
-    await fsWriteFile(join(root, 'TASKS.md'), process.env.RELAY_TEST_EXTERNAL_TASKS_WRITE, 'utf8');
-  }
-  // TASKS.md 原子写(tmp+rename)并带 fencing + 内容 CAS:TASKS 是任务队列唯一事实源,
-  // 不能被半写截断,也不能用旧快照覆写别人的更新。
-  await writeProtocolFile(root, 'TASKS.md', tidy(lines), { token: claimLock.token, lockLabel: '仓库写锁', expectedHash: tasksHash });
-  const executionRoot = taskWorktree?.path || root;
-  let unmergedBranches = [];
-  try { unmergedBranches = await listUnmergedTaskBranches(root); } catch { /* 只读提示,失败不阻断认领 */ }
-  // 成功路径显式释放仓库锁;失败返回告警而不是静默吞掉(token 不匹配 = 锁已被接管)。
-  const claimRepoRelease = await claimLock.release();
-  const releaseNote = claimRepoRelease.ok ? [] : ['', `> ⚠ 仓库写锁释放告警:${claimRepoRelease.warning}`];
-  return {
-    content: [{ type: 'text', text: [
-      `# 任务认领 — ${task}`,
-      '',
-      `- 任务: ${p.id} ${p.title}`,
-      `- 认领: ${model} @ ${stamp()}`,
-      `- controlRoot: ${root}`,
-      `- executionRoot: ${executionRoot}`,
-      ...worktreeNotes,
-      ...(taskWorktree ? [`- branch: ${taskWorktree.branch}`, `- baseSha: ${taskWorktree.baseSha}`, `- worktree: ${taskWorktree.reused ? '复用' : '新建'}`] : []),
-      `- 认领锁: \`.relay/claims/${task}.lock\`${lock.created ? '(已创建' : '(同模型复领,已持有'}${lock.tookOver ? `,接管自 ${lock.tookOver}` : ''},TTL ${ttlMin} 分钟)`,
-      '- 状态: controlRoot 的任务行已改为 `[~]` 并挪入「进行中」区(认领不产生 git 提交)',
-      ...formatUnmergedBranchesNote(unmergedBranches).map((l) => l.replace(/^- 未合并/, '- 未合并').replace(/^  -/, '  -')),
-      ...releaseNote,
-      '',
-      '提醒(并行模式):',
-      `- 自此刻起,其他会话不得修改 ${task} 的任务行与相关代码;冲突以认领锁 + TASKS.md 认领标记为准。`,
-      `- 在 executionRoot 修改代码并运行测试;TASKS.md / LOG.md 只由 relay 写回 controlRoot。`,
-      ...(taskWorktree ? [
-        '- 依赖隔离: 新 worktree 不携带 node_modules/.env 等 gitignored 文件;需要依赖时在 executionRoot 内安装(或 symlink),不要依赖 controlRoot 的旧依赖',
-        '- 完成≠合并: 出场只提交任务分支并更新 controlRoot 协议面,不会自动 merge/rebase/push',
-      ] : []),
-      `- 完成时出场:\`relay_session_end { "root": "${executionRoot}", "model": "${model}", "summary": "…", "done_task": "${task}", "next": { "title": "…", "acceptance": "…" } }\`(出场成功自动释放认领锁)`,
-    ].join('\n') }],
-    isError: false,
-  };
+    // fencing:worktree 创建等耗时步骤期间仓库锁可能被接管;写 TASKS 前复核 token 仍是自己的,
+    // 否则宁可整次认领失败回滚,也不能把任务行写进别人的锁窗口。
+    const fenceBeforeWrite = await claimLock.check();
+    if (!fenceBeforeWrite.held) {
+      throw new Error(`仓库写锁在认领期间被接管(${fenceBeforeWrite.warning || '锁已不属于当前会话'}),未写入 TASKS`);
+    }
+    const claimLease = await claimLockCheck(lock.handle, task);
+    if (claimLease) throw new Error(claimLease);
+    const blockLines = [`- [~] ${p.id} ${p.title}  (${model}, ${stamp()})`, ...lines.slice(idx + 1, range.end)];
+    lines.splice(idx, range.end - idx);
+    insertIntoSection(lines, '进行中', blockLines);
+    // 测试专用(T002):模拟「读完 TASKS 后被外部写入者修改」,用于确定性验证内容 CAS;
+    // 仅当 RELAY_TEST_EXTERNAL_TASKS_WRITE 存在时生效,生产路径无此变量、行为不变。
+    if (process.env.RELAY_TEST_EXTERNAL_TASKS_WRITE) {
+      await fsWriteFile(join(root, 'TASKS.md'), process.env.RELAY_TEST_EXTERNAL_TASKS_WRITE, 'utf8');
+    }
+    // TASKS.md 原子写(tmp+rename)并带 fencing + 内容 CAS:TASKS 是任务队列唯一事实源,
+    // 不能被半写截断,也不能用旧快照覆写别人的更新。
+    await writeProtocolFile(root, 'TASKS.md', tidy(lines), { token: claimLock.token, lockLabel: '仓库写锁', expectedHash: tasksHash });
+    const executionRoot = taskWorktree?.path || root;
+    let unmergedBranches = [];
+    try { unmergedBranches = await listUnmergedTaskBranches(root); } catch { /* 只读提示,失败不阻断认领 */ }
+    // 成功路径显式释放仓库锁;失败返回告警而不是静默吞掉(token 不匹配 = 锁已被接管)。
+    const claimRepoRelease = await claimLock.release();
+    const releaseNote = claimRepoRelease.ok ? [] : ['', `> ⚠ 仓库写锁释放告警:${claimRepoRelease.warning}`];
+    return {
+      content: [{ type: 'text', text: [
+        `# 任务认领 — ${task}`,
+        '',
+        `- 任务: ${p.id} ${p.title}`,
+        `- 认领: ${model} @ ${stamp()}`,
+        `- controlRoot: ${root}`,
+        `- executionRoot: ${executionRoot}`,
+        ...worktreeNotes,
+        ...(taskWorktree ? [`- branch: ${taskWorktree.branch}`, `- baseSha: ${taskWorktree.baseSha}`, `- worktree: ${taskWorktree.reused ? '复用' : '新建'}`] : []),
+        `- 认领锁: \`.relay/claims/${task}.lock\`${lock.created ? '(已创建' : '(同模型复领,已持有'}${lock.tookOver ? `,接管自 ${lock.tookOver}` : ''},TTL ${ttlMin} 分钟)`,
+        '- 状态: controlRoot 的任务行已改为 `[~]` 并挪入「进行中」区(认领不产生 git 提交)',
+        ...formatUnmergedBranchesNote(unmergedBranches).map((l) => l.replace(/^- 未合并/, '- 未合并').replace(/^  -/, '  -')),
+        ...releaseNote,
+        '',
+        '提醒(并行模式):',
+        `- 自此刻起,其他会话不得修改 ${task} 的任务行与相关代码;冲突以认领锁 + TASKS.md 认领标记为准。`,
+        `- 在 executionRoot 修改代码并运行测试;TASKS.md / LOG.md 只由 relay 写回 controlRoot。`,
+        ...(taskWorktree ? [
+          '- 依赖隔离: 新 worktree 不携带 node_modules/.env 等 gitignored 文件;需要依赖时在 executionRoot 内安装(或 symlink),不要依赖 controlRoot 的旧依赖',
+          '- 完成≠合并: 出场只提交任务分支并更新 controlRoot 协议面,不会自动 merge/rebase/push',
+        ] : []),
+        `- 完成时出场:\`relay_session_end { "root": "${executionRoot}", "model": "${model}", "summary": "…", "done_task": "${task}", "next": { "title": "…", "acceptance": "…" } }\`(出场成功自动释放认领锁)`,
+      ].join('\n') }],
+      isError: false,
+    };
   } catch (e) {
     let rollbackError = '';
     if (taskWorktree) {
@@ -980,8 +1076,9 @@ export const relayClaim = async (args = {}) => {
 const completionOwnershipError = async (root, doneTask, model) => {
   const lines = await readLines(join(root, 'TASKS.md'));
   const idx = lines ? findTaskIdx(lines, doneTask) : -1;
-  if (idx < 0) return null;
+  if (idx < 0) return `TASKS.md 中未找到任务 ${doneTask}。修复:核对任务号后重跑,或省略 done_task 进行维护出场。`;
   const p = parseTaskLine(lines[idx]);
+  if (isPlaceholderTask(p.title)) return `${doneTask} 是空队列占位行。修复:省略 done_task 进行维护出场。`;
   const ownsClaim = p.meta === model || p.meta.startsWith(`${model}, `);
   if (p.status === '~' && !ownsClaim) {
     return `${doneTask} 的认领者是 **${p.meta || '(未知)'}**,当前 model=${model} 不是持有者。\n\n修复:由认领者出场;持有者崩溃时先按 TTL 接管,再完成任务。`;
@@ -1072,18 +1169,40 @@ const failureSignature = (results) => [...new Set((results || [])
   .map((r) => String(r.id || '').trim())
   .filter(Boolean))].sort().join(',');
 const readFailureMark = async (root) => {
-  const raw = await readFileSafe(join(root, FAILURE_MARK), null);
+  const file = join(root, FAILURE_MARK);
+  try {
+    await assertNoSymlinkComponents(root, '.relay', '.relay 目录');
+    await assertNotSymlinkFile(file, FAILURE_MARK);
+  } catch {
+    return null;
+  }
+  const raw = await readFileSafe(file, null);
   if (!raw) return null;
   try { return JSON.parse(raw); } catch { return null; }
 };
 const writeFailureMark = async (root, signature, extra = {}) => {
   try {
     await fsMkdir(join(root, '.relay'), { recursive: true });
-    await fsWriteFile(join(root, FAILURE_MARK), `${JSON.stringify({ signature, at: stamp(), ...extra }, null, 2)}\n`, 'utf8');
+    const file = join(root, FAILURE_MARK);
+    await assertNoSymlinkComponents(root, '.relay', '.relay 目录');
+    await assertNotSymlinkFile(file, FAILURE_MARK);
+    await writeFileAtomic(file, `${JSON.stringify({ signature, at: stamp(), ...extra }, null, 2)}\n`, {
+      label: FAILURE_MARK,
+    });
   } catch { /* 运行时诊断写失败不改变出场语义 */ }
 };
 const clearFailureMark = async (root) => {
-  try { await fsRm(join(root, FAILURE_MARK), { force: true }); } catch { /* ignore */ }
+  try {
+    await assertNoSymlinkComponents(root, '.relay', '.relay 目录');
+    const rootReal = await fsRealpath(root);
+    const relayReal = await fsRealpath(join(root, '.relay'));
+    if (relayReal !== join(rootReal, '.relay')) return;
+    const file = join(root, FAILURE_MARK);
+    const st = await fsLstat(file);
+    if (!st.isFile() || st.isSymbolicLink()) return;
+    await assertNotSymlinkFile(file, FAILURE_MARK);
+    await fsUnlink(file);
+  } catch { /* 缺失/被替换/不可读都不清理,运行时诊断宁留不误删 */ }
 };
 
 export const relaySessionEnd = async (args = {}) => {
@@ -1234,6 +1353,14 @@ export const relaySessionEnd = async (args = {}) => {
     }
   }
 
+  const cfg = await readManifestConfig(root); // P1/P2/P6 的配置面在此一次性读入
+  if (cfg.manifestCorrupt) {
+    out.push('## manifest 损坏 — 未提交', '',
+      `无法安全读取 .relay/manifest.json:${cfg.manifestError || '未知解析错误'}`, '',
+      '修复:人工修正 manifest JSON 语法;无法还原时先备份,再重新 relay_onboard。修复后重跑出场。');
+    return { content: [{ type: 'text', text: out.join('\n') }], isError: true };
+  }
+
   // 1.5 根错配 / 注册表 fail-closed(先于任何测试与写入)
   const regState = await readWorktreeRegistryState(root);
   if (doneTask && regState.state === 'corrupt') {
@@ -1245,7 +1372,8 @@ export const relaySessionEnd = async (args = {}) => {
   }
   if (!managed && linkedWorktree && doneTask) {
     out.push('## 根错配 — 未提交', '',
-      `当前目录是 controlRoot 的 linked worktree,但没有 relay 登记(registryState=${registryState});无法确认它对应哪个任务/分支。`, '',
+      `当前目录是 controlRoot 的 linked worktree,但没有可用的 relay 登记(registryState=${registryState}`
+        + `${roots.registryError ? `;原因:${roots.registryError}` : ''});无法确认它对应哪个任务/分支。`, '',
       '本次未更新 TASKS/LOG、未提交、未释放认领锁。', '',
       `修复:${registryRecoveryHint(root, registryState)}`);
     return { content: [{ type: 'text', text: out.join('\n') }], isError: true };
@@ -1277,7 +1405,7 @@ export const relaySessionEnd = async (args = {}) => {
     // 用 git worktree list(relay/<task> 是否仍被某个 worktree checkout)+ 受管缓存路径存在性反查,
     // 存在受管痕迹即 fail-closed,并给出重建登记 / 从 executionRoot 出场的可执行指引。
     if (!record) {
-      const evidence = await findManagedWorktreeEvidence(root, doneTask, { registry: regState.registry });
+      const evidence = await findManagedWorktreeEvidence(root, doneTask, { registry: regState.registry, manifest: cfg.manifest });
       if (evidence.found) {
         const suggestedRoot = evidence.worktreePath || path.join(root, '.relay', 'worktrees', doneTask);
         out.push('## 根错配 — 未提交', '',
@@ -1297,15 +1425,42 @@ export const relaySessionEnd = async (args = {}) => {
     }
   }
 
+  // 已经完成的任务重跑只复核历史成对证据。分支可以继续前进,原出场不再写盘或重跑验收。
+  const previous = roots.record;
+  if (managed && doneTask && previous?.task === doneTask && previous.status === 'completed' && previous.controlCommitted === true) {
+    const ev = await verifyDualEvidence({
+      controlRoot: root, executionRoot, doneTask, codeSha: previous.commitSha,
+      controlSha: previous.controlSha, branch: previous.branch, historical: true,
+    });
+    if (ev.fails.length) {
+      out.push('## 原完成记录无法复核', '', ...ev.fails, '', '修复:核对注册表和 Git 中的成对证据后重试。');
+      return { content: [{ type: 'text', text: out.join('\n') }], isError: true };
+    }
+    out.push('## 已有完成记录', '', ...ev.lines);
+    return { content: [{ type: 'text', text: out.join('\n') }], isError: false };
+  }
+  // 受管完成的最小证据是「任务分支代码提交 + controlRoot 协议提交」。autoCommit=false
+  // 只能用于中途维护;若允许它走到写盘后再报成功/失败,会留下 controlSha=null 的假完成。
+  if (managed && allDoneTasks.length && cfg.autoCommit === false) {
+    out.push('## 受管完成被拒 — 未写入', '',
+      'manifest.autoCommit=false 与受管完成的双提交契约冲突:控制面未提交时不能生成有效的成对证据。',
+      '',
+      '本次未更新 TASKS/LOG、未提交、未释放认领锁。',
+      '',
+      '修复:由仓库属主将 manifest.autoCommit 设为 true 后重跑;若必须走人工提交,请改用非受管单根流程并明确承担证据责任。');
+    return { content: [{ type: 'text', text: out.join('\n') }], isError: true };
+  }
+
   // 2. 绿闸:controlRoot 全量 + executionRoot 任务树结构检查(R1/R2/R3/R4/R8);
   //    任一 ERROR → 不更新任何文件、不提交。
-  const cfg = await readManifestConfig(root); // P1/P2/P6 的配置面在此一次性读入
-  const controlResults = await runChecks(root, { full: true });
+  // 同一份 manifest/config 贯穿 verify、任务树检查和验收/提交策略,避免撕裂读取。
+  const checkMeta = { manifest: cfg.manifest, cfg };
+  const controlResults = await runChecks(root, { full: true, meta: checkMeta, pendingTasks: doneTaskIds });
   let taskResults = [];
   let taskGateNote = '';
   if (executionRoot !== root) {
     if (await isGitRepoAsync(executionRoot)) {
-      taskResults = await runTaskTreeChecks(executionRoot, root);
+      taskResults = await runTaskTreeChecks(executionRoot, root, { meta: checkMeta });
     } else {
       taskGateNote = 'executionRoot 不是 Git 工作树,跳过任务树结构检查(managed 提交会随后拒绝)';
     }
@@ -1352,13 +1507,13 @@ export const relaySessionEnd = async (args = {}) => {
   const acc = await acceptanceGate(root, doneTask || null, cfg, executionRoot);
   // done_tasks[]:每个额外任务也要各自通过它自己的「验收:」行——不能借主任务的测试蒙混。
   for (const t of extraTasks) {
-    const extraAcc = await acceptanceGate(root, t, cfg, executionRoot);
+    const extraAcc = await acceptanceGate(root, t, cfg, executionRoot, { runProjectTest: false });
     if (extraAcc.fails.length) {
       out.push('## 验收执行门:未通过 — 未提交', '',
         `完成声明 \`${t}\` 缺少可执行验收的绿灯背书。按出场协议:**未更新任何文件,未提交**。`, '',
         '失败明细:', '');
       for (const f of extraAcc.fails) out.push(`- ${f.split('\n').join('\n  ')}`);
-      out.push('', '修复:让上述测试真正通过(而不是删测试/改验收行),再重跑 relay_session_end。');
+      out.push('', '修复:处理上述失败明细后,重跑 relay_session_end。');
       await writeFailureMark(root, 'ACCEPTANCE', { task: t, scope: 'acceptance' });
       return { content: [{ type: 'text', text: out.join('\n') }], isError: true };
     }
@@ -1372,7 +1527,7 @@ export const relaySessionEnd = async (args = {}) => {
       `完成声明 \`${doneTask || '(本次会话)'}\` 缺少可执行验收的绿灯背书。按出场协议:**未更新任何文件,未提交**。`, '',
       '失败明细:', '');
     for (const f of acc.fails) out.push(`- ${f.split('\n').join('\n  ')}`);
-    out.push('', '修复:让上述测试真正通过(而不是删测试/改验收行),再重跑 relay_session_end。');
+    out.push('', '修复:处理上述失败明细后,重跑 relay_session_end。');
     if (acc.lines.length) out.push('', '已通过的验收:', ...acc.lines);
     // P3-1:验收失败也记签名(ACCEPTANCE),连续两次同样失败同样提示
     const prevAccMark = await readFailureMark(root);
@@ -1420,29 +1575,35 @@ export const relaySessionEnd = async (args = {}) => {
       return { content: [{ type: 'text', text: out.join('\n') }], isError: true };
     }
   }
+  const tasksRawBefore = await readFileSafe(join(root, 'TASKS.md'), null, { onlyMissing: true });
+  const logRawBefore = await readFileSafe(join(root, 'LOG.md'), null, { onlyMissing: true });
+  const unsafeContent = secretGateBlock('TASKS.md', tasksRawBefore) || secretGateBlock('LOG.md', logRawBefore);
+  if (unsafeContent) {
+    out.push(unsafeContent);
+    return { content: [{ type: 'text', text: out.join('\n') }], isError: true };
+  }
   // 受保护路径检测:代码改动只从 executionRoot 读取。
   const isRepo = await isGitRepoAsync(executionRoot);
-  let statusLines = [];
-  let statusError = '';
+  let statusPaths = [];
   if (isRepo) {
-    const st = await gitRun(executionRoot, '-c', 'core.quotePath=false', 'status', '--porcelain', '-uall');
-    // 只剥行尾换行:porcelain 的 XY 状态位是定宽字段,trim 吃掉前导空格会让下游 slice(3) 截错路径
-    if (st.ok) statusLines = st.stdout.split('\n').map((s) => s.replace(/\r$/, '')).filter((s) => s.length >= 3);
-    else statusError = st.stderr || st.stdout || '未知原因';
+    const status = await gitStatusPaths(executionRoot);
+    if (!status.ok) {
+      out.push('## 无法检查待提交路径', '', '修复:恢复 Git 工作区状态后重跑出场。未写入协议文件,认领锁保留。');
+      return { content: [{ type: 'text', text: out.join('\n') }], isError: true };
+    }
+    statusPaths = status.paths;
   }
-  const protectedHits = findProtectedChanges(statusLines, (cfg && cfg.protectedPaths) || []);
-  const sensitiveHits = findSensitiveChanges(statusLines);
+  const protectedHits = findProtectedChanges(statusPaths, cfg.protectedPaths);
+  const sensitiveHits = findSensitivePaths(statusPaths);
 
-  // controlRoot 的未提交清单:managed 双提交只允许 TASKS.md/LOG.md 进入控制面提交;
-  // controlRoot 上出现的其它改动(典型:代码被误写在主工作树)必须如实列出、不得假装已提交。
-  let controlStatusLines = [];
+  // controlRoot 只允许提交协议路径;其他路径保留在工作区。
+  let controlExtras = [];
   let controlStatusError = '';
   if (isRepo && root !== executionRoot) {
-    const cst = await gitRun(root, '-c', 'core.quotePath=false', 'status', '--porcelain', '-uall');
-    if (cst.ok) controlStatusLines = cst.stdout.split('\n').map((s) => s.replace(/\r$/, '')).filter((s) => s.length >= 3);
-    else controlStatusError = cst.stderr || cst.stdout || '未知原因';
+    const status = await gitStatusPaths(root);
+    if (status.ok) controlExtras = status.paths.filter((p) => !PROTOCOL_FILES.has(p));
+    else controlStatusError = status.stderr || '未知原因';
   }
-  const controlExtras = controlStatusLines.filter((l) => !isProtocolStatusLine(l));
 
   // fencing:代码提交/TASKS 写入前复核仓库锁仍属于本会话;被接管时立即停手(宁可不提交,
   // 也不能让两套出场流程同时改协议面)。此检查在 managed 代码提交之前与 TASKS 写入之前各做一次。
@@ -1475,7 +1636,6 @@ export const relaySessionEnd = async (args = {}) => {
       return { content: [{ type: 'text', text: out.join('\n') }], isError: true };
     };
     if (!isRepo) return rejectCommit('executionRoot 不是 Git 工作树,无法持久化任务代码。');
-    if (statusError) return rejectCommit(`无法读取 executionRoot 的 git status:${statusError}`);
     if (controlStatusError) return rejectCommit(`无法读取 controlRoot 的 git status,不能安全做控制面提交:${controlStatusError}`);
     if (doneTask && (!record || !branch)) return rejectCommit(`executionRoot 的任务目录与 ${doneTask} 的注册记录不匹配。`);
     // roots.record 是按 executionRoot 路径反查的;必须显式核对 doneTask 否则会在 T003 的
@@ -1483,10 +1643,17 @@ export const relaySessionEnd = async (args = {}) => {
     if (doneTask && record && record.task !== doneTask) {
       return rejectCommit(`executionRoot 登记的是 ${record.task},与 done_task=${doneTask} 不一致:受管任务必须在本人的 executionRoot 出场。`);
     }
+    if (doneTask && record && record.branch !== `relay/${doneTask}`) {
+      return rejectCommit(`受管记录分支 ${record.branch || '(空)'} 与任务 ${doneTask} 不匹配;期望 relay/${doneTask}。请修复注册表后重试。`);
+    }
     // baseSha 是「任务分支是否有新提交」的唯一基准;记录缺失时不能靠 HEAD 自证完成(fail-closed)。
     if (doneTask && !record.baseSha) {
       return rejectCommit(`受管记录缺少 baseSha,无法校验任务分支相对基点是否有新提交(注册表可能被手工篡改或来自旧版本);`
         + '请在 controlRoot 修复注册表或重新 claim 后再出场。');
+    }
+    if (doneTask && record) {
+      const baseError = await managedRecordBaseError(root, executionRoot, record);
+      if (baseError) return rejectCommit(`受管记录的 baseSha 无法独立验证:${baseError}`);
     }
     const actualBranch = await gitRun(executionRoot, 'branch', '--show-current');
     if (doneTask) {
@@ -1496,11 +1663,22 @@ export const relaySessionEnd = async (args = {}) => {
     } else if (!actualBranch.ok || !actualBranch.stdout.trim()) {
       return rejectCommit('executionRoot 处于 detached HEAD,无法提交代码;请先切到任务分支再出场。');
     }
+    const committedProtocolDrift = await gitRun(
+      executionRoot, 'rev-list', `${record.baseSha}..HEAD`, '--', ...PROTOCOL_FILES,
+    );
+    if (!committedProtocolDrift.ok) {
+      return rejectCommit(`无法检查任务分支历史中的协议文件漂移:${committedProtocolDrift.stderr || committedProtocolDrift.stdout || 'git rev-list 失败'}`);
+    }
+    const committedProtocolCommits = committedProtocolDrift.stdout.split('\n').filter(Boolean);
+    if (committedProtocolCommits.length) {
+      return rejectCommit(`任务分支 ${record.baseSha.slice(0, 12)}..HEAD 的历史提交触碰 TASKS.md/LOG.md(${committedProtocolCommits.map((s) => s.slice(0, 12)).join(', ')}):`
+        + 'TASKS.md/LOG.md 只能由 relay 写 controlRoot。请从任务分支历史重写/回退这些改动后重跑。');
+    }
     // 协议文件只能由 relay 写 controlRoot;任务树里出现 TASKS/LOG 改动必须拒绝,
     // 否则会把「控制面副本」混进代码提交,造成双根状态分叉。
-    const protocolInTaskTree = statusLines.filter((l) => isProtocolStatusLine(l));
+    const protocolInTaskTree = statusPaths.filter((p) => PROTOCOL_FILES.has(p));
     if (protocolInTaskTree.length) {
-      return rejectCommit(`executionRoot 出现协议文件改动(${protocolInTaskTree.map(statusPathOf).join(', ')}):`
+      return rejectCommit(`executionRoot 出现协议文件改动(${protocolInTaskTree.join(', ')}):`
         + 'TASKS.md/LOG.md 只能由 relay 写 controlRoot。请在任务树还原这两个文件后重跑。');
     }
     const conf = await gitRun(executionRoot, '-c', 'core.quotePath=false', 'diff', '--name-only', '--diff-filter=U');
@@ -1508,10 +1686,10 @@ export const relaySessionEnd = async (args = {}) => {
     if (protectedHits.length || sensitiveHits.length) {
       return rejectCommit(`受保护或敏感路径需人工提交:${[...protectedHits, ...sensitiveHits].map((h) => h.path).join(', ')}`);
     }
-    if (statusLines.length && cfg.autoCommit === false) {
+    if (statusPaths.length && cfg.autoCommit === false) {
       return rejectCommit('manifest.autoCommit=false,且 executionRoot 尚有未提交代码;请人工提交后重跑。');
     }
-    if (statusLines.length) {
+    if (statusPaths.length) {
       const added = await gitRun(executionRoot, 'add', '-A');
       if (!added.ok) return rejectCommit(`git add 失败:${added.stderr || added.stdout}`);
       const committed = await gitRun(executionRoot, ...(await gitIdentityArgs(executionRoot)), 'commit', '-m', managedMessage);
@@ -1521,22 +1699,20 @@ export const relaySessionEnd = async (args = {}) => {
     if (!sha.ok || !sha.stdout.trim()) return rejectCommit(`无法读取任务分支提交 SHA:${sha.stderr || sha.stdout}`);
     const codeSha = sha.stdout.trim();
     // 伪 SHA 闸:HEAD 仍等于 baseSha 且本次无任何改动 → 没有可验收的代码提交。
-    if (doneTask && !statusLines.length && record?.baseSha && codeSha === record.baseSha) {
+    if (doneTask && !statusPaths.length && record?.baseSha && codeSha === record.baseSha) {
       return rejectCommit(`伪 SHA:任务分支 HEAD 仍等于 baseSha(${codeSha.slice(0, 12)}),本次没有任何新提交或改动;`
         + '禁止把 base SHA 当作完成证据。请在 executionRoot 提交代码(或确认任务确实产生了已提交改动)后重跑。');
     }
     managedCommit = {
       branch: branch || actualBranch.stdout.trim(),
       sha: codeSha, message: managedMessage,
-      hadChanges: statusLines.length > 0, baseSha: record?.baseSha || '',
+      hadChanges: statusPaths.length > 0, baseSha: record?.baseSha || '',
     };
   }
 
   // 3. 更新 TASKS.md
   const changes = [];
-  const tasksPath = join(root, 'TASKS.md');
-  // T002:读原文并留哈希,写前做内容 CAS(防人类手改 / 旧版本进程 / 接管窗口的丢更新)。
-  const tasksRawBefore = await readText(tasksPath);
+  // T002:对锁内读取的原文做内容 CAS,防外部写入者被覆盖。
   const tasksHashBefore = sha256Hex(tasksRawBefore == null ? '' : tasksRawBefore);
   let tLines = tasksRawBefore == null ? null : tasksRawBefore.replace(/\r\n/g, '\n').split('\n');
   if (tLines == null) { tLines = await baseTemplateLines('TASKS.md'); changes.push('TASKS.md 不存在,已按模板重建'); }
@@ -1572,17 +1748,24 @@ export const relaySessionEnd = async (args = {}) => {
   }
 
   if (next) {
-    // 幂等(B5):待办区已有同标题任务 → 不重复插入
-    const dup = tLines.findIndex((l) => { const m = l.match(TASK_LINE_RE); return m && m[1] === ' ' && m[3].trim() === String(next.title).trim(); });
-    if (dup >= 0) {
-      const existId = tLines[dup].match(TASK_LINE_RE)[2];
-      changes.push(`待办区已存在同标题任务 ${existId}(跳过重复插入)`);
+    // 「无待办…」只表达空队列,保存为维护注释,绝不生成新的可认领占位任务。
+    if (isPlaceholderTask(next.title)) {
+      const note = String(next.notes || next.title).trim();
+      tLines.push('', `<!-- relay:maintenance-next: ${note} -->`);
+      changes.push(`维护说明:${note}(未生成可认领占位任务)`);
     } else {
-      const id = nextTaskId(tLines);
-      const nextLines = [`- [ ] ${id} ${String(next.title).trim()}`, `  验收: ${String(next.acceptance).trim()}`];
-      if (next.notes && String(next.notes).trim()) nextLines.push(`  备注: ${String(next.notes).trim()}`);
-      insertIntoSection(tLines, '待办', nextLines);
-      changes.push(`TASKS.md: 待办区顶部插入 \`${id} ${String(next.title).trim()}\`(含验收行)`);
+      // 幂等(B5):待办区已有同标题任务 → 不重复插入
+      const dup = tLines.findIndex((l) => { const m = l.match(TASK_LINE_RE); return m && m[1] === ' ' && !isPlaceholderTask(m[3]) && m[3].trim() === String(next.title).trim(); });
+      if (dup >= 0) {
+        const existId = tLines[dup].match(TASK_LINE_RE)[2];
+        changes.push(`待办区已存在同标题任务 ${existId}(跳过重复插入)`);
+      } else {
+        const id = nextTaskId(tLines);
+        const nextLines = [`- [ ] ${id} ${String(next.title).trim()}`, `  验收: ${String(next.acceptance).trim()}`];
+        if (next.notes && String(next.notes).trim()) nextLines.push(`  备注: ${String(next.notes).trim()}`);
+        insertIntoSection(tLines, '待办', nextLines);
+        changes.push(`TASKS.md: 待办区顶部插入 \`${id} ${String(next.title).trim()}\`(含验收行)`);
+      }
     }
   }
   // fencing + 原子写:TASKS.md 是任务队列唯一事实源,tmp+rename 防半写截断,写前复核锁归属。
@@ -1598,8 +1781,6 @@ export const relaySessionEnd = async (args = {}) => {
     return { content: [{ type: 'text', text: out.join('\n') }], isError: true };
   }
   // 4. 先读 LOG.md 原文(与 TASKS 一起做 CAS 预检;LOG 条目在下方构造)
-  const logPath = join(root, 'LOG.md');
-  const logRawBefore = await readText(logPath);
   const logHashBefore = sha256Hex(logRawBefore == null ? '' : logRawBefore);
   let lLines = logRawBefore == null ? null : logRawBefore.replace(/\r\n/g, '\n').split('\n');
   if (lLines == null) { lLines = await baseTemplateLines('LOG.md'); changes.push('LOG.md 不存在,已按模板重建'); }
@@ -1633,13 +1814,13 @@ export const relaySessionEnd = async (args = {}) => {
   const taskField = doneTask ? `${doneTask} 完成` : (maintenance ? '维护' : '无');
   const summaryFlat = summary.split('\n').map((s) => s.trim()).filter(Boolean).join('; ');
   // 事实底账(T013/R10):由引擎确定性派生并写入,模型不得手写/改写。
-  // managed 用 baseSha..HEAD(任务分支);单根用工作区 vs HEAD;非 git 退化为 statusLines 文件数。
+  // managed 用 baseSha..HEAD(任务分支);单根用工作区 vs HEAD;非 git 退化为 statusPaths 文件数。
   const factsEnabled = !!(cfg && cfg.facts && cfg.facts.enabled);
   const factLine = factsEnabled ? formatFactLine(await deriveFacts({
     executionRoot,
     managed,
     baseSha: (roots.record && roots.record.baseSha) || '',
-    statusLines,
+    statusPaths,
     verifyResults: [...controlResults, ...taskResults],
     acceptance: acc,
     branch: managedCommit
@@ -1668,7 +1849,6 @@ export const relaySessionEnd = async (args = {}) => {
     ? doneTaskIds.map((t) => `${t} 完成`)
     : [taskField];
   fields.forEach((f, i) => entries.push(buildEntry(f, i === 0)));
-  const entry = entries[0];
   let titleIdx = lLines.findIndex((l) => /^# /.test(l));
   if (titleIdx < 0) { lLines.unshift('# 会话日志(最新在上)'); titleIdx = 0; }
   // 幂等(B5):同一会话重复出场(同 model + 同完成条目)不重复记日志;
@@ -1706,7 +1886,7 @@ export const relaySessionEnd = async (args = {}) => {
     await writeProtocolFile(root, 'LOG.md', logTextOut, { token: exitLock.token, lockLabel: '仓库写锁', expectedHash: logHashBefore });
   }
   // 崩溃点矩阵(测试钩子):两个协议文件已写、提交尚未发生 —— 验证重跑能补交且不重复记账
-  if (process.env.RELAY_CRASH_BEFORE_COMMIT === '1') process.exit(137);
+  if (process.env.RELAY_TEST_HOOKS === '1' && process.env.RELAY_CRASH_BEFORE_COMMIT === '1') process.exit(137);
   // 5/6. 提交分支:护栏 → 不提交;否则 add -A + commit;失败 → 降级
   // 提交消息携带「T### 完成」token:TASKS 完成行不记 sha(自指无解),考古靠 git log --grep。
   // 多任务出场时每个任务号都必须出现在消息里,否则额外任务的完成条目无法被 R10 反查到提交
@@ -1735,6 +1915,7 @@ export const relaySessionEnd = async (args = {}) => {
   let commitSection = null;
   let guardSection = null;
   let degradeReason = null;
+  let commitError = null;
   let commitSha = managedCommit?.sha || '';
 
   // P6 冲突守卫优先于一切护栏:护栏章节附带的「git add -A && git commit」人工指令,
@@ -1783,18 +1964,39 @@ export const relaySessionEnd = async (args = {}) => {
             'executionRoot 代码提交保留;controlRoot 协议面未提交、注册表未更新、认领锁保留。修复后重跑出场补交(幂等)。');
           return { content: [{ type: 'text', text: out.join('\n') }], isError: true };
         }
+        const shaR = await gitRun(root, 'rev-parse', 'HEAD');
+        controlCommit = {
+          sha: shaR.ok ? shaR.stdout.trim() : '',
+          message: controlCommitMsg,
+          committed: true,
+        };
+      } else {
+        const recovered = await findControlCompletionCommit(root, executionRoot, doneTask, {
+          branch: managedCommit?.branch || '',
+          codeSha: managedCommit?.sha || '',
+        });
+        if (!recovered.sha) {
+          out.push('## 控制面完成提交缺失 — 未落完成状态', '',
+            `TASKS.md/LOG.md 没有待提交内容,但无法反查到 ${doneTask} 的有效完成提交:${recovered.error}`, '',
+            '本次未更新注册表状态、未释放认领锁。修复控制面提交历史后重跑出场。');
+          return { content: [{ type: 'text', text: out.join('\n') }], isError: true };
+        }
+        controlCommit = {
+          sha: recovered.sha,
+          message: controlCommitMsg,
+          committed: false,
+          recovered: true,
+        };
+        if (managedCommit && recovered.codeSha && recovered.codeSha !== managedCommit.sha) {
+          managedCommit = { ...managedCommit, sha: recovered.codeSha, recoveredHistorical: true };
+        }
       }
-      const shaR = await gitRun(root, 'rev-parse', 'HEAD');
-      controlCommit = {
-        sha: shaR.ok ? shaR.stdout.trim() : '',
-        message: controlCommitMsg,
-        committed: stagedNames.length > 0,
-      };
     }
     if (doneTask && !controlCommitSkipped) {
       const ev = await verifyDualEvidence({
         controlRoot: root, executionRoot, doneTask,
         codeSha: managedCommit?.sha, controlSha: controlCommit?.sha, branch: managedCommit?.branch,
+        historical: controlCommit?.recovered === true,
       });
       if (ev.fails.length) {
         out.push('## 成对证据校验失败 — 未落完成状态', '',
@@ -1807,7 +2009,8 @@ export const relaySessionEnd = async (args = {}) => {
     }
     if (managedCommit) {
       commitSection = [
-        `- 代码(executionRoot): \`${managedCommit.sha}\` ${managedCommit.message}${managedCommit.hadChanges ? '' : '(本次无新改动,复用既有提交)'}`,
+        `- 代码(executionRoot): \`${managedCommit.sha}\` ${managedCommit.message}${managedCommit.hadChanges ? '' : '(本次无新改动,复用既有提交)'}`
+          + `${managedCommit.recoveredHistorical ? '(从控制面成对证据恢复历史完成 SHA;任务分支之后继续前进)' : ''}`,
         ...(controlCommit
           ? [`- 控制面(controlRoot): \`${controlCommit.sha}\` ${controlCommit.message}${controlCommit.committed ? '' : '(控制面已是最新,无新提交)'}`]
           : []),
@@ -1848,17 +2051,18 @@ export const relaySessionEnd = async (args = {}) => {
   } else {
     const addR = await gitRun(executionRoot, 'add', '-A');
     if (!addR.ok) {
-      degradeReason = `git add 失败: ${(addR.stderr || addR.stdout || '').split('\n').find(Boolean) || '未知原因'}`;
+      commitError = `git add 失败: ${(addR.stderr || addR.stdout || '').split('\n').find(Boolean) || '未知原因'}`;
     } else {
       // 幂等(审计 P2):重复出场或本次没有实际改动时没有可提交内容,这不是失败,不降级报错。
-      const pendingR = await gitRun(executionRoot, '-c', 'core.quotePath=false', 'status', '--porcelain');
-      const pendingLines = pendingR.ok ? pendingR.stdout.split('\n').map((s) => s.trim()).filter(Boolean) : [];
-      if (!pendingLines.length) {
+      const pendingR = await gitRun(executionRoot, 'diff', '--cached', '--name-only', '-z');
+      if (!pendingR.ok) {
+        commitError = '无法读取 Git 暂存区';
+      } else if (!pendingR.stdout) {
         commitSection = ['- (无变更可提交:重复出场或本次未产生改动,幂等跳过)'];
       } else {
       const cR = await gitRun(executionRoot, ...(await gitIdentityArgs(executionRoot)), 'commit', '-m', commitMsg);
       if (!cR.ok) {
-        degradeReason = `git commit 失败: ${(cR.stderr || cR.stdout || '').split('\n').find(Boolean) || '未知原因'}`;
+        commitError = `git commit 失败: ${(cR.stderr || cR.stdout || '').split('\n').find(Boolean) || '未知原因'}`;
       } else {
         const shaR = await gitRun(executionRoot, 'rev-parse', '--short', 'HEAD');
         commitSha = shaR.ok ? shaR.stdout.trim() : '';
@@ -1886,12 +2090,18 @@ export const relaySessionEnd = async (args = {}) => {
       }
     }
   }
+  if (commitError) {
+    out.push('## 提交失败 — 待补交', '', commitError, '',
+      'TASKS.md/LOG.md 已写到工作区,认领锁保留。修复 Git 错误后用原 model 和任务号重跑 relay_session_end。');
+    return { content: [{ type: 'text', text: out.join('\n') }], isError: true };
+  }
   // 认领锁释放:提交成功或降级(非 git)即任务已落定;护栏/根错配路径保留锁(见 guardSection)。
   // 注册表完成状态只在「代码提交(+控制面提交)都成立」后落账,避免崩溃窗口留下完成假象。
   // 注:strict 根错配已移除「空 worktree 单根完成」路径,所以这里不再有 completedFrom=controlRoot 分支。
   const settled = !!(commitSection || degradeReason);
   let lockNote = '';
   const registryWarnings = [];
+  if (process.env.RELAY_TEST_HOOKS === '1' && process.env.RELAY_CRASH_BEFORE_REGISTRY === '1') process.exit(137);
   if (doneTask) {
     if (managedCommit && settled) {
       try {
@@ -1908,7 +2118,11 @@ export const relaySessionEnd = async (args = {}) => {
           },
         });
       } catch (e) {
-        registryWarnings.push(`注册表完成状态更新失败(完成提交已落账,需人工修复注册表):${e?.message || String(e)}`);
+        out.push('## 注册表收尾失败 — 待补交', '',
+          `代码 ${managedCommit.sha} 与控制面 ${controlCommit?.sha || '(手动提交)'} 的记录已写入,认领锁保留。`,
+          `诊断:${flattenText(e?.message || '未知错误').slice(0, 240)}`, '',
+          '修复:恢复注册表可写后用原 model 和任务号重跑 relay_session_end。');
+        return { content: [{ type: 'text', text: out.join('\n') }], isError: true };
       }
     }
     const claimTokens = doneTaskIds.length ? doneTaskIds : [];
@@ -1963,7 +2177,9 @@ export const relaySessionEnd = async (args = {}) => {
   out.push('', '## 下一棒');
   if (next) {
     const acc = String(next.acceptance).trim();
-    if (acc.startsWith('test:')) {
+    if (isPlaceholderTask(next.title)) {
+      out.push('- 维护说明:当前无待办;已保存为注释,未生成可认领占位任务。请与人类定义真实任务(含验收行)。');
+    } else if (acc.startsWith('test:')) {
       out.push(
         `- 下一任务(已入待办区):${nextTaskIdFromLines(tLines)} ${String(next.title).trim()} — 红灯协议,验收 \`${acc}\``,
         `  - 若该失败测试已存在:接力者以把它变绿为目标;`,
@@ -1983,6 +2199,13 @@ export const relaySessionEnd = async (args = {}) => {
   out.push('', `- 出场时间: ${stamp()}(ISO ${nowIso()})`);
   await clearFailureMark(root); // 出场成功:清掉失败签名,下一次失败重新计数
   return { content: [{ type: 'text', text: out.join('\n') }], isError: false };
+  } catch (e) {
+    // 临界区异常不得把 JS 栈/绝对路径泄给调用方;finally 仍释放锁,原模型可幂等重跑补交。
+    out.push('## 出场异常 — 未完成提交', '',
+      '会话引擎在写出场临界区时发生异常。可能已写入部分协议文件,但不会向调用方泄露堆栈或绝对路径。', '',
+      `诊断:${flattenText(e?.message || '未知错误').slice(0, 240)}`, '',
+      '修复:检查 TASKS.md/LOG.md 与工作区状态后,使用相同 model 和 done_task 重跑 relay_session_end;引擎会按完成条目查重并补交。若同一错误复现,请先修复根因再重试。');
+    return { content: [{ type: 'text', text: out.join('\n') }], isError: true };
   } finally {
     const fallbackRelease = await exitLock.release();
     if (!fallbackRelease.ok && fallbackRelease.warning && !fallbackRelease.released) {
@@ -1996,7 +2219,7 @@ export const relaySessionEnd = async (args = {}) => {
 const nextTaskIdFromLines = (lines) => {
   for (const l of lines) {
     const m = l.match(TASK_LINE_RE);
-    if (m && m[1] === ' ') return m[2];
+    if (m && m[1] === ' ' && !isPlaceholderTask(m[3])) return m[2];
   }
   return '(见 TASKS.md 待办区)';
 };

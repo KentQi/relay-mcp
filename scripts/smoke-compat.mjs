@@ -51,6 +51,7 @@ try {
   {
     const root = await freshRepo('onboard-preserve');
     const before = manifestOf(root);
+    const baselineSha = git(root, 'rev-parse', 'HEAD');
     const custom = {
       ...before,
       worktree: { enabled: true, cacheDir: '.relay/worktrees', ttlHours: 12, autoCleanup: false },
@@ -59,6 +60,7 @@ try {
       protectedPaths: ['secrets/**'],
       entryFilesTakeover: true,
       codeRoots: ['src', 'app'],
+      facts: { ...before.facts, baselineSha },
     };
     writeManifest(root, custom);
     git(root, 'add', '-A');
@@ -126,7 +128,7 @@ try {
     ok(txt(r).includes('幂等补'), 'C3: 报告声明补了基线', txt(r));
     ok(gi.includes('.relay/worktrees/'), 'C3: .gitignore 补 .relay/worktrees/');
     ok(gi.includes('.relay/worktrees.json'), 'C3: .gitignore 补 .relay/worktrees.json');
-    ok(gi.includes('.relay/worktrees.lock'), 'C3: .gitignore 补 .relay/worktrees.lock');
+    ok(!gi.includes('.relay/worktrees.lock'), 'C3: 不再补从未创建的幽灵 .relay/worktrees.lock');
     ok(gi.includes('custom-user-ignore/'), 'C3: 用户自定义 ignore 条目未被删改');
     ok(txt(r).includes('worktree 配置缺省关闭'), 'C3: 输出旧项目升级提示(worktree 缺省关闭)', txt(r));
 
@@ -143,6 +145,8 @@ try {
     ok(!r3.isError && read(path.join(root2, '.gitignore')).includes('.relay/worktrees/'),
       'C3b: 缺失 .gitignore 时 sync 按基线新建', txt(r3));
     ok(txt(r3).includes('按基线新建'), 'C3b: 报告声明 .gitignore 已按基线新建', txt(r3));
+    ok(!txt(r3).includes('.relay/worktrees.lock') && !read(path.join(root2, '.gitignore')).includes('.relay/worktrees.lock'),
+      'C3b: 新建基线报告与内容都不再出现幽灵 worktrees.lock', txt(r3));
   }
 
   console.log('\n== C4: contract / README / CONTRACT / templates 文案契约 ==');
@@ -157,7 +161,7 @@ try {
     ok(toolText('relay_worktree_cleanup').includes('ignored'), 'C4: cleanup 描述明示 ignored 内容保护');
     ok(/two commits|TWO commits/i.test(toolText('relay_session_end')), 'C4: session_end 描述明示双提交', toolText('relay_session_end'));
     ok(toolText('relay_session_end').includes('Unique model/agent id'), 'C4: session_end 描述要求并发会话使用唯一 model 标识');
-    ok(toolText('relay_onboard').includes('PRESERVED') && toolText('relay_onboard').includes('worktree'), 'C4: onboard 描述明示保留既有配置');
+    ok(/preserved/i.test(toolText('relay_onboard')) && toolText('relay_onboard').includes('manifest config'), 'C4: onboard 描述明示保留既有配置');
     ok(toolText('relay_sync').includes('.gitignore') && toolText('relay_sync').includes('migration'), 'C4: sync 描述明示补基线 + AGENTS 迁移', toolText('relay_sync'));
 
     for (const [needle, label] of [
@@ -174,6 +178,8 @@ try {
     ok(/two commits|TWO commits/i.test(protocol), 'C4: relay://protocol 含双提交');
     ok(protocol.includes('relay/T###') && protocol.includes('ignored'), 'C4: relay://protocol 含未合并/ignored 说明');
     ok(protocol.includes('abort'), 'C4: relay://protocol 含 abort 能力边界');
+    ok(/Managed\s+completion[\s\S]*autoCommit:false[\s\S]*fail-closed/.test(protocol),
+      'C4: relay://protocol 明确 autoCommit:false 的受管完成 fail-closed 语义');
 
     const readme = read(path.join(RELAY, 'README.md'));
     for (const [needle, label] of [
@@ -248,7 +254,33 @@ try {
     const r = await dispatch('relay_restructure', { root });
     ok(!r.isError && txt(r).includes('迁移方案'), 'C6: restructure 干跑仍返回迁移方案', txt(r));
     ok(!existsSync(path.join(root, 'src')), 'C6: 干跑不移动文件');
+  }  console.log('\n== C7: manifest 损坏 fail-closed 与新 manifest 死配置清理 ==');
+  {
+    const root = await freshRepo('manifest-corrupt');
+    const manifestPath = path.join(root, '.relay', 'manifest.json');
+    const before = read(manifestPath);
+    writeFileSync(manifestPath, '{broken manifest\n');
+    const tasksBefore = read(path.join(root, 'TASKS.md'));
+    const claim = await dispatch('relay_claim', { root, task: 'T003', model: 'model-A' });
+    ok(claim.isError && /manifest\.json/.test(txt(claim)) && /解析失败/.test(txt(claim)), '损坏 manifest 时 claim fail-closed', txt(claim));
+    ok(read(path.join(root, 'TASKS.md')) === tasksBefore && !existsSync(path.join(root, '.relay', 'claims', 'T003.lock')), 'claim 拒绝后 TASKS 未改且未留下认领锁');
+    writeFileSync(manifestPath, before);
+    const recovered = await dispatch('relay_claim', { root, task: 'T003', model: 'model-A', worktree: false });
+    ok(!recovered.isError, '修复 manifest 后 claim 恢复', txt(recovered));
+
+    const initRoot = await freshRepo('manifest-dead-config');
+    const initManifest = manifestOf(initRoot);
+    ok(!('preset' in initManifest) && !('docsPhases' in initManifest) && !('facts' in initManifest && 'strict' in initManifest.facts), 'init 不再写 preset/docsPhases/facts.strict', JSON.stringify(initManifest));
+    const compatManifest = { ...initManifest, preset: 'node', docsPhases: ['custom'], restructuredAt: 'old', facts: { ...initManifest.facts, strict: true } };
+    writeManifest(initRoot, compatManifest);
+    git(initRoot, 'add', '-A');
+    git(initRoot, 'commit', '-qm', 'legacy informational keys');
+    const onboard = await dispatch('relay_onboard', { root: initRoot });
+    const preserved = manifestOf(initRoot);
+    ok(!onboard.isError && preserved.preset === 'node' && preserved.docsPhases[0] === 'custom' && preserved.restructuredAt === 'old' && preserved.facts.strict === true, 'onboard 仅原样保留历史信息字段,不新写/不删除');
+    ok(!read(path.join(initRoot, '.gitignore')).includes('.relay/worktrees.lock'), 'init/onboard 的 gitignore 基线无幽灵 worktrees.lock');
   }
+
 } catch (e) {
   fail += 1;
   console.log(`  ✗ FAIL 未捕获异常: ${e && e.stack ? e.stack.split('\n').slice(0, 6).join('\n') : String(e)}`);

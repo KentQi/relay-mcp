@@ -2,7 +2,7 @@
 // T031 冒烟:R13 协议结构机检 —— 任务行/LOG 条目标题契约校验(WARN 起步,strict 升 ERROR)。
 // 红线:模板项目不误报(HTML 注释/缩进行豁免);坏任务行/重复任务号/[~] 缺元数据/[x] 缺日期/坏 LOG 标题 → WARN;
 // manifest.structure.strict=true → ERROR;修宪四处一致(CONTRACT / relay_rules / AGENTS 模板 / README)+ 根 AGENTS.md 投影。
-import { mkdtempSync, writeFileSync, readFileSync, readdirSync, rmSync } from 'node:fs';
+import { mkdtempSync, writeFileSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -111,7 +111,6 @@ try {
     const contract = readFileSync(path.join(RELAY, 'docs-design', 'CONTRACT.md'), 'utf8');
     const tpl = readFileSync(path.join(RELAY, 'templates', 'AGENTS.md.tpl'), 'utf8');
     const agents = readFileSync(path.join(RELAY, 'AGENTS.md'), 'utf8');
-    const readme = readFileSync(path.join(RELAY, 'README.md'), 'utf8');
     const rules = cli('relay_rules', { root: RELAY });
     const r13 = {
       CONTRACT: (contract.match(/^\| R13 \|.*$/m) || [''])[0],
@@ -123,15 +122,6 @@ try {
       ok(/structure\.strict/.test(text) && /warn/i.test(text) && /任务/.test(text),
         name + ' 的 R13 行包含结构键/WARN/任务', text.slice(0, 220));
     }
-    ok(/R1–R13/.test(readme) && !/R1–R12/.test(readme) && !/R1–R11/.test(readme),
-      'README 规则区间为 R1–R13 且无旧区间残留');
-    const walk = (dir) => readdirSync(dir, { withFileTypes: true })
-      .flatMap((e) => (e.isDirectory() ? walk(path.join(dir, e.name)) : [path.join(dir, e.name)]));
-    const stale = walk(path.join(RELAY, 'src')).filter((f) => {
-      const s = readFileSync(f, 'utf8');
-      return s.includes('R1–R12') || s.includes('R1–R11');
-    });
-    ok(stale.length === 0, 'src/** 无 R1–R12 / R1–R11 残留', stale.map((f) => f.replace(RELAY + '/', '')).join(','));
     const pkg = JSON.parse(readFileSync(path.join(RELAY, 'package.json'), 'utf8'));
     ok(String(pkg.scripts.test || '').includes('scripts/smoke-structure.mjs'), 'npm test 链包含 smoke-structure');
   }

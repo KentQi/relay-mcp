@@ -44,6 +44,108 @@ try {
 }
 `;
 
+// 轻量词法扫描:去掉注释/字符串/模板/正则字面量,只保留标识符与标点。
+// 旧实现用「顶格 } catch」正则,缩进或换行写法能绕过;这里用 token 结构和括号配对。
+const sourceTokens = (src) => {
+  const out = [];
+  let i = 0;
+  const regexPrefix = new Set(['=', '(', '[', '{', ',', ':', ';', '!', '?', '&', '|', '+', '-', '*', '%', '^', '~', '<', '>']);
+  const regexKeywords = new Set(['return', 'throw', 'case', 'delete', 'void', 'typeof', 'instanceof', 'in', 'of', 'yield', 'await', 'else', 'do']);
+  while (i < src.length) {
+    const c = src[i];
+    if (/\s/.test(c)) { i += 1; continue; }
+    if (c === '/' && src[i + 1] === '/') { i = src.indexOf('\n', i + 2); if (i < 0) break; continue; }
+    if (c === '/' && src[i + 1] === '*') { const end = src.indexOf('*/', i + 2); i = end < 0 ? src.length : end + 2; continue; }
+    if (c === '"' || c === "'" || c === '`') {
+      const quote = c; i += 1;
+      while (i < src.length) {
+        if (src[i] === '\\') { i += 2; continue; }
+        if (src[i] === quote) { i += 1; break; }
+        i += 1;
+      }
+      out.push({ type: 'literal', value: quote });
+      continue;
+    }
+    if (c === '/') {
+      const prev = out[out.length - 1];
+      const canRegex = !prev || prev.type === 'punc' && regexPrefix.has(prev.value)
+        || prev.type === 'id' && regexKeywords.has(prev.value);
+      if (canRegex) {
+        i += 1; let inClass = false;
+        while (i < src.length) {
+          if (src[i] === '\\') { i += 2; continue; }
+          if (src[i] === '[') inClass = true;
+          else if (src[i] === ']') inClass = false;
+          else if (src[i] === '/' && !inClass) { i += 1; while (/[a-z]/i.test(src[i] || '')) i += 1; break; }
+          else if (src[i] === '\n') break;
+          i += 1;
+        }
+        out.push({ type: 'literal', value: '/regex/' });
+        continue;
+      }
+    }
+    if (/[A-Za-z_$]/.test(c)) {
+      let j = i + 1; while (j < src.length && /[A-Za-z0-9_$]/.test(src[j])) j += 1;
+      out.push({ type: 'id', value: src.slice(i, j) }); i = j; continue;
+    }
+    out.push({ type: 'punc', value: c }); i += 1;
+  }
+  return out;
+};
+const matchingBrace = (tokens, open) => {
+  let depth = 0;
+  for (let i = open; i < tokens.length; i += 1) {
+    if (tokens[i].value !== '{' && tokens[i].value !== '}') continue;
+    if (tokens[i].value === '{') depth += 1;
+    else { depth -= 1; if (depth === 0) return i; }
+  }
+  return -1;
+};
+const blockAfter = (tokens, start) => {
+  if (tokens[start] && tokens[start].value === '{') return matchingBrace(tokens, start);
+  if (tokens[start] && tokens[start].value === '(') {
+    let depth = 0;
+    for (let i = start; i < tokens.length; i += 1) {
+      if (tokens[i].value === '(') depth += 1;
+      else if (tokens[i].value === ')' && --depth === 0) return i;
+    }
+  }
+  return -1;
+};
+const falseGreenOffender = (src) => {
+  const t = sourceTokens(src);
+  for (let i = 0; i < t.length; i += 1) {
+    if (t[i].type !== 'id' || t[i].value !== 'try') continue;
+    const open = i + 1;
+    if (t[open] && t[open].value !== '{') continue;
+    const close = matchingBrace(t, open);
+    if (close < 0) continue;
+    let cursor = close + 1;
+    let catchEnd = -1;
+    let catchOpen = -1;
+    let finallyEnd = -1;
+    if (t[cursor] && t[cursor].value === 'catch') {
+      const paramsEnd = t[cursor + 1] && t[cursor + 1].value === '(' ? blockAfter(t, cursor + 1) : cursor;
+      const bodyOpen = paramsEnd + 1;
+      catchOpen = bodyOpen;
+      catchEnd = t[bodyOpen] && t[bodyOpen].value === '{' ? matchingBrace(t, bodyOpen) : -1;
+      if (catchEnd >= 0) cursor = catchEnd + 1;
+    }
+    if (t[cursor] && t[cursor].value === 'finally') {
+      const bodyOpen = cursor + 1;
+      finallyEnd = t[bodyOpen] && t[bodyOpen].value === '{' ? matchingBrace(t, bodyOpen) : -1;
+    }
+    if (finallyEnd < 0) continue;
+    const finOpen = cursor + 1;
+    const finallyText = t.slice(finOpen + 1, finallyEnd).map((x) => x.value).join(' ');
+    if (!/process\s*\.\s*exit\s*\(/.test(finallyText)) continue;
+    // 只认「catch 体紧跟 try」的判负语句;finally 里的清理 catch 不算顶层捕获。
+    const catchText = catchOpen >= 0 ? t.slice(catchOpen + 1, catchEnd).map((x) => x.value).join(' ') : '';
+    if (!catchText || !/fail\s*\+\s*=\s*1/.test(catchText)) return true;
+  }
+  return false;
+};
+
 try {
   console.log('== 1. 负例复现:无 catch + finally 内 exit 会假绿 ==');
   const dir = mkdtempSync(path.join(tmpdir(), 'relay-meta-'));
@@ -71,15 +173,23 @@ try {
   const offenders = [];
   for (const f of files) {
     const src = readFileSync(path.join(SCRIPTS, f), 'utf8');
-    // 只对「finally 块内 process.exit」这一假绿形态立规:异常进入 finally → 打印汇总 → exit(0)。
-    // exit 在 finally 之外的套件,异常会自然以非零退出,不属于假绿。
-    const fin = src.match(/\n\} finally \{([\s\S]*?)\n\}\n/);
-    if (!fin || !/process\.exit\s*\(/.test(fin[1])) continue;
-    const topCatch = /\n\} catch \(/.test(src);
-    const catchCountsFail = /\n\} catch \([^)]*\) \{[\s\S]{0,300}?fail\s*\+=\s*1/.test(src);
-    if (!topCatch || !catchCountsFail) offenders.push(f + (topCatch ? '(catch 未判负)' : '(无 catch)'));
+    // token 级规则对缩进/换行/参数换行都有效;exit 在 finally 之外仍不算假绿。
+    if (falseGreenOffender(src)) offenders.push(f + '(finally 内 exit 且无有效 catch 判负)');
   }
   ok(offenders.length === 0, '顶层 try/finally 均配 catch 且 catch 递增 fail', offenders.join(', '));
+
+  // 负控:旧正则会漏掉的缩进/换行坏套件,新词法规则必须抓到。
+  const negDir = mkdtempSync(path.join(tmpdir(), 'relay-meta-negative-'));
+  try {
+    const INDENTED_BAD = `let pass = 0, fail = 0;\n  try {\n    throw new Error('x');\n    } catch {\n    // 故意不递增 fail\n    } finally {\n    process.exit(0);\n    }\n`;
+    const indentedPath = path.join(negDir, 'indented-bad.mjs');
+    writeFileSync(indentedPath, INDENTED_BAD);
+    ok(falseGreenOffender(INDENTED_BAD), '缩进/参数省略/换行坏套件被词法规则识别', indentedPath);
+    const stringTrap = 'const text = "} catch (e) { fail += 1 } finally { process.exit(0) }";';
+    ok(!falseGreenOffender(stringTrap), '字符串里的伪 catch/finally 不触发误报');
+  } finally {
+    rmSync(negDir, { recursive: true, force: true });
+  }
 
   console.log(`\n结果: ${pass} 通过 / ${fail} 失败`);
 } catch (e) {

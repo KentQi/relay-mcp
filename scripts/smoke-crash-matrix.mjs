@@ -52,8 +52,8 @@ try {
     const claim = run('relay_claim', { root, task: 'T901', model: 'crash-a', worktree: false });
     ok(claim.status === 0, `[crash@${crashAt}] 单根认领成功`, out(claim).slice(0, 200));
 
-    const crashed = run('relay_session_end', { root, model: 'crash-a', summary: `崩溃点 ${crashAt}`, done_task: 'T901' }, c.env);
-    ok(crashed.status !== 0, `[crash@${crashAt}] 进程在${c.desc}被杀(非零退出)`, `status=${crashed.status}`);
+    const crashed = run('relay_session_end', { root, model: 'crash-a', summary: `崩溃点 ${crashAt}`, done_task: 'T901' }, { ...c.env, RELAY_TEST_HOOKS: '1' });
+    ok(crashed.status === 137, `[crash@${crashAt}] 进程在${c.desc}按预期退出 137`, `status=${crashed.status}`);
 
     // 模拟人工恢复:崩溃进程留下的仓库锁无法在 120s 内自证过期,移除后重跑(锁 TTL 另有专属用例)
     rmSync(path.join(root, '.relay', 'relay.lock'), { force: true });
@@ -77,8 +77,9 @@ try {
     run('relay_init', { root, preset: 'minimal', name: 'noop' });
     addTask(root, 'T902', '正常出场');
     run('relay_claim', { root, task: 'T902', model: 'crash-b', worktree: false });
-    const once = run('relay_session_end', { root, model: 'crash-b', summary: '正常一次', done_task: 'T902' });
-    ok(once.status === 0, '正常出场成功', out(once).slice(0, 300));
+    const once = run('relay_session_end', { root, model: 'crash-b', summary: '正常一次', done_task: 'T902' },
+      { RELAY_CRASH_AT_WRITE: '0', RELAY_CRASH_BEFORE_COMMIT: '1' });
+    ok(once.status === 0, '关闭测试开关时,残留崩溃变量不影响出场', out(once).slice(0, 300));
     ok(git(root, 'rev-list', '--count', 'HEAD') === '2', '正常出场只产生一个提交');
     const twice = run('relay_session_end', { root, model: 'crash-b', summary: '幂等重跑', done_task: 'T902' });
     ok(twice.status === 0 && git(root, 'rev-list', '--count', 'HEAD') === '2', '重复出场幂等(不重复提交)', out(twice).slice(0, 300));

@@ -7,29 +7,30 @@
 //   5) 写入走协议原语(密钥闸 + 内容 CAS + fencing),不裸写 LOG.md。
 import {
   readFileSafe, writeFileAtomic, writeProtocolFile, scanSecrets, acquireRepoLock, sha256Hex, stamp,
-  ensureDir, assertNoSymlinkComponents, checkProtocolFilesSafe,
+  ensureDir, assertNoSymlinkComponents, assertNotSymlinkFile, checkProtocolFilesSafe, toolText as textResult,
 } from '../util.mjs';
 import { join, dirname } from 'node:path';
 import { resolveRelayRoots } from './worktree.mjs';
-import { LOG_TITLE_RE } from './verify.mjs';
+import {
+  LOG_TITLE_RE, findArchiveBoundary, LOG_ARCHIVE_POINTER_RE, isTaskSession, stripHtmlCommentsKeepLines,
+} from './verify.mjs';
 
-const POINTER_RE = /^\s*<!--\s*relay:log-archive:\s*(\S+)\s*-->\s*$/;
-const ARCHIVE_REL_RE = /^docs\/archive\/LOG-[^/\\]+\.md$/i;
+const POINTER_RE = LOG_ARCHIVE_POINTER_RE;
 const DEFAULT_KEEP = 8;
 const MIN_KEEP = 3;
 
-const textResult = (text, isError = false) => ({ content: [{ type: 'text', text }], isError });
-
 // 解析活跃区条目(标题行 + 到下一个标题/指针之前的正文行),返回行号区间。
-const parseEntries = (lines) => {
-  const pointerIdx = lines.findIndex((l) => POINTER_RE.test(l));
+const parseEntries = async (root, lines) => {
+  // 与 R12 共用同一合法指针判定:悬空/越界指针不能把活跃区归零,也不能让归档工具 no-op。
+  const pointerIdx = await findArchiveBoundary(root, lines);
   const limit = pointerIdx < 0 ? lines.length : pointerIdx;
+  const cleanLines = stripHtmlCommentsKeepLines(lines.join('\n')).split('\n');
   const entries = [];
   for (let i = 0; i < limit; i++) {
-    const m = lines[i].match(LOG_TITLE_RE);
+    const m = cleanLines[i].match(LOG_TITLE_RE);
     if (!m) continue;
     let end = i + 1;
-    while (end < limit && !LOG_TITLE_RE.test(lines[end])) end++;
+    while (end < limit && !LOG_TITLE_RE.test(cleanLines[end])) end++;
     entries.push({ start: i, end, time: m[1], model: m[2], task: m[3] });
   }
   return { entries, pointerIdx, limit };
@@ -49,10 +50,12 @@ export const relayArchiveLog = async (args = {}) => {
     notes.push(`- 注意:输入根是任务 worktree;归档只操作 controlRoot(${root})的 LOG.md(任务树里的 LOG 是 baseSha 快照)。`);
   }
   const logPath = join(root, 'LOG.md');
+  const safe = await checkProtocolFilesSafe(root);
+  if (!safe.ok) return textResult(`归档被拒:协议文件布局不安全(${safe.error})。`, true);
   const raw = await readFileSafe(logPath, null);
-  if (raw == null) return textResult('LOG.md 不存在,无历史可归档。', false);
+  if (raw == null) return textResult('LOG.md 不存在,无法归档。修复:确认 root 是已接入 relay 协议的控制根。', true);
   const lines = String(raw).replace(/\r\n/g, '\n').split('\n');
-  const { entries, pointerIdx } = parseEntries(lines);
+  const { entries, pointerIdx } = await parseEntries(root, lines);
   if (!entries.length) return textResult('# relay_archive_log\n\nLOG.md 活跃区没有条目,无需归档。', false);
   if (entries.length <= keep) {
     return textResult([
@@ -62,13 +65,22 @@ export const relayArchiveLog = async (args = {}) => {
       ...notes,
     ].join('\n'), false);
   }
-  // LOG 是「最新在上」:保留前 keep 条(最新),归档其余(更旧)。
-  // 方向绝不能反:搬走最新历史 = 把 live 变成最旧的一批,指针语义与人类预期完全相反。
-  const kept = entries.slice(0, keep);
-  const moved = entries.slice(keep);
+  // LOG 是「最新在上」:默认保留前 keep 条,但 R7 数的是任务会话而非原始条目。
+  // 维护条目不占配额;若第 3 个任务会话落在 keep 之外,把边界扩到它,避免归档后 R7 永久失明。
+  // 全是维护条目时没有任务会话可保留,仍按 keep 封顶,不能无限扩表。
+  let keepCount = Math.min(keep, entries.length);
+  let taskSessions = 0;
+  for (let i = 0; i < entries.length; i += 1) {
+    if (!isTaskSession(entries[i].task)) continue;
+    taskSessions += 1;
+    if (taskSessions === MIN_KEEP) { keepCount = Math.max(keepCount, i + 1); break; }
+  }
+  const kept = entries.slice(0, keepCount);
+  const moved = entries.slice(keepCount);
+  if (!moved.length) return textResult('# relay_archive_log — 无需归档\n\n现有条目均需保留以维持 R7 的任务会话窗口。');
   // 安全线:最新完成条目必须留在 live(否则 R10 的「最新完成条目」会指向归档区)。
   const newestDoneIdx = entries.findIndex((e) => isDoneTask(e.task));
-  if (newestDoneIdx >= 0 && newestDoneIdx >= keep) {
+  if (newestDoneIdx >= 0 && newestDoneIdx >= keepCount) {
     return textResult([
       '# relay_archive_log — 拒绝执行',
       '',
@@ -78,34 +90,46 @@ export const relayArchiveLog = async (args = {}) => {
   }
   const movedLines = moved.flatMap((e) => lines.slice(e.start, e.end));
   const keptLines = kept.flatMap((e) => lines.slice(e.start, e.end));
+  const prefixLines = lines.slice(0, entries[0].start);
   const movedText = movedLines.join('\n').replace(/\n+$/, '');
   const keptText = keptLines.join('\n').replace(/\n+$/, '');
-  // 目标归档文件:已有合法指针 → 追加到同一文件;否则新建 docs/archive/LOG-<today>.md。
-  let archiveRel = '';
-  if (pointerIdx >= 0) {
-    const m = lines[pointerIdx].match(POINTER_RE);
-    if (m && ARCHIVE_REL_RE.test(m[1])) archiveRel = m[1];
-  }
-  const creating = !archiveRel;
-  if (creating) archiveRel = `docs/archive/LOG-${stamp().slice(0, 10)}.md`;
+  const prefixText = prefixLines.join('\n').replace(/\s+$/, '');
+  // 指针丢失或上次归档中断时,仍须保留同日归档已落盘的内容。
+  const archiveRel = pointerIdx >= 0 ? lines[pointerIdx].match(POINTER_RE)[1]
+    : `docs/archive/LOG-${stamp().slice(0, 10)}.md`;
   const archiveAbs = join(root, archiveRel);
-  const existingArchive = creating ? null : await readFileSafe(archiveAbs, null);
-  // 幂等重试(审计 P1 半写):上一次若已写归档文件但 LOG 写失败,重试时不要重复追加同一段。
-  const alreadyArchived = !creating && String(existingArchive || '').includes(movedText);
+  let existingArchive;
+  try {
+    await assertNoSymlinkComponents(root, dirname(archiveRel), '归档文件目录');
+    await assertNotSymlinkFile(archiveAbs, archiveRel);
+    existingArchive = await readFileSafe(archiveAbs, null, { onlyMissing: true });
+  } catch (e) {
+    return textResult(`归档被拒:${e?.message || String(e)}`, true);
+  }
+  const creating = existingArchive == null;
+  // 幂等身份由「本次 source LOG + 搬移边界」派生,不能靠正文子串猜。完全相同的历史块
+  // 可以在后续合法归档中再次出现;只有同一源快照的半写重试才带同一 operation marker。
+  const operationId = sha256Hex(`${sha256Hex(raw)}\n${movedText}`).slice(0, 24);
+  const operationMarker = `<!-- relay:archive-op:${operationId} -->`;
+  const alreadyArchived = !creating && existingArchive.includes(operationMarker);
+  if (alreadyArchived && !existingArchive.includes(movedText)) {
+    return textResult('归档被拒:归档文件含本次 operation 锚点但缺少对应条目,拒绝猜测或重复追加;请人工核对归档文件后重试。', true);
+  }
+  const separator = existingArchive?.endsWith('\n\n') ? '' : existingArchive?.endsWith('\n') ? '\n' : '\n\n';
   const archiveContent = creating
-    ? ['# 归档 — 会话日志', '', `> 由 relay_archive_log 于 ${stamp()} 从 LOG.md 尾部搬出;只增不改。`, '', movedText, ''].join('\n')
+    ? ['# 归档 — 会话日志', '', `> 由 relay_archive_log 于 ${stamp()} 从 LOG.md 尾部搬出;只增不改。`, '', operationMarker, movedText, ''].join('\n')
     : (alreadyArchived
-      ? String(existingArchive || '')
-      : `${String(existingArchive || '').replace(/\n+$/, '')}\n\n${movedText}\n`);
+      ? existingArchive
+      : `${existingArchive}${separator}${operationMarker}\n${movedText}\n`);
   const pointer = `<!-- relay:log-archive: ${archiveRel} -->`;
-  const newLog = ['# 会话日志(最新在上)', '', keptText, '', pointer, ''].join('\n');
+  const newLog = [prefixText, keptText, pointer].filter(Boolean).join('\n\n').replace(/\s*$/, '') + '\n';
   const header = [
     '# relay_archive_log — ' + (confirm ? '已归档' : 'dry-run(未写盘)'),
     '',
     `- controlRoot: ${root}`,
     `- 活跃区条目: ${entries.length} 条(完成条目 ${entries.filter((e) => isDoneTask(e.task)).length} 条)`,
-    `- 保留: ${kept.length} 条(keep=${keep},下限 ${MIN_KEEP});归档: ${moved.length} 条`, 
-    `- 归档目标: ${archiveRel}${creating ? '(新建)' : '(追加)'}`,
+    `- 保留: ${kept.length} 条(keep=${keep},下限 ${MIN_KEEP} 个任务会话);归档: ${moved.length} 条`,
+    `- 归档目标: ${archiveRel}${creating ? '(新建)' : alreadyArchived ? '(同一操作已写入,重试只补 LOG)' : '(追加)'}`,
     `- LOG 活跃行数: ${lines.slice(0, pointerIdx < 0 ? lines.length : pointerIdx).length} → ${keptText.split('\n').length}`,
     `- 边界安全: 最新完成条目 ${entries.find((e) => isDoneTask(e.task)) ? '留在 live' : '不存在(无需保护)'}`,
     ...notes,
@@ -117,8 +141,8 @@ export const relayArchiveLog = async (args = {}) => {
   const lock = await acquireRepoLock(root, 'archive-log');
   if (!lock.ok) return textResult(`归档被拒:仓库写锁被 ${lock.holder} 持有,请稍后重试。`, true);
   try {
-    const hits = scanSecrets(archiveContent);
-    if (hits.length) return textResult(`归档被拒:搬移内容含疑似密钥(${hits.length} 处),拒绝写盘。`, true);
+    const hits = [...scanSecrets(archiveContent), ...scanSecrets(newLog)];
+    if (hits.length) return textResult(`归档被拒:搬移或保留内容含疑似密钥(${hits.length} 处),拒绝写盘。`, true);
     // 写盘前布局安全闸:docs/archive 的既有组件不得是符号链接,否则归档文件会被写到仓库外
     // (审计 P0:docs -> /tmp/OUT 时,LOG 指针仍指向仓库内路径,而内容其实在仓库外)。
     const protoSafe = await checkProtocolFilesSafe(root);
@@ -133,7 +157,28 @@ export const relayArchiveLog = async (args = {}) => {
     const archiveDirRel = archiveRel.split('/').slice(0, -1).join('/');
     if (archiveDirRel) await assertNoSymlinkComponents(root, archiveDirRel, '归档文件目录');
     await ensureDir(dirname(archiveAbs));
-    await writeFileAtomic(archiveAbs, archiveContent, { label: archiveRel });
+    const fencing = async () => {
+      const verdict = await lock.check();
+      return { ok: verdict.held, warning: verdict.warning };
+    };
+    if (alreadyArchived) {
+      const verdict = await fencing();
+      if (!verdict.ok) return textResult(`归档被拒:${verdict.warning}`, true);
+      // 半写恢复分支不重写归档,但仍须证明“初始读到的 operation+条目”在 LOG 改写前仍完整存在。
+      const currentArchive = await readFileSafe(archiveAbs, null, { onlyMissing: true });
+      if (currentArchive !== existingArchive
+        || !currentArchive.includes(operationMarker)
+        || !currentArchive.includes(movedText)) {
+        return textResult('归档被拒:归档文件在恢复检查期间被修改或缺失本次 operation,LOG 未改写。', true);
+      }
+    } else if (!await writeFileAtomic(archiveAbs, archiveContent, {
+      label: archiveRel,
+      fencing,
+      createOnly: creating,
+      expectedHash: creating ? null : sha256Hex(existingArchive),
+    })) {
+      return textResult('归档被拒:目标文件已被其他写入者创建,请重试。', true);
+    }
     await writeProtocolFile(root, 'LOG.md', newLog, { token: lock.token, lockLabel: '仓库写锁', expectedHash: sha256Hex(raw) });
   } catch (e) {
     return textResult(`归档被拒:${e?.message || String(e)}`, true);
@@ -144,7 +189,7 @@ export const relayArchiveLog = async (args = {}) => {
     header,
     '',
     '## 已写入',
-    `- \`${archiveRel}\`(新增 ${moved.length} 条历史条目)`,
+    `- \`${archiveRel}\`(${alreadyArchived ? '同一 operation 已存在,未重复追加' : `实际追加 ${moved.length} 条历史条目`})`,
     '- `LOG.md`(保留条目 + 归档指针)',
     '',
     '> 归档文件会在下一次 `relay_session_end` 的控制面提交中一并入库(控制面白名单已包含 `docs/archive/`);',
