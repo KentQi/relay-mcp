@@ -48,7 +48,11 @@ try {
   const d0 = cli('relay_doctor', {});
   const t0 = out(d0);
   ok(d0.status === 0, '健康仓库 doctor 退出码 0', t0.slice(0, 300));
-  ok(t0.includes('D1') && t0.includes('D9'), '输出覆盖 D1–D9 九项检查');
+  for (let id = 1; id <= 9; id++) {
+    const checkId = `D${id}`;
+    const row = t0.split('\n').find((line) => new RegExp(`^\\| ${checkId} .*\\| OK \\|`).test(line));
+    ok(!!row, `${checkId} 独立行存在且健康仓库判定为 OK`, row || t0.slice(0, 500));
+  }
   ok(!t0.includes('修复:'), '健康仓库无「修复:」行');
   ok(snapshot(tmp) === before, 'doctor 零写盘(整棵仓库树快照不变,含根目录入口文件)');
 

@@ -3,6 +3,34 @@
 本项目遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 格式;
 版本号遵循 [SemVer](https://semver.org/lang/zh-CN/)。
 
+## [Unreleased]
+
+### Added
+- **`manifest.runtimeTopLevel`**:显式声明本机运行时目录(如 `.claude`/`.v2c`/`.zcode`/`out`),R2 据此排除;不再依赖未入库的 `.git/info/exclude`(换机/新克隆会直接红)。
+
+### Fixed
+- **R10 独立锚定重写**:managed 的代码提交改由「任务分支 tip + registry.baseSha 祖先校验」独立定位,事实行自报的 base/sha 不再作为输入;字段对账先于分支归属,伪造 sha 报「字段不一致」、分支 tip 不符报「不在分支上」,分支已删保持可见(WARN/不 PASS)。
+- **R9 全局化 + 崩溃恢复豁免**:所有 `[x]` 对账 LOG/归档;本会话正在收尾的任务(`done_task(s)`)在绿闸中豁免,避免「TASKS 已盖戳、LOG 未写」的崩溃态永久阻断重跑。历史 T055–T057 保持具名 WARN。
+- **进程组终止**:修正 `child.detached` 恒为 undefined 导致的退化——超时/信号现在真的杀整个 git 进程组;验收超时同样杀整组并等待 close。
+- **认领锁过期单一真相源**:新增 `claimLockExpiry`,无心跳锁按锁内 `acquiredAt` 精确毫秒判定,支持 `ttl_minutes` 覆盖;仓库写锁仍按 mtime 心跳。
+- **recall/archive/get**:recall 纳入无 LOG 待办并合并合法归档;archive 与 R12 共用合法指针判定,保留至少 3 个任务会话;archive 无 LOG 明确 isError。
+- **CLI**:按 inputSchema 校验键与类型(数组支持逗号/重复写法),stdout 不再因 `process.exit` 截断管道输出。
+- **写盘防线**:sync/restructure/rescue 补符号链接防线;restructure 的 TASKS/LOG/DECISIONS 改走 `writeProtocolFile`(CAS+原子+fencing),manifest 原子写且损坏 fail-closed。
+- **自更新启动器**:linked-worktree 守卫 fail-closed、合并后校验 HEAD 与工作树、并发更新锁、git 环境净化、预算从入口计时。
+- **清理**:退役 `scripts/audit/`、删除死导出 `resolveProfiles` 与死常量、停写 `manifest.preset`、移除幽灵 `.relay/worktrees.lock` 基线、启动器纳入 npm 包。
+
+### Security
+
+- **验收 shell 执行边界显式化**：`test:<命令>` 逐字符命中 `manifest.acceptance.commands` 后经 shell 执行；SECURITY、README、START 模板同步声明白名单即授权边界，自由文本验收仍不执行。
+- **`relay:secret-ok` 写入语义收口**：该标记只豁免 R11 检测；协议写入路径一律拒绝，避免「检测放行、写入失败」的死循环。
+
+### Fixed
+
+- **规则与实现口径一致性（T071）**：R2 的 git/readdir 并集与明确运行时目录排除、R3 默认宽松/`strictDocs`、R4 必查 AGENTS、R9 全局核对与 T055–T057 具名 WARN、R10 registry/commit 独立锚定、R11 单层归档扫描、R12 首个合法指针与锁心跳/fencing 语义同步到契约和入口模板；相关回归与文档口径持续对齐。
+- **worktree 清理文档**：活跃性以 TASKS `[~]` 活跃集为准，ignored 本地内容默认保留；注册表缺失与损坏的恢复路径分开说明。
+- **审计与设计文档维护**：修复表格管道符、U+FFFD 与过期接口/运行时声明；`docs/superpowers` 记录完成状态并标明命名与 strictDocs 的兼容边界。
+- **测试入口**：`npm test` 现为 **29 套**，新增 CLI IO/schema 与 T018 收益复核决策证据。
+
 ## [2.1.1] - 2026-11-27
 
 ### Added(自更新启动器纳入仓库并加固 T065/T067)

@@ -11,18 +11,18 @@ import {
 } from '../util.mjs';
 import { join, dirname } from 'node:path';
 import { resolveRelayRoots } from './worktree.mjs';
-import { LOG_TITLE_RE } from './verify.mjs';
+import { LOG_TITLE_RE, findArchiveBoundary, ARCHIVE_REL_RE, LOG_ARCHIVE_POINTER_RE } from './verify.mjs';
 
-const POINTER_RE = /^\s*<!--\s*relay:log-archive:\s*(\S+)\s*-->\s*$/;
-const ARCHIVE_REL_RE = /^docs\/archive\/LOG-[^/\\]+\.md$/i;
+const POINTER_RE = LOG_ARCHIVE_POINTER_RE;
 const DEFAULT_KEEP = 8;
 const MIN_KEEP = 3;
 
 const textResult = (text, isError = false) => ({ content: [{ type: 'text', text }], isError });
 
 // 解析活跃区条目(标题行 + 到下一个标题/指针之前的正文行),返回行号区间。
-const parseEntries = (lines) => {
-  const pointerIdx = lines.findIndex((l) => POINTER_RE.test(l));
+const parseEntries = async (root, lines) => {
+  // 与 R12 共用同一合法指针判定:悬空/越界指针不能把活跃区归零,也不能让归档工具 no-op。
+  const pointerIdx = await findArchiveBoundary(root, lines);
   const limit = pointerIdx < 0 ? lines.length : pointerIdx;
   const entries = [];
   for (let i = 0; i < limit; i++) {
@@ -50,9 +50,9 @@ export const relayArchiveLog = async (args = {}) => {
   }
   const logPath = join(root, 'LOG.md');
   const raw = await readFileSafe(logPath, null);
-  if (raw == null) return textResult('LOG.md 不存在,无历史可归档。', false);
+  if (raw == null) return textResult('LOG.md 不存在,无法归档。修复:确认 root 是已接入 relay 协议的控制根。', true);
   const lines = String(raw).replace(/\r\n/g, '\n').split('\n');
-  const { entries, pointerIdx } = parseEntries(lines);
+  const { entries, pointerIdx } = await parseEntries(root, lines);
   if (!entries.length) return textResult('# relay_archive_log\n\nLOG.md 活跃区没有条目,无需归档。', false);
   if (entries.length <= keep) {
     return textResult([
@@ -62,13 +62,22 @@ export const relayArchiveLog = async (args = {}) => {
       ...notes,
     ].join('\n'), false);
   }
-  // LOG 是「最新在上」:保留前 keep 条(最新),归档其余(更旧)。
-  // 方向绝不能反:搬走最新历史 = 把 live 变成最旧的一批,指针语义与人类预期完全相反。
-  const kept = entries.slice(0, keep);
-  const moved = entries.slice(keep);
+  // LOG 是「最新在上」:默认保留前 keep 条,但 R7 数的是任务会话而非原始条目。
+  // 维护条目不占配额;若第 3 个任务会话落在 keep 之外,把边界扩到它,避免归档后 R7 永久失明。
+  // 全是维护条目时没有任务会话可保留,仍按 keep 封顶,不能无限扩表。
+  let keepCount = Math.min(keep, entries.length);
+  let taskSessions = 0;
+  for (let i = 0; i < entries.length; i += 1) {
+    const task = String(entries[i].task || '').trim();
+    if (task === '维护' || task === '无') continue;
+    taskSessions += 1;
+    if (taskSessions === MIN_KEEP) { keepCount = Math.max(keepCount, i + 1); break; }
+  }
+  const kept = entries.slice(0, keepCount);
+  const moved = entries.slice(keepCount);
   // 安全线:最新完成条目必须留在 live(否则 R10 的「最新完成条目」会指向归档区)。
   const newestDoneIdx = entries.findIndex((e) => isDoneTask(e.task));
-  if (newestDoneIdx >= 0 && newestDoneIdx >= keep) {
+  if (newestDoneIdx >= 0 && newestDoneIdx >= keepCount) {
     return textResult([
       '# relay_archive_log — 拒绝执行',
       '',
@@ -104,7 +113,7 @@ export const relayArchiveLog = async (args = {}) => {
     '',
     `- controlRoot: ${root}`,
     `- 活跃区条目: ${entries.length} 条(完成条目 ${entries.filter((e) => isDoneTask(e.task)).length} 条)`,
-    `- 保留: ${kept.length} 条(keep=${keep},下限 ${MIN_KEEP});归档: ${moved.length} 条`, 
+    `- 保留: ${kept.length} 条(keep=${keep},下限 ${MIN_KEEP} 个任务会话);归档: ${moved.length} 条`, 
     `- 归档目标: ${archiveRel}${creating ? '(新建)' : '(追加)'}`,
     `- LOG 活跃行数: ${lines.slice(0, pointerIdx < 0 ? lines.length : pointerIdx).length} → ${keptText.split('\n').length}`,
     `- 边界安全: 最新完成条目 ${entries.find((e) => isDoneTask(e.task)) ? '留在 live' : '不存在(无需保护)'}`,

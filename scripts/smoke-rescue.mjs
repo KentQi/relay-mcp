@@ -212,7 +212,15 @@ try {
     ok(!/\.relay\/rescue/.test(gitOut(repo, 'status', '--porcelain', '-uall')), '.relay/rescue/ 不出现在 git status');
     ok(read(path.join(repo, '.gitignore')).split('\n').includes('.relay/rescue/'), '.gitignore 基线已补 .relay/rescue/');
     const gi = git(repo, 'check-ignore', '-q', path.join(dir, 'state.json'));
-    ok(gi.status === 0, '接力单文件被 git 忽略(不会卷进下一次出场提交)');
+    ok(gi.status === 0, '接力单文件被 git 忽略(不会卷进下一次出场提交)', gi.status);
+    // 幂等重试:同来源 + 同内容 + 同 task/note 不得新增卡或 ref。
+    const idsBeforeRetry = rescueIds(repo);
+    const refsBeforeRetry = gitOut(repo, 'for-each-ref', '--format=%(refname)', 'refs/relay/rescue/');
+    const retry = cli(repo, 'relay_rescue', { action: 'capture', id: 'claude-ok', confirm: true }, ENV);
+    ok(retry.status === 0 && /幂等重试/.test(out(retry)), '原样重试 capture 幂等成功', out(retry).slice(0, 300));
+    ok(JSON.stringify(rescueIds(repo)) === JSON.stringify(idsBeforeRetry), '幂等重试不新增接力单', idsBeforeRetry.join(','));
+    ok(gitOut(repo, 'for-each-ref', '--format=%(refname)', 'refs/relay/rescue/') === refsBeforeRetry,
+      '幂等重试不新增 git ref');
   }
 
   // ==========================================================================
@@ -267,9 +275,17 @@ try {
       action: 'report', id, model: 'taker-a', summary: '继续并完成剩余编辑', confirm: true,
     }, ENV);
     ok(okReport.status === 0, '持有者 report 成功', out(okReport).slice(0, 500));
+    const retryReport = cli(repo, 'relay_rescue', {
+      action: 'report', id, model: 'taker-a', summary: '继续并完成剩余编辑', confirm: true,
+    }, ENV);
+    ok(retryReport.status === 0 && /幂等重试/.test(out(retryReport)), 'report 成功后原样重试幂等', out(retryReport).slice(0, 300));
+    const changedReport = cli(repo, 'relay_rescue', {
+      action: 'report', id, model: 'taker-a', summary: '改写已回写结果', confirm: true,
+    }, ENV);
+    ok(changedReport.status === 1, '不同 summary 不得借幂等路径覆盖旧报告', out(changedReport).slice(0, 300));
 
     // 给最后一棒留一个失败接力单,测 TTL 与接力链
-    const z = cli(repo, 'relay_rescue', { action: 'capture', id: 'agent-zcode-ok', confirm: true }, ENV);
+    const z = cli(repo, 'relay_rescue', { action: 'capture', id: 'agent-zcode-ok', confirm: true, note: 'ZCode 首棒' }, ENV);
     ok(z.status === 0, 'capture ZCode 子代理', out(z).slice(0, 400));
     const zIds = rescueIds(repo).filter((x) => x !== id);
     ok(zIds.length === 1, 'ZCode 接力单落盘', zIds.join(','));
@@ -281,7 +297,9 @@ try {
     const ttlOld = new Date(Date.now() - 241 * 60000); // 回拨 241 分钟 > 240min TTL,才算过期
     const lockContent = read(zLock);
     const lockJson = JSON.parse(lockContent);
-    // 按认领锁协议,过期由 mtime 裁决:回拨 mtime 模拟 201 分钟前
+    // 接管锁与认领锁同口径:过期由锁内 acquiredAt 精确判定(无心跳),不是 mtime。
+    // 只回拨 mtime 会被正确忽略;必须改写 acquiredAt 才模拟「持有人崩溃已久」。
+    writeFileSync(zLock, `${JSON.stringify({ ...lockJson, acquiredAt: ttlOld.toISOString() })}\n`);
     const { utimesSync } = await import('node:fs');
     utimesSync(zLock, ttlOld, ttlOld);
     ok(lockJson.ttlMinutes === 240, '接力锁沿用 240 分钟 TTL', String(lockJson.ttlMinutes));
@@ -300,8 +318,7 @@ try {
     const beforeIds = rescueIds(repo);
     ok(beforeIds.length >= 1, '第 5 段开始时已有接力单可作前棒', beforeIds.join(','));
     const r = cli(repo, 'relay_rescue', {
-      action: 'capture', id: 'claude-ok', confirm: true, note: '接续第一棒',
-    }, ENV);
+      action: 'capture', id: 'claude-ok', confirm: true, note: '接续第一棒',    }, ENV);
     ok(r.status === 0, '再次 capture 生成新接力单(新一棒)', out(r).slice(0, 400));
     const afterIds = rescueIds(repo);
     const newest = afterIds.find((x) => !beforeIds.includes(x)) || '';
@@ -641,11 +658,16 @@ try {
     // 核心不得硬编码 home 目录下的具体安装路径
     ok(!/['"]\.(zcode|claude|codex|gemini)['"]/.test(core), '核心不硬编码任何 harness 的安装目录');
 
-    // 描述符层存在且导出注册表
-    const prof = rf(path.join(RELAY, 'src', 'engines', 'rescue-profiles.mjs'), 'utf8');
-    ok(/export const BUILTIN_PROFILES/.test(prof), '描述符层导出 BUILTIN_PROFILES 注册表');
-    ok(/export const profileFromSpec/.test(prof), '支持声明式描述符(manifest 纯 JSON)');
-    ok(/export const resolveAllProfiles/.test(prof), '内置 + 声明式 + 函数式描述符可合并');
+    // 运行时验证导出确实可调用,而不是只 grep 源码文本(实现被删/抛错时也必须红)。
+    const profModule = await import('../src/engines/rescue-profiles.mjs');
+    ok(Array.isArray(profModule.BUILTIN_PROFILES) && profModule.BUILTIN_PROFILES.length >= 2,
+      '描述符层导出可用的 BUILTIN_PROFILES 注册表');
+    const declared = profModule.profileFromSpec({ id: 'probe-spec', kind: 'json-metadata', metaFile: 'metadata.json' });
+    ok(declared && declared.id === 'probe-spec' && typeof declared.discover === 'function',
+      'profileFromSpec 生成可执行的声明式描述符');
+    const merged = await profModule.resolveAllProfiles({ specs: [{ id: 'probe-spec', kind: 'json-metadata', metaFile: 'metadata.json' }] });
+    ok(merged.some((p) => p.id === 'probe-spec') && merged.some((p) => p.id === 'jsonl-agent'),
+      'resolveAllProfiles 实际合并内置与声明式描述符');
 
     // 默认不扫描:manifest 没有 rescue.sources 时,scan 不产生任何候选(不扫 home)
     const noSrc = freshRepo('nosrc', '无来源声明');
@@ -736,7 +758,7 @@ try {
 
     // #14(审计):被持有时必须拒绝删除,否则会中断正在进行的接力并永久丢失现场
     // 显式造一张被持有的卡(前面的段落都 report 过,不能依赖残留状态)。
-    const heldCap = cli(repo, 'relay_rescue', { action: 'capture', id: 'agent-zcode-ok', confirm: true }, ENV);
+    const heldCap = cli(repo, 'relay_rescue', { action: 'capture', id: 'agent-zcode-ok', confirm: true, note: 'drop 守卫新一棒' }, ENV);
     ok(heldCap.status === 0, '为 drop 守卫夹具 capture 一张卡', out(heldCap).slice(0, 300));
     const heldId = rescueIds(repo).find((x) => {
       const p = path.join(rescueRootOf(repo), x, 'state.json');
@@ -791,7 +813,7 @@ try {
   // ==========================================================================
   {
     const remaining = rescueIds(repo).length;
-    const cap = cli(repo, 'relay_rescue', { action: 'capture', id: 'agent-zcode-ok', confirm: true }, ENV);
+    const cap = cli(repo, 'relay_rescue', { action: 'capture', id: 'agent-zcode-ok', confirm: true, note: '简报待接力新一棒' }, ENV);
     ok(cap.status === 0, '再造一张待接力单', out(cap).slice(0, 300));
     const brief = out(cli(repo, 'relay_session_start', {}, ENV));
     ok(/待接力/.test(brief), '有待接力单时简报出现「待接力」小节', brief.slice(0, 600));
@@ -851,7 +873,7 @@ try {
     copyFixture('claude', path.join(H11, 'cc'), { ROOT: relRepo });
     setRescueSources(relRepo, [{ profile: 'cc-ref', root: path.join(H11, 'cc', 'projects') }], PROFILE_SPECS);
     const e11 = {};
-    ok(cli(relRepo, 'relay_rescue', { action: 'capture', id: 'claude-ok', confirm: true }, e11).status === 0, '锁夹具 capture', '');
+    ok(cli(relRepo, 'relay_rescue', { action: 'capture', id: 'claude-ok', confirm: true, note: '锁夹具首棒' }, e11).status === 0, '锁夹具 capture', '');
     const lid = rescueIds(relRepo)[0];
     const lockFile = path.join(rescueRootOf(relRepo), lid, 'takeover.lock');
     ok(cli(relRepo, 'relay_rescue', { action: 'takeover', id: lid, model: 'tok-a', confirm: true }, e11).status === 0, '锁夹具 takeover', '');
@@ -867,7 +889,7 @@ try {
     ok(stAfterRep.takeover === null && !!stAfterRep.report, 'report 后 takeover 清空且写入 report');
 
     // (c) 锁释放失败必须 fail-closed(不能报成功却留着锁)
-    ok(cli(relRepo, 'relay_rescue', { action: 'capture', id: 'claude-ok', confirm: true }, e11).status === 0, '释放失败夹具 capture', '');
+    ok(cli(relRepo, 'relay_rescue', { action: 'capture', id: 'claude-ok', confirm: true, note: '释放失败新一棒' }, e11).status === 0, '释放失败夹具 capture', '');
     const lid2 = rescueIds(relRepo).filter((x) => x !== lid)[0];
     ok(cli(relRepo, 'relay_rescue', { action: 'takeover', id: lid2, model: 'tok-b', confirm: true }, e11).status === 0, '释放失败夹具 takeover', '');
     const lock2 = path.join(rescueRootOf(relRepo), lid2, 'takeover.lock');
@@ -1013,6 +1035,34 @@ try {
       ok(parsedErr.toolSignals.apiError && parsedErr.toolSignals.apiError.text.includes('quota'),
         'fieldMap 嵌套 apiErrorTextPath 取到错误文本');
     }
+  }
+  // ==========================================================================
+  console.log('\n== 12. 多来源扫描聚合上限(不再是装饰常量)==');
+  // ==========================================================================
+  {
+    const repo = freshRepo('scan-cap', '扫描聚合上限');
+    const sources = [];
+    const spec = { id: 'cap-ref', kind: 'json-metadata', metaFile: 'metadata.json' };
+    // 单来源 401 个候选:描述符层应截到 400,聚合层也不能再多。
+    const root = path.join(mkTmp('scan-cap-home'), 'agents');
+    for (let i = 0; i < 401; i += 1) {
+      const dir = path.join(root, `parent-${i}`, `agent-${i}`);
+      mkdirSync(dir, { recursive: true });
+      writeFileSync(path.join(dir, 'metadata.json'), JSON.stringify({
+        agentId: `cap-${i}`, cwd: repo, prompt: '扫描上限任务', status: 'failed', error: 'quota 429',
+        createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
+      }));
+    }
+    sources.push({ profile: spec.id, root });
+    setRescueSources(repo, sources, [spec]);
+    const scan = cli(repo, 'relay_rescue', { action: 'scan' });
+    const text = out(scan);
+    ok(scan.status === 0, '扫描上限夹具可执行', text.slice(0, 300));
+    ok(/可抢救\(400\)/.test(text), '单来源候选硬上限 400 生效', (text.match(/可抢救\(\d+\)/) || [''])[0]);
+    // 候选是 0-based 命名(cap-0..cap-400 共 401 个),上限 400 条时 cap-400 有可能恰好入选。
+    // 真正要钉的是「总条数不超过上限」,而不是某一个序号是否出现。
+    const shown = (text.match(/^- `cap-\d+`/gm) || []).length;
+    ok(shown === 400, '第 401 个候选被截断(展示条数恰好等于上限)', `shown=${shown}`);
   }
 } catch (e) {
   fail += 1;

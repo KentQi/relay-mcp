@@ -1,9 +1,11 @@
 ---
-title: 任务级 worktree 生命周期实施计划
-status: 现行
+title: 任务级 worktree 生命周期实施计划(已完成)
+status: 已完成
 ---
 
-# 任务级 worktree 生命周期实施计划
+# 任务级 worktree 生命周期实施计划(已完成)
+
+> **状态:** 原实施计划已于 2026-10-29 完成。2026-11-27 仅修正运行时、接口与清理口径;历史步骤保留为实施记录,复选框统一标记完成。
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
@@ -11,9 +13,11 @@ status: 现行
 
 **Architecture:** 新增独立 worktree 引擎负责注册表、根目录解析和安全清理；session 引擎只编排控制面与执行面。主仓库保存协议状态，任务 worktree 保存代码变更；不自动合并、推送或删除分支。
 
-**Tech Stack:** Node.js >= 18、纯 ESM、仅 `node:` 内置模块、Git CLI、Node 脚本端到端冒烟测试。
+**Tech Stack:** Node.js >= 22、纯 ESM、仅 `node:` 内置模块、Git CLI、Node 脚本端到端冒烟测试。
 
 **Spec:** `docs/superpowers/specs/2026-10-29-task-worktree-lifecycle-design.md`
+
+> **strictDocs 兼容提示:** 本文件是历史实施计划,文件名不含 `NN-类型-主题-vX.Y.md`。若项目启用 `strictDocs:true`,建议主审在 `manifest.docsIgnore` 中加入 `superpowers/**`,或由主审按文档命名规范重命名并同步引用;本任务不修改 manifest。
 
 ## Global Constraints
 
@@ -46,11 +50,11 @@ status: 现行
 - Consumes: 现有 `manifest.entryFiles`、`generateEntryFiles(root, ctx)`。
 - Produces: `entryFiles` 的有效集合始终包含 `AGENTS.md`；R1 无条件检查该文件。
 
-- [ ] **Step 1: 写失败回归**：将 `entryFiles` 设为 `[]`，删除 AGENTS.md，断言 verify 的 R1 为 ERROR；执行 sync 后断言 AGENTS.md 重建且 R1 恢复；同步改写旧 P5“空数组不投影任何入口”的过时断言。
-- [ ] **Step 2: 运行 `node scripts/smoke-patches.mjs`，确认新增断言失败且失败原因正确。**
-- [ ] **Step 3: 实现最小修改**：sync 合并 AGENTS.md；R1 独立检查 AGENTS.md，再检查其余配置入口；更新 R1 文案，其他入口不再被描述为一律必需。
-- [ ] **Step 4: 重跑补丁回归和 `npm test`，确认无既有行为回归。**
-- [ ] **Step 5: 检查本任务 diff，只保留 AGENTS.md 硬约束相关变更。**
+- [x] **Step 1: 写失败回归**：将 `entryFiles` 设为 `[]`，删除 AGENTS.md，断言 verify 的 R1 为 ERROR；执行 sync 后断言 AGENTS.md 重建且 R1 恢复；同步改写旧 P5“空数组不投影任何入口”的过时断言。
+- [x] **Step 2: 运行 `node scripts/smoke-patches.mjs`，确认新增断言失败且失败原因正确。**
+- [x] **Step 3: 实现最小修改**：sync 合并 AGENTS.md；R1 独立检查 AGENTS.md，再检查其余配置入口；更新 R1 文案，其他入口不再被描述为一律必需。
+- [x] **Step 4: 重跑补丁回归和 `npm test`，确认无既有行为回归。**
+- [x] **Step 5: 检查本任务 diff，只保留 AGENTS.md 硬约束相关变更。**
 
 ### Task 2: TTL 接管与锁所有权
 
@@ -65,11 +69,11 @@ status: 现行
 - Consumes: `acquireRepoLock(root, holder, options)`、`releaseRepoLock(root)`、`acquireClaimLock(...)`。
 - Produces: 锁句柄含唯一 `token`；`releaseRepoLock(root, token)` 与 `releaseClaimLock(root, task, token)` 只释放持有者的锁。
 
-- [ ] **Step 1: 新建失败测试**：复现极短 TTL 后 model-B 无法接管、model-B 可完成 model-A 任务、旧锁句柄可释放新锁三个问题。
-- [ ] **Step 2: 运行新测试，确认三项按预期失败。**
-- [ ] **Step 3: 实现 token 句柄与所有权校验**：session/sync/restructure 的所有锁获取与释放调用点传 token；不同模型认领先经过锁 TTL 裁决；session_end 拒绝非持有者完成 `[~]` 任务，同模型完成重跑保持幂等。
-- [ ] **Step 4: 运行新旧测试，确认接管、拒绝越权、幂等与并发场景通过。**
-- [ ] **Step 5: 检查所有 acquire/release 调用点无遗漏，并审查锁释放异常路径。**
+- [x] **Step 1: 新建失败测试**：复现极短 TTL 后 model-B 无法接管、model-B 可完成 model-A 任务、旧锁句柄可释放新锁三个问题。
+- [x] **Step 2: 运行新测试，确认三项按预期失败。**
+- [x] **Step 3: 实现 token 句柄与所有权校验**：session/sync/restructure 的所有锁获取与释放调用点传 token；不同模型认领先经过锁 TTL 裁决；session_end 拒绝非持有者完成 `[~]` 任务，同模型完成重跑保持幂等。
+- [x] **Step 4: 运行新旧测试，确认接管、拒绝越权、幂等与并发场景通过。**
+- [x] **Step 5: 检查所有 acquire/release 调用点无遗漏，并审查锁释放异常路径。**
 
 ### Task 3: worktree 注册表与安全清理器
 
@@ -85,16 +89,16 @@ status: 现行
 **Interfaces:**
 - Consumes: `gitRun`、`readManifestConfig`、仓库写锁。
 - Produces:
-  - `resolveRelayRoots(root) -> Promise<{controlRoot, executionRoot, managed}>`。
+  - `resolveRelayRoots(root) -> Promise<{controlRoot, executionRoot, managed, linkedWorktree, registryState, record?}>`;普通快路径不返回 `record`,受管 linked worktree 命中登记时才带该字段。
   - `readWorktreeConfig(root) -> Promise<{enabled, cacheDir, ttlHours, autoCleanup}>`。
-  - `cleanupWorktrees(controlRoot, {confirm, ttlHours, now}) -> Promise<{removed, kept, errors}>`。
+  - `cleanupWorktrees(controlRoot, {confirm, ttlHours, now}) -> Promise<{removed, candidates, kept, errors, stale}>`。
   - MCP `relay_worktree_cleanup {root, confirm?, ttl_hours?}`，默认 dry-run。
 
-- [ ] **Step 1: 写失败测试**：构造注册表和真实 Git worktree，覆盖过期 completed 可删且分支保留，以及未到期、活跃、dirty、locked、未登记、路径越界均保留；dry-run 不删除。
-- [ ] **Step 2: 运行测试，确认工具尚不存在且断言失败。**
-- [ ] **Step 3: 实现配置、注册表原子读写、Git porcelain 解析和清理器**：所有删除走 `git worktree remove`，清理前重新核验 realpath、Git 登记、分支引用和状态。
-- [ ] **Step 4: 接入第 10 个 MCP 工具及 `.gitignore` 基线，同步 tools/list 数量断言；新 init 写入启用配置，旧 manifest 缺省关闭。**
-- [ ] **Step 5: 运行新测试与两套旧测试，确认清理矩阵和工具契约通过。**
+- [x] **Step 1: 写失败测试**：构造注册表和真实 Git worktree，覆盖过期 completed 可删且分支保留，以及未到期、活跃、dirty、locked、未登记、路径越界均保留；dry-run 不删除。
+- [x] **Step 2: 运行测试，确认工具尚不存在且断言失败。**
+- [x] **Step 3: 实现配置、注册表原子读写、Git porcelain 解析和清理器**：所有删除走 `git worktree remove`，清理前重新核验 realpath、Git 登记、分支引用和状态。
+- [x] **Step 4: 接入 worktree 清理 MCP 工具及 `.gitignore` 基线，同步 tools/list 数量断言；新 init 写入启用配置，旧 manifest 缺省关闭。**
+- [x] **Step 5: 运行新测试与两套旧测试，确认清理矩阵和工具契约通过。**
 
 ### Task 4: claim 创建与复用任务 worktree
 
@@ -108,11 +112,11 @@ status: 现行
 - Consumes: Task 3 的注册表、配置与锁句柄。
 - Produces: `ensureTaskWorktree(controlRoot, task, model, config) -> Promise<{path, branch, baseSha, reused}>`；relay_claim 新增可选 `worktree` 参数。
 
-- [ ] **Step 1: 写失败测试**：启用配置后 claim 必须创建 `relay/T###` 和对应目录；同模型重复 claim 复用；不同任务目录隔离；缺省旧配置不创建。
-- [ ] **Step 2: 运行测试确认失败。**
-- [ ] **Step 3: 实现创建/复用及失败回滚**：基于 HEAD 记录 baseSha，成功后才落 TASKS 和注册表；输出 controlRoot、executionRoot、branch、baseSha。
-- [ ] **Step 4: 运行测试，验证创建、复用、并发认领和旧行为兼容。**
-- [ ] **Step 5: 检查失败路径不会留下半认领 TASKS 或可用锁被误释放。**
+- [x] **Step 1: 写失败测试**：启用配置后 claim 必须创建 `relay/T###` 和对应目录；同模型重复 claim 复用；不同任务目录隔离；缺省旧配置不创建。
+- [x] **Step 2: 运行测试确认失败。**
+- [x] **Step 3: 实现创建/复用及失败回滚**：基于 HEAD 记录 baseSha，成功后才落 TASKS 和注册表；输出 controlRoot、executionRoot、branch、baseSha。
+- [x] **Step 4: 运行测试，验证创建、复用、并发认领和旧行为兼容。**
+- [x] **Step 5: 检查失败路径不会留下半认领 TASKS 或可用锁被误释放。**
 
 ### Task 5: session 双根目录与自动清理
 
@@ -125,11 +129,11 @@ status: 现行
 - Consumes: `resolveRelayRoots`、注册表状态、清理器、claim 返回的执行根。
 - Produces: session_start/end 在 managed worktree 中正确使用 controlRoot/executionRoot；完成日志包含 branch/SHA；session_start 触发非阻断自动清理。
 
-- [ ] **Step 1: 写失败测试**：在 executionRoot 修改代码并出场，断言测试在 executionRoot 执行、代码提交落在任务分支、controlRoot TASKS/LOG 更新且含 branch/SHA；当前 worktree 不自我清理。
-- [ ] **Step 2: 写自动清理测试**：completed 且过期记录在后续主仓库 session_start 被清理，清理故障不阻断简报。
-- [ ] **Step 3: 运行测试确认失败。**
-- [ ] **Step 4: 实现双根编排**：协议检查、任务定义与 TASKS/LOG 使用 controlRoot，测试命令、代码 status/commit 使用 executionRoot；主仓库调用保持现有单根路径，代码提交失败时不得把 controlRoot 任务标为完成。
-- [ ] **Step 5: 运行全部测试，检查幂等、护栏、非 Git 降级和无 worktree 路径不回归。**
+- [x] **Step 1: 写失败测试**：在 executionRoot 修改代码并出场，断言测试在 executionRoot 执行、代码提交落在任务分支、controlRoot TASKS/LOG 更新且含 branch/SHA；当前 worktree 不自我清理。
+- [x] **Step 2: 写自动清理测试**：过期且 TASKS 已非 `[~]` 活跃的记录在后续主仓库 session_start 被清理，含 ignored 本地内容、dirty/冲突、locked 或未登记目录必须保留，清理故障不阻断简报。
+- [x] **Step 3: 运行测试确认失败。**
+- [x] **Step 4: 实现双根编排**：协议检查、任务定义与 TASKS/LOG 使用 controlRoot，测试命令、代码 status/commit 使用 executionRoot；主仓库调用保持现有单根路径，代码提交失败时不得把 controlRoot 任务标为完成。
+- [x] **Step 5: 运行全部测试，检查幂等、护栏、非 Git 降级和无 worktree 路径不回归。**
 
 ### Task 6: 文档、配置与全量验收
 
@@ -144,7 +148,7 @@ status: 现行
 - Consumes: Task 1–5 的最终行为。
 - Produces: 可复核的公开契约、迁移说明和统一测试门。
 
-- [ ] **Step 1: 将设计状态改为已批准，记录 controlRoot/executionRoot、保留分支、不自动合并和 AGENTS.md 硬约束决策。**
-- [ ] **Step 2: 把三套冒烟统一接入 `npm test` 与 CI，更新工具数量、配置、使用示例和测试数量。**
-- [ ] **Step 3: 运行 `npm test`、`node scripts/smoke-patches.mjs`、`./verify` 和 `git diff --check`。**
-- [ ] **Step 4: 审核最终 diff、Git worktree 列表和主仓库状态；确认没有运行时缓存、临时文件或无关变更进入交付。**
+- [x] **Step 1: 将设计状态改为已批准，记录 controlRoot/executionRoot、保留分支、不自动合并和 AGENTS.md 硬约束决策。**
+- [x] **Step 2: 把三套冒烟统一接入 `npm test` 与 CI，更新工具数量、配置、使用示例和测试数量。**
+- [x] **Step 3: 运行 `npm test`、`node scripts/smoke-patches.mjs`、`./verify` 和 `git diff --check`。**
+- [x] **Step 4: 审核最终 diff、Git worktree 列表和主仓库状态；确认没有运行时缓存、临时文件或无关变更进入交付。**

@@ -1,7 +1,7 @@
 <!-- relay:generated v1 -->
 # relay-mcp — 规范入口(canonical)
 
-本文件由 relay-mcp 单源投影生成(2026-11-26);CLAUDE.md 与 GEMINI.md 只是它的指针副本。
+本文件由 relay-mcp 单源投影生成(2026-11-27);CLAUDE.md 与 GEMINI.md 只是它的指针副本。
 规则要改:改 relay 引擎模板后运行 `relay_sync` 重投影;不要只手改其中一份(会漂移,R1 拦)。
 
 ## 项目身份
@@ -32,17 +32,17 @@
 | ID | 一句话 |
 |---|---|
 | R1 | AGENTS.md 必需;其与已配置适配入口均须存在且首行带 relay 生成标记(缺失→relay_sync;已存在无标记→onboard 接管 / `entryFilesTakeover:true` / 手工加标记) |
-| R2 | 顶层目录白名单;越界须显式修 `.relay/manifest.json`(修宪) |
-| R3 | docs 文档命名(`NN-类型-主题-vX.Y.md`)与 frontmatter 合规 |
-| R4 | 入口文件与 START 保持常青,不得出现时变词汇 |
-| R5 | 动了 src 就要同步动 TASKS/LOG(提交原子性;双根下由成对证据兜底:任务分支代码提交+controlRoot 完成提交);最新提交是 merge → skip(不假 PASS) |
+| R2 | 顶层结构白名单:git 用 `ls-files` 已跟踪+未跟踪并集,非 git 用 `readdir`;均排除 `.git`、`node_modules`、`*.relay-bak-*` 与明确运行时目录 `.v2c/`、`.zcode/`、`out/`;其余越界须显式修 `.relay/manifest.json`(修宪) |
+| R3 | docs 默认宽松模式只查 frontmatter 的 title+status;`strictDocs:true` 时同时强制 `NN-类型-主题-vX.Y.md` 命名;docs/templates、docs/archive、docs/README.md 与 docsIgnore 豁免 |
+| R4 | AGENTS.md 必查,另查 manifest.entryFiles 其余入口与 START.md;user-rules 保留区豁免;入口/START 不得出现时变词汇 |
+| R5 | 动了 src/lib/app 且最近一次提交未同步 TASKS/LOG → WARN(提交原子性);双根下由成对证据兜底:任务分支代码提交+controlRoot 完成提交;最新提交是 merge → skip(不假 PASS) |
 | R6 | 代码连动而文档未动 → staleness 提醒 |
 | R7 | 会话日志连续 3 条任务会话(task=维护/无 不计入)无「T### 完成」→ 停机,人类仲裁 |
 | R8 | 项目配了 format 工具链就跑;没配不硬加 |
-| R9 | LOG 记完成的任务,TASKS 里必须已完成 |
-| R10 | 完成条目必须带引擎写入的「事实(v2)」行:机检段(文件数/base/sha/branch,managed 另含 ±)与 git 重算逐字段一致,不一致 ERROR;branch 必须真实包含声明的 sha;叙述段(验收/verify/耗时)不参与对账;v1 旧行只做结构校验并 WARN |
-| R11 | 协议面(入口/协议/归档全部 .md)不得含密钥样式内容;出场写盘前阻断,误报同行标注 `relay:secret-ok` 豁免 |
-| R12 | LOG 活跃区(归档指针之前的行)>150 行或活跃区内完成条目 >20 → WARN(manifest.logBoundary.strict 升 ERROR);归档指针必须指向真实存在且位于仓库内的 docs/archive/LOG-*.md(失效指针 → WARN);归档动作留人工 |
+| R9 | 全局核对 TASKS `[x]` 与 live LOG + 合法归档完成条目;摘要正文不算证据;历史 T055–T057 具名保留 WARN(锚定 DECISIONS T061),不汇总 PASS |
+| R10 | 完成条目须带引擎写入的「事实(v2)」:managed 以 registry.baseSha 为基准并按完成 commit subject 定位,重算文件数(managed 另含 ±);single 以完成 commit 父代为较弱范围;registry 缺失/回收、commit 重复或无法定位 → WARN,绝不 PASS,不自报 base 可信;branch 须包含完成 commit;叙述段不对账;v1 只结构校验并 WARN |
+| R11 | 协议面 8 文件与 `docs/archive/*.md`(单层全部 .md)不得含密钥样式;出场写盘前阻断;`relay:secret-ok` 只豁免 R11 检测,写入路径一律拒绝 |
+| R12 | LOG 活跃区(归档指针之前的行)>150 行或活跃区内完成条目 >20 → WARN(manifest.logBoundary.strict 升 ERROR);只认第一个有效指针:格式为 docs/archive/LOG-*.md、真实存在且非空、realpath 在仓库内、目录组件非符号链接;失效指针 → WARN;归档动作留人工 |
 | R13 | 协议结构:任务行/LOG 标题必须匹配契约正则(任务号唯一;`[~]` 带 model+时间;`[x]` 带完成日期;HTML 注释/缩进行豁免);违规 → WARN(manifest.structure.strict 升 ERROR)——防拼错的行被解析器静默跳过 |
 
 细则与执法点:`relay_rules`;完整规范见 relay-mcp 仓库与全局 CLAUDE-PROJECT-RULES。

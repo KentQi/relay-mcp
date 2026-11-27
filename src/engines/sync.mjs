@@ -7,9 +7,8 @@
 // - 非破坏:任何重写前先 backupFile,永不删除用户文件;manifest 缺失/损坏 → isError。
 // 零依赖:仅 node: 内置。
 
-import { basename, dirname, join, relative, resolve } from 'node:path';
-import { access, writeFile } from 'node:fs/promises';
-import { acquireRepoLock, backupFile, readFileSafe, releaseRepoLock, stamp, templatesDir } from '../util.mjs';
+import { basename, join, dirname, relative, resolve } from 'node:path';
+import { access } from 'node:fs/promises';import { acquireRepoLock, assertNoSymlinkComponents, assertNotSymlinkFile, backupFile, readFileSafe, releaseRepoLock, stamp, templatesDir, writeFileAtomic } from '../util.mjs';
 import { ensureGitignoreBaseline } from '../config.mjs';
 
 const MARKER_PREFIX = '<!-- relay:generated';
@@ -111,6 +110,13 @@ export const generateEntryFiles = async (root, ctx = {}) => {
 
   for (const name of files) {
     if (typeof name !== 'string' || !name) continue;
+    const portable = name.replace(/\\/g, '/');
+    if (portable.startsWith('/') || /^[A-Za-z]:/.test(portable) || portable.split('/').includes('..') || portable.includes('\0')) {
+      throw new Error(`入口文件名非法(${JSON.stringify(name)}):必须是仓库内相对路径`);
+    }
+    const parentRel = dirname(name);
+    if (parentRel !== '.') await assertNoSymlinkComponents(root, parentRel, `${name} 所在目录`);
+    await assertNotSymlinkFile(join(root, name), name);
     const generated = await renderTemplate(`${name}.tpl`, vars);
     if (generated === null) {
       result.notes.push(`templates/${name}.tpl 缺失,${name} 跳过`);
@@ -124,7 +130,7 @@ export const generateEntryFiles = async (root, ctx = {}) => {
         result.drift.push({ file: name, diff: '文件缺失(未生成)' });
         continue;
       }
-      await writeFile(target, generated, 'utf8');
+      await writeFileAtomic(target, generated, { label: name });
       result.created.push(name);
       continue;
     }
@@ -147,7 +153,7 @@ export const generateEntryFiles = async (root, ctx = {}) => {
     if (mode === 'init') {
       if (force) {
         const backup = await backupFile(target);
-        await writeFile(target, projection, 'utf8');
+        await writeFileAtomic(target, projection, { label: name });
         result.rewritten.push({ file: name, backup, note: 'force 重新初始化,原文件已备份(用户保留区已携带)' });
       } else {
         result.kept.push({ file: name, reason: '已存在,未改动(非破坏)' });
@@ -168,7 +174,7 @@ export const generateEntryFiles = async (root, ctx = {}) => {
           USER_END_LINE,
           '',
         ].join('\n');
-        await writeFile(target, merged, 'utf8');
+        await writeFileAtomic(target, merged, { label: name });
         result.rewritten.push({
           file: name,
           backup,
@@ -185,7 +191,7 @@ export const generateEntryFiles = async (root, ctx = {}) => {
       result.drift.push({ file: name, diff: diffSummary(current, projection) });
     } else { // sync:带标记 → 强制对齐模板投影(用户保留区原样携带);重写前必先备份
       const backup = await backupFile(target);
-      await writeFile(target, projection, 'utf8');
+      await writeFileAtomic(target, projection, { label: name });
       result.rewritten.push({
         file: name,
         backup,
@@ -292,7 +298,9 @@ export const relaySync = async (args = {}) => {
       // P5:存在「未接管但与模板有出入」的项时,不得谎报「全部一致,无漂移」
       lines.push('', res.drift.length
         ? '未新建任何入口文件;其余入口文件要么已被 relay 投影,要么按非破坏原则保持原样(见上方「未接管」小节)。'
-        : '全部入口文件与模板再生内容一致,无漂移。');
+        : res.notes.length
+          ? '入口文件处理已完成,但有模板缺失被跳过(见上方说明),不能宣称全部与模板一致。'
+          : '全部入口文件与模板再生内容一致,无漂移。');
     } else {
       lines.push('', '存在缺失文件,已按模板重建。');
     }

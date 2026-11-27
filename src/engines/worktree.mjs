@@ -47,6 +47,9 @@ const normalizeCacheDir = (value) => {
 // T026:manifest 可由调用方预解析传入,避免同一轮会话里重复读盘(单轮 manifest 读取恒为 1)。
 export const readWorktreeConfigRaw = async (root, { manifest } = {}) => {
   const cfg = await readManifestConfig(root, { manifest });
+  if (cfg.manifestCorrupt) {
+    throw new Error(`${cfg.manifestError}。修复:备份并修复 .relay/manifest.json 后重试;relay 不会在 manifest 损坏时猜测 worktree 配置。`);
+  }
   const raw = cfg.manifest && cfg.manifest.worktree && typeof cfg.manifest.worktree === 'object'
     ? cfg.manifest.worktree : {};
   const ttl = Number(raw.ttlHours);
@@ -77,7 +80,7 @@ export const readWorktreeConfig = async (root, { manifest } = {}) => {
 // 只追加缺失行,绝不删改用户条目;供 claim 在创建缓存目录之前调用。
 export const ensureWorktreeGitignore = async (root, cfg) => {
   const cacheLine = `${String(cfg.cacheDir).replace(/\/+$/, '')}/`;
-  return ensureGitignoreBaseline(root, [cacheLine, WORKTREE_REGISTRY_REL, '.relay/worktrees.lock']);
+  return ensureGitignoreBaseline(root, [cacheLine, WORKTREE_REGISTRY_REL]);
 };
 
 const emptyRegistry = () => ({ version: 1, worktrees: [] });
@@ -707,24 +710,23 @@ export const cleanupWorktrees = async (controlRoot, options = {}) => {
     return report;
   } finally {
     const rel = await lock.release();
-    if (!rel.ok && rel.warning) process.stderr.write(`[relay] cleanup 仓库锁释放告警:${rel.warning}\n`);
+    if (!rel.ok && rel.warning) {
+      report.errors.push({ task: '(lock)', path: '.relay/relay.lock', reason: `仓库锁释放失败:${rel.warning}` });
+    }
   }
 };
 
 // 「完成≠合并」的可观测性:列出尚未并入 controlRoot HEAD 的 relay/T### 任务分支。
 // 只读;用于 claim / session_start / cleanup / worktree_cleanup 的输出提示。
+// 单次 git:git branch 自己计算 merged/unmerged,不再对每个分支起 merge-base。
+// 返回短分支名(与既有调用方/文案契约一致);linked worktree 的 + 标记由原生 branch 输出另行验证。
 export const listUnmergedTaskBranches = async (controlRoot) => {
-  const refs = await gitRun(controlRoot, 'for-each-ref', '--format=%(refname:short)', 'refs/heads/relay/');
-  if (!refs.ok) return [];
-  const out = [];
-  for (const raw of refs.stdout.split('\n')) {
-    const branch = raw.trim();
-    if (!branch) continue;
-    const ancestor = await gitRun(controlRoot, 'merge-base', '--is-ancestor', branch, 'HEAD');
-    if (ancestor.ok) continue; // 已并入 HEAD
-    out.push(branch);
-  }
-  return out;
+  // git 参数必须分开写:`--no-merged=HEAD`/`--list=relay/*` 会被当成无法识别的选项而整条失败。
+  const result = await gitRun(controlRoot, 'branch', '--no-merged', 'HEAD', '--list', 'relay/*');
+  if (!result.ok) return [];
+  return result.stdout.split('\n')
+    .map((line) => line.replace(/^[*+]\s+/, '').trim())
+    .filter(Boolean);
 };
 
 export const formatUnmergedBranchesNote = (branches, { indent = '' } = {}) => {

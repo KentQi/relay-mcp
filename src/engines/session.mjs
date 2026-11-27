@@ -14,8 +14,7 @@ import {
 } from '../util.mjs';
 import { stat as fsStat, writeFile as fsWriteFile, mkdir as fsMkdir, rm as fsRm } from 'node:fs/promises';
 import { join, resolve, sep, isAbsolute as pathIsAbsolute } from 'node:path';
-import { execFile, exec } from 'node:child_process';
-import { promisify } from 'node:util';
+import { spawn } from 'node:child_process';
 import { runChecks, formatChecks, runTaskTreeChecks, TASK_LINE_RE, LOG_TITLE_RE, parseLogEntries } from './verify.mjs';
 import { readManifestConfig, DEFAULT_COMMIT_TEMPLATE } from '../config.mjs';
 import { deriveFacts, formatFactLine } from './facts.mjs';
@@ -24,8 +23,6 @@ import {
   listUnmergedTaskBranches, readWorktreeConfig, readWorktreeConfigRaw, readWorktreeRegistryState, registryRecoveryHint,
   resolveRelayRoots, rollbackTaskWorktree, touchWorktree, upsertWorktreeRecord,
 } from './worktree.mjs';
-
-const execFileAsync = promisify(execFile);
 
 const SECTION_ORDER = ['进行中', '待办', '已完成'];
 
@@ -75,6 +72,8 @@ const parseTaskLine = (line) => {
   if (!m) return null;
   return { status: m[1], id: m[2], title: m[3], meta: m[4] || '' };
 };
+// 历史「无待办」占位行用于表达空队列,不是可执行工作;不得成为简报队首或被 claim 认领。
+const isPlaceholderTask = (title) => String(title ?? '').trim().startsWith('无待办');
 const findTaskIdx = (lines, id) => {
   for (let i = 0; i < lines.length; i++) {
     const p = parseTaskLine(lines[i]);
@@ -176,31 +175,71 @@ const sanitizeAcceptanceEnv = () => {
   }
   return env;
 };
-const runCmd = async (cmd, args, cwd, timeoutMs = 180000) => {
-  const env = sanitizeAcceptanceEnv();
-  try {
-    const { stdout, stderr } = await execFileAsync(cmd, args, { cwd, timeout: timeoutMs, maxBuffer: 4 * 1024 * 1024, env });
-    return { ok: true, out: `${stdout || ''}\n${stderr || ''}`.trim() };
-  } catch (e) {
-    if (e && e.code === 'ENOENT') return { ok: null, out: `未找到可执行文件 ${cmd}` };
-    if (e && (e.killed || e.signal === 'SIGTERM')) return { ok: false, out: `超时(${timeoutMs / 1000}s)被终止` };
-    return { ok: false, out: `${e?.stdout || ''}\n${e?.stderr || e?.message || '执行失败'}`.trim() };
-  }
+const MAX_ACCEPTANCE_OUTPUT = 4 * 1024 * 1024;
+const boundedOutput = (chunks, chunk) => {
+  if (!chunk) return;
+  const remaining = MAX_ACCEPTANCE_OUTPUT - chunks.length;
+  if (remaining > 0) chunks.push(chunk.subarray(0, remaining));
 };
+const terminateProcessTree = async (child) => {
+  if (!child || !child.pid) return;
+  if (process.platform === 'win32') {
+    const killer = spawn('taskkill', ['/pid', String(child.pid), '/T', '/F'], { stdio: 'ignore', windowsHide: true });
+    await new Promise((resolve) => { killer.once('error', resolve); killer.once('close', resolve); });
+    return;
+  }
+  try { process.kill(-child.pid, 'SIGKILL'); } catch { /* 进程组已退出 */ }
+};
+// 超时必须杀整个进程组,并等 close 后才返回:否则孙进程可在验收判红后继续写文件污染下一次出场。
+// POSIX 独立进程组负责杀孙进程;Windows taskkill /T /F 负责整树。stdout/stderr 仍各共享 4MiB 总上限。
+const executeAcceptance = async (command, args, { cwd, timeoutMs = 180000, shell = false, env }) => new Promise((resolve) => {
+  let child;
+  try {
+    child = spawn(command, args, {
+      cwd, env, shell, detached: process.platform !== 'win32', windowsHide: true,
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+  } catch (e) {
+    resolve({ ok: e?.code === 'ENOENT' ? null : false, out: e?.code === 'ENOENT' ? `未找到可执行文件 ${command}` : String(e?.message || e) });
+    return;
+  }
+  let timedOut = false;
+  let spawnError = null;
+  let closed = false;
+  let settled = false;
+  const stdout = [];
+  const stderr = [];
+  const timer = setTimeout(() => {
+    timedOut = true;
+    terminateProcessTree(child);
+  }, Math.max(1, Number.isFinite(timeoutMs) ? timeoutMs : 180000));
+  if (typeof timer.unref === 'function') timer.unref();
+  child.stdout.on('data', (chunk) => boundedOutput(stdout, chunk));
+  child.stderr.on('data', (chunk) => boundedOutput(stderr, chunk));
+  child.once('error', (e) => { spawnError = e; });
+  child.once('close', (code, signal) => {
+    if (closed) return;
+    closed = true;
+    clearTimeout(timer);
+    if (settled) return;
+    settled = true;
+    const out = `${Buffer.concat(stdout).toString()}\n${Buffer.concat(stderr).toString()}`.trim();
+    if (timedOut) resolve({ ok: false, out: `超时(${timeoutMs / 1000}s)被终止(整个进程组已终止)` });
+    else if (spawnError?.code === 'ENOENT') resolve({ ok: null, out: `未找到可执行文件 ${command}` });
+    else if (spawnError) resolve({ ok: false, out: String(spawnError.message || spawnError) });
+    else resolve({ ok: code === 0, out: out || (code === 0 ? '' : `执行失败(exit=${code ?? '?'},signal=${signal || '无'})`) });
+  });
+});
+const runCmd = (cmd, args, cwd, timeoutMs = 180000) => executeAcceptance(cmd, args, {
+  cwd, timeoutMs, env: sanitizeAcceptanceEnv(),
+});
 // —— 白名单命令执行器(P1):仅当命令串「逐字符」命中 manifest.acceptance.commands 才走到这里 ——
-// runCmd 用 execFile(无 shell,不解析元字符);这里显式开 shell 是执行复合命令串的必要妥协,
-// 边界写在 manifest 里:命令由仓库属主逐条签字,与「执行验收行里的自由文本」有本质区别。
-const execAsync = promisify(exec);
-const runWhitelistedCmd = async (cmdStr, cwd, timeoutMs = 180000) => {
-  try {
-    const { stdout, stderr } = await execAsync(cmdStr, { cwd, timeout: timeoutMs, maxBuffer: 4 * 1024 * 1024 });
-    return { ok: true, out: `${stdout || ''}\n${stderr || ''}`.trim() };
-  } catch (e) {
-    if (e && e.code === 'ENOENT') return { ok: null, out: `未找到可执行文件 ${cmdStr}` };
-    if (e && (e.killed || e.signal === 'SIGTERM')) return { ok: false, out: `超时(${timeoutMs / 1000}s)被终止` };
-    return { ok: false, out: `${e?.stdout || ''}\n${e?.stderr || e?.message || '执行失败'}`.trim() };
-  }
-};
+// runCmd 用 argv(无 shell,不解析元字符);白名单复合命令显式开 shell,授权边界由 manifest 定义。
+const runWhitelistedCmd = (cmdStr, cwd, timeoutMs = 180000) => executeAcceptance(cmdStr, [], {
+  cwd, timeoutMs, shell: true, env: sanitizeAcceptanceEnv(),
+});
+// @internal 仅供隔离冒烟验证进程组超时;生产调用走上面的验收门。
+export const __runAcceptanceForTest = { runCmd, runWhitelistedCmd };
 
 const tailOf = (s, n = 500) => {
   const t = String(s || '').trim();
@@ -535,7 +574,7 @@ export const relaySessionStart = async (args = {}) => {
   const todos = [];
   for (let i = 0; i < tasksLines.length; i++) {
     const p = parseTaskLine(tasksLines[i]);
-    if (!p) continue;
+    if (!p || isPlaceholderTask(p.title)) continue;
     let acceptance = '';
     if (i + 1 < tasksLines.length) {
       const am = tasksLines[i + 1].match(/^ {2}验收:\s*(.*)$/);
@@ -820,6 +859,9 @@ export const relayClaim = async (args = {}) => {
     return fail(`TASKS.md 中未找到任务 ${task}:任务行须匹配契约正则 \`/^- \\[( |~|x)\\] (T\\d+) (.*?)(?:  \\((.*)\\))?$/\`。`, ['', `修复: 核对任务号(注意补零,如 T004 不是 T4);若任务尚不存在,先在待办区定义并写明「验收:」行。`]);
   }
   const p = parseTaskLine(lines[idx]);
+  if (isPlaceholderTask(p.title)) {
+    return fail(`${task} 是「无待办」空队列占位行,不是可认领任务。`, ['', '修复: 与人类定义真实任务(含验收行)后再认领;不要认领占位行。']);
+  }
   if (p.status === 'x') {
     return fail(`${task} 已完成(${p.meta || '无完成信息'}),不能认领。`, ['', '修复: 从待办区选择其他任务,或让人类定义新任务。']);
   }
@@ -859,7 +901,9 @@ export const relayClaim = async (args = {}) => {
       wtConfig = await readWorktreeConfig(root);
     } catch (e) {
       let releaseWarning = '';
-      if (lock?.token && (lock.created || lock.tookOver)) {
+      // 配置非法 = 本次认领没有成立,任何由本会话持有的锁都必须释放(含同 model 幂等沿用的旧锁);
+      // 否则一次失败会留下锁,后续同 model 重试沿用该锁且永不再走释放分支 → 持续泄漏。
+      if (lock?.token) {
         const rel = await releaseClaimLock(root, task, lock.token);
         if (!rel.ok && rel.warning) releaseWarning = rel.warning;
       }
@@ -1300,12 +1344,20 @@ export const relaySessionEnd = async (args = {}) => {
   // 2. 绿闸:controlRoot 全量 + executionRoot 任务树结构检查(R1/R2/R3/R4/R8);
   //    任一 ERROR → 不更新任何文件、不提交。
   const cfg = await readManifestConfig(root); // P1/P2/P6 的配置面在此一次性读入
-  const controlResults = await runChecks(root, { full: true });
+  if (cfg.manifestCorrupt) {
+    out.push('## manifest 损坏 — 未提交', '',
+      `无法安全读取 .relay/manifest.json:${cfg.manifestError || '未知解析错误'}`, '',
+      '修复:人工修正 manifest JSON 语法;无法还原时先备份,再重新 relay_onboard。修复后重跑出场。');
+    return { content: [{ type: 'text', text: out.join('\n') }], isError: true };
+  }
+  // 同一份 manifest/config 贯穿 verify、任务树检查和验收/提交策略,避免撕裂读取。
+  const checkMeta = { manifest: cfg.manifest, cfg };
+  const controlResults = await runChecks(root, { full: true, meta: checkMeta, pendingTasks: doneTaskIds });
   let taskResults = [];
   let taskGateNote = '';
   if (executionRoot !== root) {
     if (await isGitRepoAsync(executionRoot)) {
-      taskResults = await runTaskTreeChecks(executionRoot, root);
+      taskResults = await runTaskTreeChecks(executionRoot, root, { meta: checkMeta });
     } else {
       taskGateNote = 'executionRoot 不是 Git 工作树,跳过任务树结构检查(managed 提交会随后拒绝)';
     }
@@ -1572,17 +1624,24 @@ export const relaySessionEnd = async (args = {}) => {
   }
 
   if (next) {
-    // 幂等(B5):待办区已有同标题任务 → 不重复插入
-    const dup = tLines.findIndex((l) => { const m = l.match(TASK_LINE_RE); return m && m[1] === ' ' && m[3].trim() === String(next.title).trim(); });
-    if (dup >= 0) {
-      const existId = tLines[dup].match(TASK_LINE_RE)[2];
-      changes.push(`待办区已存在同标题任务 ${existId}(跳过重复插入)`);
+    // 「无待办…」只表达空队列,保存为维护注释,绝不生成新的可认领占位任务。
+    if (isPlaceholderTask(next.title)) {
+      const note = String(next.notes || next.title).trim();
+      tLines.push('', `<!-- relay:maintenance-next: ${note} -->`);
+      changes.push(`维护说明:${note}(未生成可认领占位任务)`);
     } else {
-      const id = nextTaskId(tLines);
-      const nextLines = [`- [ ] ${id} ${String(next.title).trim()}`, `  验收: ${String(next.acceptance).trim()}`];
-      if (next.notes && String(next.notes).trim()) nextLines.push(`  备注: ${String(next.notes).trim()}`);
-      insertIntoSection(tLines, '待办', nextLines);
-      changes.push(`TASKS.md: 待办区顶部插入 \`${id} ${String(next.title).trim()}\`(含验收行)`);
+      // 幂等(B5):待办区已有同标题任务 → 不重复插入
+      const dup = tLines.findIndex((l) => { const m = l.match(TASK_LINE_RE); return m && m[1] === ' ' && !isPlaceholderTask(m[3]) && m[3].trim() === String(next.title).trim(); });
+      if (dup >= 0) {
+        const existId = tLines[dup].match(TASK_LINE_RE)[2];
+        changes.push(`待办区已存在同标题任务 ${existId}(跳过重复插入)`);
+      } else {
+        const id = nextTaskId(tLines);
+        const nextLines = [`- [ ] ${id} ${String(next.title).trim()}`, `  验收: ${String(next.acceptance).trim()}`];
+        if (next.notes && String(next.notes).trim()) nextLines.push(`  备注: ${String(next.notes).trim()}`);
+        insertIntoSection(tLines, '待办', nextLines);
+        changes.push(`TASKS.md: 待办区顶部插入 \`${id} ${String(next.title).trim()}\`(含验收行)`);
+      }
     }
   }
   // fencing + 原子写:TASKS.md 是任务队列唯一事实源,tmp+rename 防半写截断,写前复核锁归属。
@@ -1963,7 +2022,9 @@ export const relaySessionEnd = async (args = {}) => {
   out.push('', '## 下一棒');
   if (next) {
     const acc = String(next.acceptance).trim();
-    if (acc.startsWith('test:')) {
+    if (isPlaceholderTask(next.title)) {
+      out.push('- 维护说明:当前无待办;已保存为注释,未生成可认领占位任务。请与人类定义真实任务(含验收行)。');
+    } else if (acc.startsWith('test:')) {
       out.push(
         `- 下一任务(已入待办区):${nextTaskIdFromLines(tLines)} ${String(next.title).trim()} — 红灯协议,验收 \`${acc}\``,
         `  - 若该失败测试已存在:接力者以把它变绿为目标;`,
@@ -1983,6 +2044,13 @@ export const relaySessionEnd = async (args = {}) => {
   out.push('', `- 出场时间: ${stamp()}(ISO ${nowIso()})`);
   await clearFailureMark(root); // 出场成功:清掉失败签名,下一次失败重新计数
   return { content: [{ type: 'text', text: out.join('\n') }], isError: false };
+  } catch (e) {
+    // 临界区异常不得把 JS 栈/绝对路径泄给调用方;finally 仍释放锁,原模型可幂等重跑补交。
+    out.push('## 出场异常 — 未完成提交', '',
+      '会话引擎在写出场临界区时发生异常。可能已写入部分协议文件,但不会向调用方泄露堆栈或绝对路径。', '',
+      `诊断:${flattenText(e?.message || '未知错误').slice(0, 240)}`, '',
+      '修复:检查 TASKS.md/LOG.md 与工作区状态后,使用相同 model 和 done_task 重跑 relay_session_end;引擎会按完成条目查重并补交。若同一错误复现,请先修复根因再重试。');
+    return { content: [{ type: 'text', text: out.join('\n') }], isError: true };
   } finally {
     const fallbackRelease = await exitLock.release();
     if (!fallbackRelease.ok && fallbackRelease.warning && !fallbackRelease.released) {
@@ -1996,7 +2064,7 @@ export const relaySessionEnd = async (args = {}) => {
 const nextTaskIdFromLines = (lines) => {
   for (const l of lines) {
     const m = l.match(TASK_LINE_RE);
-    if (m && m[1] === ' ') return m[2];
+    if (m && m[1] === ' ' && !isPlaceholderTask(m[3])) return m[2];
   }
   return '(见 TASKS.md 待办区)';
 };

@@ -34,6 +34,7 @@ export const KNOWN_MANIFEST_KEYS = Object.freeze([
   'relayHome', 'restructuredAt', 'strictDocs', 'worktree', 'facts', 'acceptance',
   'commitMessageTemplate', 'autoCommit', 'entryFilesTakeover', 'codeRoots', 'docsRoots',
   'docsIgnore', 'protectedPaths', 'logBoundary', 'structure', 'contextBudget', 'rescue',
+  'runtimeTopLevel',
 ]);
 export const KNOWN_NESTED_KEYS = Object.freeze({
   worktree: ['enabled', 'cacheDir', 'ttlHours', 'autoCleanup'],
@@ -66,7 +67,7 @@ export const collectUnknownManifestKeys = (m) => {
 export const GITIGNORE_BASELINE = Object.freeze([
   '.env', '.env.*', '*.key', '*.pem', 'node_modules/', '.DS_Store',
   '.relay/claims/', '.relay/relay.lock',
-  '.relay/worktrees/', '.relay/worktrees.json', '.relay/worktrees.lock',
+  '.relay/worktrees/', '.relay/worktrees.json',
   '.relay/last-failure.json',
   // 抢救接力单(T048):本机运行时状态,内含 transcript 副本与工作区快照锚点。
   // 必须忽略:.relay/** 是受保护路径,不忽略会让下一次出场触发护栏而拒绝提交。
@@ -126,17 +127,30 @@ export const matchesIgnore = (ignores, rel, isDir = false) =>
 
 const strArr = (v) => (Array.isArray(v) ? v.filter((x) => typeof x === 'string' && x.trim()) : []);
 
-// 读 manifest 并归一全部策略项。manifest 缺失/损坏 → 全部走默认(= 补丁前行为)。
+// 读 manifest 并归一全部策略项。缺失仍走默认值;损坏则返回 manifestCorrupt/manifestError,
+// 由状态变更入口 fail-closed。只读诊断可继续检查,但绝不能把损坏误当成合法默认配置。
 // manifest 可预解析传入(T022):runChecks 已经把 manifest.json 读/解析一次,
 // 这里不再重复读盘——单轮 verify 对 manifest 的读取次数恒为 1。
 export const readManifestConfig = async (root, { manifest: preloaded } = {}) => {
   let m = null;
-  if (preloaded && typeof preloaded === 'object') {
+  let manifestCorrupt = false;
+  let manifestError = '';
+  if (preloaded && typeof preloaded === 'object' && !Array.isArray(preloaded)) {
     m = preloaded;
   } else {
     const raw = await readFileSafe(join(root, '.relay', 'manifest.json'), null);
     if (raw != null) {
-      try { const p = JSON.parse(raw); if (p && typeof p === 'object') m = p; } catch { m = null; }
+      try {
+        const p = JSON.parse(raw);
+        if (p && typeof p === 'object' && !Array.isArray(p)) m = p;
+        else {
+          manifestCorrupt = true;
+          manifestError = '.relay/manifest.json 不是 JSON 对象';
+        }
+      } catch (e) {
+        manifestCorrupt = true;
+        manifestError = `.relay/manifest.json 解析失败:${e?.message || String(e)}`;
+      }
     }
   }
   const codeRoots = strArr(m && m.codeRoots);
@@ -146,6 +160,8 @@ export const readManifestConfig = async (root, { manifest: preloaded } = {}) => 
   const acceptanceCmds = strArr(m && m.acceptance && m.acceptance.commands);
   return {
     manifest: m,
+    manifestCorrupt,
+    manifestError,
     unknownManifestKeys: collectUnknownManifestKeys(m),
     codeRoots: codeRoots.length ? codeRoots : [...DEFAULT_CODE_ROOTS],
     docsRoots: docsRoots.length ? docsRoots : [...DEFAULT_DOCS_ROOTS],

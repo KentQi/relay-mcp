@@ -15,12 +15,6 @@ const KNOWN_METHODS = new Set([
   'prompts/get',
 ]);
 
-const DEFAULT_INIT_RESULT = () => ({
-  protocolVersion: '2025-06-18',
-  capabilities: { tools: {}, resources: {}, prompts: {} },
-  serverInfo: { name: 'relay-mcp', version: '1.0.0' },
-});
-
 /**
  * 启动 stdio JSON-RPC 循环。stdin 关闭时 resolve。
  * - 每行一个 JSON-RPC 2.0 消息;notification(无 id)直接忽略不回
@@ -75,7 +69,10 @@ export const startServer = async ({ onInit, onMethod } = {}) => {
     try {
       let result;
       if (method === 'initialize') {
-        result = onInit ? await onInit(params) : DEFAULT_INIT_RESULT();
+        if (!onInit) {
+          throw { code: -32603, message: 'initialize handler is not configured' };
+        }
+        result = await onInit(params);
       } else if (method === 'ping') {
         result = {};
       } else {

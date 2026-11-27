@@ -1,8 +1,8 @@
 #!/usr/bin/env node
 // T013/T023 冒烟:事实底账 v2(机检段/叙述段)+ R10 对账 + fail-open 修复。
 // 用 CLI 而非 MCP 客户端:验证引擎判定;传输层由 smoke.mjs 覆盖。
-import { spawnSync } from 'node:child_process';
 import { mkdtempSync, rmSync, readFileSync, writeFileSync, mkdirSync, appendFileSync } from 'node:fs';
+import { spawnSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -18,11 +18,31 @@ const ok = (cond, label, extra = '') => {
 };
 
 console.log('\n== 0. porcelain 路径口径(rename 展开 / 协议面过滤 / 大小写) ==');
-ok(changedPathsFromStatus(['R  old.js -> new.js']).length === 2, 'rename 展开为两条(与 numstat --no-renames 一致)');
+ok(changedPathsFromStatus(['R  old.js\0new.js']).length === 2, 'rename 展开为两条(与 numstat --no-renames 一致)');
 ok(changedPathsFromStatus(['M  src/a.js']).length === 1, '普通修改计一条');
 ok(changedPathsFromStatus(['A  docs/archive/LOG-x.md']).length === 0, 'LOG-* 归档不计入文件数');
 ok(changedPathsFromStatus(['A  docs/archive/log-x.md']).length === 0, 'LOG-* 归档判定大小写不敏感');
 ok(changedPathsFromStatus(['A  docs/archive/notes.md']).length === 1, '非 LOG 归档仍按普通文件计入');
+  const weirdName = 'quote" tab\t newline\n arrow ->.mjs';
+  const weird = `src/${weirdName}`;
+ok(changedPathsFromStatus([`A  ${weird}`])[0] === weird, 'porcelain -z 刁钻文件名保持原字节路径(不解析引号/换行/箭头)');
+ok(changedPathsFromStatus(['R  old -> name.mjs\0new -> name.mjs']).length === 2, 'rename 两侧含字面箭头仍按 NUL 正确展开');
+
+const tricky = mkdtempSync(path.join(tmpdir(), 'relay-facts-path-'));
+try {
+  const g = (...a) => spawnSync('git', ['-C', tricky, ...a], { encoding: 'utf8' });
+  g('init', '-q');
+  // 先建一个基线提交,让后续 diff 有 HEAD^ 可对;否则首次提交时 HEAD^ 不存在。
+  g('-c', 'user.name=t', '-c', 'user.email=t@t', 'commit', '-q', '--allow-empty', '-m', 'base');
+  mkdirSync(path.join(tricky, 'src'), { recursive: true });
+  writeFileSync(path.join(tricky, weird), 'export const tricky = 1;\n');
+  // 精确 add 该路径:含换行/制表符的文件名不能被 -A 之外的 glob/引号形式安全展开。
+  g('add', '--', weird);
+  g('-c', 'user.name=t', '-c', 'user.email=t@t', 'commit', '-q', '-m', 'tricky paths');
+  const { diffStat } = await import('../src/engines/facts.mjs');
+  const st = await diffStat(tricky, ['HEAD^', 'HEAD']);
+  ok(st && st.files === 1 && st.insertions === 1, 'diffStat 对换行/制表符/引号路径仍准确计数', JSON.stringify(st));
+} finally { rmSync(tricky, { recursive: true, force: true }); }
 
 const tmp = mkdtempSync(path.join(tmpdir(), 'relay-facts-'));
 const logPath = path.join(tmp, 'LOG.md');
@@ -127,6 +147,9 @@ try {
       version: 1, entryFiles: ['AGENTS.md'], allowedTopLevel: ['src', '.relay', 'TASKS.md', 'LOG.md'],
       facts: { enabled: true, since: '2020-01-01 00:00', strict: false },
     }, null, 2) + '\n');
+    writeFileSync(path.join(mtmp, '.relay', 'worktrees.json'), JSON.stringify({
+      version: 1, worktrees: [{ task: 'T900', baseSha: sha1, branch: 'relay/T900', controlCommitted: true }],
+    }, null, 2) + '\n');
     writeFileSync(path.join(mtmp, 'TASKS.md'), '# 任务队列\n\n## 待办\n\n## 已完成\n- [x] T900 夹具任务  (2026-01-01)\n');
     // 分支归属(P1-3):relay/T900 指向 sha2(含);relay/T902 指向 sha1(不含 sha2)——两种篡改可区分。
     g('branch', 'relay/T900', sha2);
@@ -147,17 +170,23 @@ try {
     // 分支不存在 + 提交不是该任务的完成提交(sha1 的 message 是 wip a)→ WARN
     logM(`- 事实(v2): mode=managed | 文件 1 | ± +2/-0 | base=${sha1} | sha=${sha1} | branch=relay/T901 || 验收: 通过 | verify: PASS 0·WARN 0·ERROR 0 | 耗时: 1s`);
     const rBranchMissing = r10Row(cliAt(mtmp, 'relay_verify', { full: true }));
-    ok(/R10\s*\|\s*WARN/.test(rBranchMissing) && /无法验证/.test(rBranchMissing), '分支不存在且提交非完成提交 → R10 WARN(不 PASS)', rBranchMissing);
+    ok(!/R10\s*\|\s*PASS/.test(rBranchMissing), '伪造完成 sha → R10 不 PASS(独立定位不接受自报提交)', r10Row(cliAt(mtmp,'relay_verify',{full:true})));
     // 分支不存在 + 完成提交仍在当前分支历史(合并后删分支的正常生命周期)→ PASS(带注记)
     logM(mkFact('+2/-0').replace('branch=relay/T900', 'branch=relay/T901'));
     const rMergedDeleted = r10Row(cliAt(mtmp, 'relay_verify', { full: true }));
-    ok(/R10\s*\|\s*PASS/.test(rMergedDeleted) && /已合并删除/.test(rMergedDeleted), '分支已合并删除但完成提交仍在历史 → R10 PASS(带注记)', rMergedDeleted);
+    ok(!/R10\s*\|\s*PASS/.test(rMergedDeleted), '分支已删除时不做无依据的 PASS(无法独立验证保持可见)', rMergedDeleted);
     const rBranchWrong = mRow((l) => l.replace('branch=relay/T900', 'branch=relay/T902'));
-    ok(/R10\s*\|\s*ERROR/.test(rBranchWrong) && /不包含/.test(rBranchWrong), '分支存在但不含 sha → R10 ERROR(分支与提交不匹配)', rBranchWrong);
+    ok(/R10\s*\|\s*ERROR/.test(rBranchWrong) && /(不包含|不在 .* 上)/.test(rBranchWrong), '分支存在但不含 sha → R10 ERROR(分支与提交不匹配)', rBranchWrong);
     const rSha = mRow((l) => l.replace(`sha=${sha2}`, 'sha=deadbeefdeadbeefdeadbeefdeadbeefdeadbeef'));
-    ok(/R10\s*\|\s*WARN/.test(rSha) && /无法定位对应提交/.test(rSha), '伪造 sha → R10 WARN(不再 PASS)', rSha);
+    ok(/R10\s*\|\s*ERROR/.test(rSha) && /sha 声明/.test(rSha), '伪造 sha → R10 ERROR(独立定位提交不被事实行左右)', rSha);
     const rBase = mRow((l) => l.replace(`base=${sha1}`, 'base=deadbeefdeadbeefdeadbeefdeadbeefdeadbeef'));
-    ok(/R10\s*\|\s*WARN/.test(rBase), '伪造 base → R10 WARN(不再 PASS)', rBase);
+    ok(/R10\s*\|\s*ERROR/.test(rBase) && /registry/.test(rBase), '伪造 base → R10 ERROR(范围由 registry 独立锚定)', rBase);
+    const rEmpty = mRow((l) => l.replace(`base=${sha1}`, `base=${sha2}`).replace(`sha=${sha2}`, `sha=${sha2}`).replace(/文件 1/, '文件 0').replace(/\+2\/-0/, '+0/-0'));
+    ok(/R10\s*\|\s*ERROR/.test(rEmpty) && /文件数/.test(rEmpty), 'base=sha 伪造空区间 → R10 ERROR(不再空洞 PASS)', rEmpty);
+    const savedReg = readFileSync(path.join(mtmp, '.relay', 'worktrees.json'), 'utf8');
+    rmSync(path.join(mtmp, '.relay', 'worktrees.json'));
+    ok(/R10\s*\|\s*WARN/.test(r10Row(cliAt(mtmp, 'relay_verify', { full: true }))) && /registry=missing/.test(r10Row(cliAt(mtmp, 'relay_verify', { full: true }))), 'registry 缺失 → R10 WARN(不 PASS)');
+    writeFileSync(path.join(mtmp, '.relay', 'worktrees.json'), savedReg);
     // P0-2(审计):v1 旧行即便数字「恰好对上」也只报 WARN——行自带的 range 不能自证。
     const v1Line = `- 事实(v1): 改动 1 文件(+2/-0) | 验收: 通过 | verify: PASS 9·WARN 0·ERROR 0 | 分支: fake/branch @${sha2} base=${sha1} | 耗时: 1s`;
     logM(v1Line);

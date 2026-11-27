@@ -18,14 +18,17 @@ export const FACT_LINE_PREFIX_RE = /^- 事实\(v[12]\):\s*/;
 const PROTOCOL_FILES = new Set(['TASKS.md', 'LOG.md']);
 const isProtocolFile = (p) => PROTOCOL_FILES.has(p) || /^docs\/archive\/LOG-[^/\\]+\.md$/i.test(p);
 
-/** porcelain 状态行 → 实际改动路径(rename/copy 展开为两条,与 diff --no-renames 的口径一致)。 */
-export const changedPathsFromStatus = (statusLines) => {
+/** porcelain -z 记录 → 实际改动路径(rename/copy 展开为两条,与 diff --no-renames 一致)。
+ *  输入既可是一条条原始记录,也可是一个已按 NUL 切分好的数组;不做 C 引号/箭头文本解析。 */
+export const changedPathsFromStatus = (records) => {
   const out = [];
-  for (const line of statusLines || []) {
-    const raw = String(line || '').slice(3);
-    if (!raw) continue;
-    const parts = raw.includes(' -> ') ? raw.split(' -> ').map((s) => s.trim()) : [raw.trim()];
-    for (const p of parts) if (p && !isProtocolFile(p)) out.push(p);
+  for (const record of records || []) {
+    const raw = String(record || '');
+    if (raw.length < 3) continue;
+    const p = raw.slice(3);
+    if (!p) continue;
+    const paths = ['R', 'C'].includes(raw[0]) ? p.split('\0') : [p];
+    for (const item of paths) if (item && !isProtocolFile(item)) out.push(item);
   }
   return out;
 };
@@ -33,15 +36,18 @@ export const changedPathsFromStatus = (statusLines) => {
 // 一次 git 调用同时拿到文件数与 ±(--numstat 每行自带路径);两侧共用本函数。
 // 导出供 R10 使用:按候选提交逐个算 numstat,选「与事实行声明一致」的完成提交(防 grep 劫持)。
 export const diffStat = async (root, range) => {
-  const nums = await gitRun(root, '-c', 'core.quotePath=false', 'diff', '--numstat', '--no-renames', ...range);
+  const nums = await gitRun(root, 'diff', '--numstat', '-z', '--no-renames', ...range);
   if (!nums.ok) return null;
   let files = 0;
   let insertions = 0;
   let deletions = 0;
-  for (const line of nums.stdout.split('\n')) {
-    const m = line.match(/^(\d+|-)\t(\d+|-)\t(.*)$/);
+  // --numstat -z:普通记录为 added\tdeleted\tpath\0;rename 记录还可能带 old\0new\0。
+  // 路径可能含换行/制表符:必须用 [\s\S] 而非 '.',后者不匹配换行会让记录整条被丢弃、文件数静默变 0。
+  for (const rec of nums.stdout.split('\0')) {
+    if (!rec) continue;
+    const m = rec.match(/^(\d+|-)\t(\d+|-)\t([\s\S]*)$/);
     if (!m) continue;
-    if (isProtocolFile(m[3].trim())) continue;
+    if (isProtocolFile(m[3])) continue;
     files += 1;
     if (m[1] !== '-') insertions += Number(m[1]);
     if (m[2] !== '-') deletions += Number(m[2]);
@@ -206,30 +212,43 @@ export const parseFactLine = (text) => {
  * 注意:v1 旧行不得走「行自带的 base/sha」——那等于让被校验方自选 range(审计 P0-2);
  * R10 对 v1 只做结构校验并 WARN,数字权威仅 v2 机检段。
  */
-export const recomputeCommitStats = async (root, parsed, { isRepo = undefined, headSubject = null, completionSha = '' } = {}) => {
+export const recomputeCommitStats = async (root, parsed, {
+  isRepo = undefined, completionSha = '', registryBaseSha = '', taskId = '', branch = '',
+} = {}) => {
   if (isRepo === false) return null;
   if (isRepo === undefined && !(await isGitRepoAsync(root))) return null;
-  let range = null;
-  if (parsed && parsed.sha && /^[0-9a-f]{7,40}$/.test(parsed.sha)) {
-    // 优先用事实行自带的 base(与写入侧同一个 range);旧事实行没有 base 时才退回 sha^..sha。
-    range = parsed.base && /^[0-9a-f]{7,40}$/.test(parsed.base)
-      ? [`${parsed.base}..${parsed.sha}`]
-      : [`${parsed.sha}^`, parsed.sha];
-  } else if (completionSha && /^[0-9a-f]{7,40}$/.test(completionSha)) {
-    // 单根:事实行没有 sha,由 R10 按「<T###> 完成」反查完成提交后传入。
-    // 不依赖 HEAD —— 完成之后的普通维护提交(归档、changelog 等)不应让 R10 失去定位能力。
-    range = [`${completionSha}^`, completionSha];
+  const id = taskId || (String(parsed?.task || '').match(/^T\d+/) || [''])[0];
+  let sha = '';
+  let base = '';
+  if (parsed?.mode === 'managed') {
+    // managed 是两段提交:代码提交在任务分支(事实行 sha 记的就是它),完成提交在 controlRoot。
+    // 独立定位代码提交 = 取任务分支 tip,且必须满足 base 是它的祖先;
+    // 绝不用事实行自报的 sha 作为输入,也不拿 controlRoot 的完成提交冒充。
+    const tip = branch ? await gitRun(root, 'rev-parse', '--verify', `refs/heads/${branch}`) : { ok: false };
+    if (!tip.ok || !String(tip.stdout || '').trim()) return null;
+    sha = tip.stdout.trim();
+    base = registryBaseSha;
+  } else if (parsed?.mode === 'single') {
+    // 单根无 registry:按 subject 定位完成提交,以其第一父提交为较弱但独立的范围。
+    sha = completionSha;
+    base = sha ? `${sha}^` : '';
   } else {
-    // 兼容:没有 completionSha 时退回「HEAD 就是完成提交」的老路径(需要 HEAD subject 含「T### 完成」)。
-    let subject = headSubject;
-    if (subject == null) {
-      const msg = await gitRun(root, 'log', '-1', '--pretty=%s');
-      subject = msg.ok ? msg.stdout : '';
-    }
-    if (!/T\d+\s*完成/.test(String(subject || ''))) return null;
-    range = ['HEAD^', 'HEAD'];
+    return null;
   }
-  return diffStat(root, range);
+  if (!/^[0-9a-f]{7,40}$/.test(sha) || (parsed.mode === 'managed' && (!/^[0-9a-f]{7,40}$/.test(base) || base === sha))) return null;
+  if (parsed.mode === 'single') {
+    const subject = await gitRun(root, 'log', '-1', '--pretty=%s', sha);
+    if (!subject.ok || !id || !new RegExp(`(?:^|\\s)${id}\\s*完成(?:\\s|$)`).test(subject.stdout.trim())) return null;
+  }
+  if (parsed.mode === 'managed') {
+    // 任务分支允许多个中间提交(wip):base 只需是代码提交的**祖先**,不要求是直接父提交。
+    const anc = await gitRun(root, 'merge-base', '--is-ancestor', base, sha);
+    if (!anc.ok) return null;
+  }
+  const stat = await diffStat(root, parsed.mode === 'managed' ? [base, sha] : [`${sha}^`, sha]);
+  if (!stat) return null;
+  // 回带独立定位到的 sha/base,供 R10 做字段对账(不依赖事实行自报值)。
+  return { ...stat, sha, base };
 };
 
 /** @internal 零调用兼容导出:不属于公共 API,保留以避免包外 import 断裂;计划 v2.0 删除。 */

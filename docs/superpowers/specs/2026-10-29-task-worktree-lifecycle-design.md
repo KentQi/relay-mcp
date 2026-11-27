@@ -1,11 +1,14 @@
 ---
-title: 任务级 worktree 生命周期与 AGENTS.md 硬约束设计
-status: 已批准
+title: 任务级 worktree 生命周期与 AGENTS.md 硬约束设计(已完成)
+status: 已完成
 ---
 
-# 任务级 worktree 生命周期与 AGENTS.md 硬约束设计
+# 任务级 worktree 生命周期与 AGENTS.md 硬约束设计(已完成)
 
 日期：2026-10-29
+状态：已实现；2026-11-27 按现行实现修正清理与接口口径。
+
+> **strictDocs 兼容提示:** 本文件是历史设计文档,文件名不含 `NN-类型-主题-vX.Y.md`。若项目启用 `strictDocs:true`,建议主审在 `manifest.docsIgnore` 中加入 `superpowers/**`,或由主审按文档命名规范重命名并同步引用;本任务不修改 manifest。
 
 ## 1. 意图与背景
 
@@ -128,19 +131,19 @@ relay_claim 创建/复用 worktree，session_start/session_end 维护状态，�
 - session_start 在 `autoCleanup: true` 时执行一次实际清理，但不因清理失败阻断简报。
 - 只有同时满足以下条件才自动清理：
   - 在 relay 注册表内，且路径仍位于受管 cacheDir；
-  - 注册状态为 completed，或任务已不处于 `[~]` 活跃状态；
+  - TASKS 当前 `[~]` 活跃任务集不包含该任务（registry `status` 不是活跃性真源）；
   - lastUsedAt 已超过 ttlHours；
   - 不是当前 executionRoot，不是主工作树，没有被 Git lock；
-  - worktree 干净，没有未提交或冲突状态；
+  - worktree 无未提交/冲突改动，且**没有 ignored 本地内容**（`.env`、`node_modules`、构建产物等，`git status --ignored=matching` 可见）；
   - 对应任务分支仍存在，提交有持久引用。
-- `[~]` 活跃任务即使超过 TTL 也保留，避免把长任务或崩溃现场误删；接管或完成后再进入清理流程。
+- 注册表记录为 completed 但任务仍在 `[~]` 活跃集时同样保留；registry 非 completed 但任务已不活跃时,仍须通过其余全部安全检查才可清理。
 - 清理只解除 worktree 与目录，保留分支；失败项逐项报告，不用强制删除绕过 Git 安全检查。
 
 ## 8. 认领与锁修复
 
 - 不同模型认领 `[~]` 任务时，先由认领锁判定是否可 TTL 接管，不再被 TASKS.md 的元数据提前拒绝。
 - session_end 完成 `[~]` 任务时，model 必须与认领者一致；已完成任务仅允许同模型幂等重跑。未认领任务保留现有人工/单会话完成路径。
-- 认领锁和仓库锁写入唯一 owner token；释放时必须匹配 token，避免原持有者误删新持有者的锁。
+- 认领锁和仓库锁写入唯一 owner token；释放时必须匹配 token，避免原持有者误删新持有者的锁。仓库写锁约 20s 心跳 + 写前 fencing；认领锁不心跳,240min TTL 按锁内 `acquiredAt` 判定,两者过期语义不同。
 - 所有 claim 锁的创建、接管和释放继续在仓库写锁内串行化；仓库锁的过期接管增加身份复核与并发回归测试。
 - session_end 返回的执行根与协议根必须清晰，避免调用方误在副本中查找主任务队列。
 

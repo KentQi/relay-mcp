@@ -8,7 +8,7 @@
 //   5) 单一解析源:任务行/日志标题正则取自 verify.mjs,事实行取自 facts.mjs(P1-9)。
 import { readFileSafe } from '../util.mjs';
 import { join } from 'node:path';
-import { TASK_LINE_RE, LOG_TITLE_RE } from './verify.mjs';
+import { TASK_LINE_RE, LOG_TITLE_RE, findArchiveBoundary, LOG_ARCHIVE_POINTER_RE, ARCHIVE_REL_RE } from './verify.mjs';
 import { FACT_LINE_RE, FACT_LINE_PREFIX_RE } from './facts.mjs';
 import { resolveRelayRoots } from './worktree.mjs';
 
@@ -97,10 +97,25 @@ const statusOf = (v) => {
 };
 const tokensOf = (text) => Math.max(1, Math.round(String(text ?? '').length / 2.5));
 
+// 只跟随 R12/R12 归档工具共同承认的合法指针;不把任意归档文件或悬空指针并进证据面。
+const archivePathOf = async (root, lines) => {
+  const idx = await findArchiveBoundary(root, lines);
+  if (idx < 0) return '';
+  const m = lines[idx].match(LOG_ARCHIVE_POINTER_RE);
+  return m && ARCHIVE_REL_RE.test(m[1]) ? join(root, m[1]) : '';
+};
+
 const buildModel = async (controlRoot) => {
   const logText = await readText(join(controlRoot, 'LOG.md'));
   const tasksText = await readText(join(controlRoot, 'TASKS.md'));
-  const entries = parseLog(logText).map((e) => {
+  const liveLines = String(logText ?? '').replace(/\r\n/g, '\n').split('\n');
+  const archivePath = await archivePathOf(controlRoot, liveLines);
+  const archiveText = archivePath ? await readText(archivePath) : null;
+  // 最新在前:live 条目 + 归档条目;稳定排序保留同时间时的来源顺序。
+  const parsed = [...parseLog(logText), ...parseLog(archiveText)];
+  const order = new Map(parsed.map((e, i) => [e, i]));
+  parsed.sort((a, b) => String(b.time).localeCompare(String(a.time)) || (order.get(a) - order.get(b)));
+  const entries = parsed.map((e) => {
     const idm = String(e.task).match(/^T\d+/);
     return {
       ...e,
@@ -111,6 +126,11 @@ const buildModel = async (controlRoot) => {
     };
   }).filter((e) => e.id);
   const tasks = parseTasks(tasksText);
+  // 没有 LOG 条目的待办也必须可见:recall 是任务队列索引,不只是历史日志索引。
+  for (const [id, t] of tasks) {
+    if (entries.some((e) => e.id === id)) continue;
+    entries.push({ id, time: '', model: t.meta ? t.meta.split(',')[0].trim() : '', task: t.title, block: [], summary: '', handoff: '', negatives: 0, pendingOnly: true });
+  }
   return { entries, tasks };
 };
 
@@ -153,7 +173,9 @@ export const relayRecall = async (args = {}) => {
     'T###|时间|model|状态|标题|条目体量|负结果',
     ...shown.map((r) => {
       const title = (r.t && r.t.title) || r.e.task;
-      return `${r.e.id}|${r.e.time}|${r.e.model}|${r.t ? statusLabel(r.t.status) : '未知'}|${title}|${tokensOf(r.e.block.join('\n'))}t|负结果:${r.e.negatives}`;
+      const when = r.e.pendingOnly ? '-' : r.e.time;
+      const who = r.e.pendingOnly ? '-' : r.e.model;
+      return `${r.e.id}|${when}|${who}|${r.t ? statusLabel(r.t.status) : '未知'}|${title}|${tokensOf(r.e.block.join('\n'))}t|负结果:${r.e.negatives}`;
     }),
     ...(total > shown.length ? [`[truncated: ${total - shown.length} more;用 query/status/limit 收窄]`] : []),
     '```',

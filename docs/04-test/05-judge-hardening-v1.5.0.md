@@ -12,7 +12,7 @@ status: 现行
 | 任务 | 变更 | 机检证据 | 代码提交 | 控制面提交 |
 |---|---|---|---|---|
 | T022 | `relay_verify` 单快照:LOG/TASKS/manifest 各读 1 次;git 子进程 9→2–4;`resolveRelayRoots` fs 快路径(recall/get git 2→0) | `scripts/smoke-perf.mjs`(23 断言,计数钩子非计时) | `6096407` | `a270891` |
-| T023 | 事实行 v2:机检段(mode/文件数/±/base/sha/branch)与叙述段(验收/verify/耗时)以 `\|\|` 分隔;R10 去 fail-open(无法定位提交 → WARN,永不 PASS);机检段结构自洽 | `scripts/smoke-facts.mjs`(33 断言) | `dd816d6` | `e1609c1` |
+| T023 | 事实行 v2:机检段(mode/文件数/±/base/sha/branch)与叙述段(验收/verify/耗时)以 `\\|\\|` 分隔;R10 去 fail-open(无法定位提交 → WARN,永不 PASS);机检段结构自洽 | `scripts/smoke-facts.mjs`(33 断言) | `dd816d6` | `e1609c1` |
 | T024 | 新增 R12 LOG 边界:活跃区 >150 行或完成条目 >20 → WARN(`manifest.logBoundary.strict` 升 ERROR);只报警不归档 | `scripts/smoke-r12-boundary.mjs`(13 断言) | `aff8eeb` | `0be6c4d` |
 | T025 | `package.json` 补 `repository` / `bugs`(provenance 前置) | `scripts/smoke-pack.mjs`(30 断言) | `93b68c1` | `f0520ae` |
 

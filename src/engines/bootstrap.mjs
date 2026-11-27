@@ -11,10 +11,11 @@
 // 零依赖:仅 node: 内置。
 
 import { basename, dirname, join, relative, resolve } from 'node:path';
-import { access, chmod, readdir, writeFile } from 'node:fs/promises';
+import { randomUUID } from 'node:crypto';
+import { access, chmod, readdir, rename, unlink, writeFile } from 'node:fs/promises';
 import {
   backupFile, ensureDir, findSensitiveChanges, gitIdentityArgs, gitRun, isGitRepoAsync, nowIso,
-  readFileSafe, stamp, templatesDir, writeFileIfAbsent, scanSecrets, assertSafeWriteLayout,
+  readFileSafe, stamp, templatesDir, writeFileIfAbsent, scanSecrets, assertSafeWriteLayout, writeFileAtomic,
 } from '../util.mjs';
 import { ensureGitignoreBaseline } from '../config.mjs';
 import { generateEntryFiles } from './sync.mjs';
@@ -27,7 +28,6 @@ const DEFAULT_ALLOWED_TOP_LEVEL = [
   'README.md', 'SPEC.md', 'DECISIONS.md', 'TASKS.md', 'LOG.md', 'START.md',
   'verify', 'package.json', '.gitignore', '.editorconfig',
 ];
-const DEFAULT_DOCS_PHASES = ['01-sow', '02-prd', '03-ard', '04-test', '05-delivery', 'archive', 'templates'];
 
 const ok = (text) => ({ content: [{ type: 'text', text }], isError: false });
 const err = (text) => ({ content: [{ type: 'text', text }], isError: true });
@@ -131,6 +131,27 @@ const readManifest = async (root) => {
   if (raw === null) return null;
   try { return JSON.parse(raw); }
   catch { return null; }
+};
+
+// 原子替换前的旧版本快照:先复制完整旧文件,再原子写新内容,最后清理中间文件。
+// 不先 rename 原 manifest,避免备份动作失败时留下「manifest 不存在」的半初始化状态。
+const backupBeforeAtomicReplace = async (target) => {
+  const snapshot = `${target}.relay-bak-new-${process.pid}-${randomUUID()}`;
+  await rename(target, snapshot);
+  return snapshot;
+};
+
+const writeManifestAtomic = async (target, content, previous) => {
+  const backup = await backupBeforeAtomicReplace(target);
+  try {
+    await writeFileAtomic(target, content, { label: '.relay/manifest.json' });
+    return backup;
+  } catch (e) {
+    // 新内容发布失败:恢复旧 manifest,绝不留「文件不存在」的半初始化状态。
+    await writeFileAtomic(target, previous, { label: '.relay/manifest.json' });
+    await unlink(backup).catch(() => {});
+    throw e;
+  }
 };
 
 const safeGit = async (root, ...args) => {
@@ -328,13 +349,11 @@ export const relayInit = async (args = {}) => {
     const manifest = {
       version: 1,
       projectName: name || basename(root),
-      preset,
       entryFiles: [...DEFAULT_ENTRY_FILES],
       allowedTopLevel: mergeAllowed(top),
-      docsPhases: [...DEFAULT_DOCS_PHASES],
       worktree: { enabled: true, cacheDir: '.relay/worktrees', ttlHours: 24, autoCleanup: true },
       // 事实底账(T013/R10):新项目默认开启;since = 启用时刻,早于它的条目豁免。
-      facts: { enabled: true, since: stamp(), strict: false },
+      facts: { enabled: true, since: stamp() },
       onboardedAt: nowIso(),
       relayHome: dirname(tdir),
     };
@@ -344,8 +363,8 @@ export const relayInit = async (args = {}) => {
     const manifestJson = `${JSON.stringify(manifest, null, 2)}\n`;
     if (await writeFileIfAbsent(manifestPath, manifestJson)) created.push(manifestRel);
     else if (force) {
-      const backup = await backupFile(manifestPath);
-      await writeFile(manifestPath, manifestJson, 'utf8');
+      const previous = await readFileSafe(manifestPath, '');
+      const backup = await writeManifestAtomic(manifestPath, manifestJson, previous);
       rewritten.push({ target: manifestRel, backup });
     } else kept.push(manifestRel);
 
@@ -453,7 +472,7 @@ export const relayOnboard = async (args = {}) => {
       }
     }
 
-    // 5) manifest:allowedTopLevel = 实际顶层 ∪ 默认;docsPhases = 实际 docs 布局或默认。
+    // 5) manifest:allowedTopLevel = 实际顶层 ∪ 默认;docs 布局只作诊断,不再写入死配置。
     //    P2-06:以既有 manifest 为基做合并,只覆盖 onboard 负责的元字段,其余配置
     //    (worktree/autoCommit/acceptance/protectedPaths/entryFilesTakeover/codeRoots/docsIgnore/
     //     commitMessageTemplate 等)原样保留 —— 升级重跑 onboard 不得静默关掉 worktree 或护栏配置。
@@ -461,9 +480,6 @@ export const relayOnboard = async (args = {}) => {
     if (giNote) created.push(giNote);
     const oldManifest = await readManifest(root);
     const old = oldManifest && typeof oldManifest === 'object' && !Array.isArray(oldManifest) ? oldManifest : {};
-    const oldDocsPhases = Array.isArray(old.docsPhases) ? old.docsPhases.filter((s) => typeof s === 'string') : [];
-    const docsPhases = docs.exists && Array.isArray(docs.phases) && docs.phases.length
-      ? docs.phases : (oldDocsPhases.length ? oldDocsPhases : [...DEFAULT_DOCS_PHASES]);
     const entryFiles = [...DEFAULT_ENTRY_FILES];
     const oldEntries = Array.isArray(old.entryFiles) ? old.entryFiles : [];
     for (const f of oldEntries) {
@@ -471,7 +487,7 @@ export const relayOnboard = async (args = {}) => {
     }
     // allowedTopLevel 只增不减:实际顶层 ∪ 契约默认 ∪ 既有白名单(restructure 修宪结果不丢)
     const oldAllowed = Array.isArray(old.allowedTopLevel) ? old.allowedTopLevel.filter((s) => typeof s === 'string') : [];
-    const ONBOARD_MANAGED_KEYS = ['version', 'projectName', 'entryFiles', 'allowedTopLevel', 'docsPhases', 'onboardedAt', 'relayHome'];
+    const ONBOARD_MANAGED_KEYS = ['version', 'projectName', 'entryFiles', 'allowedTopLevel', 'onboardedAt', 'relayHome'];
     const preservedKeys = Object.keys(old).filter((k) => !ONBOARD_MANAGED_KEYS.includes(k)).sort();
     const manifest = {
       ...old,
@@ -479,9 +495,8 @@ export const relayOnboard = async (args = {}) => {
       projectName,
       entryFiles,
       allowedTopLevel: mergeAllowed([...(top || []), ...oldAllowed]),
-      docsPhases,
-      // 事实底账(T013/R10):onboard 也开启,但保留项目既有 facts 配置(不覆盖显式的 strict/since)
-      facts: (old && old.facts) || { enabled: true, since: stamp(), strict: false },
+      // 事实底账(T013/R10):onboard 也开启,但保留项目既有 facts 配置(不覆盖显式的 since)
+      facts: (old && old.facts) || { enabled: true, since: stamp() },
       // 幂等(审计 P2):保留既有 onboardedAt,重跑 onboard 不再因时间戳变化而重写 manifest/新建备份/新提交。
       onboardedAt: (typeof old.onboardedAt === 'string' && old.onboardedAt) || nowIso(),
       relayHome: dirname(tdir),
@@ -495,8 +510,7 @@ export const relayOnboard = async (args = {}) => {
       const prev = await readFileSafe(manifestPath, null);
       if (prev === manifestJson) keptCore.push('.relay/manifest.json(内容一致,幂等跳过)');
       else {
-        manifestBackup = await backupFile(manifestPath);
-        await writeFile(manifestPath, manifestJson, 'utf8');
+        manifestBackup = await writeManifestAtomic(manifestPath, manifestJson, prev);
       }
     }
 
@@ -519,19 +533,23 @@ export const relayOnboard = async (args = {}) => {
     }
     if (manifestBackup) attention.push(`原 \`.relay/manifest.json\` 已备份(\`${relOf(root, manifestBackup)}\`)后重写为合并结果`);
     if (preservedKeys.length) {
-      attention.push(`既有 manifest 配置已保留(${preservedKeys.length} 个键:${preservedKeys.join(', ')});onboard 只更新 version/projectName/entryFiles/allowedTopLevel/docsPhases/onboardedAt/relayHome`);
+      attention.push(`既有 manifest 配置已保留(${preservedKeys.length} 个键:${preservedKeys.join(', ')});onboard 只更新 version/projectName/entryFiles/allowedTopLevel/onboardedAt/relayHome`);
     }
     if (preservedKeys.includes('worktree')) {
       const wt = old.worktree && typeof old.worktree === 'object' ? old.worktree : null;
       attention.push(`worktree 配置保持不变(enabled=${wt && wt.enabled === true ? 'true' : 'false'};改配置请手工编辑 manifest,onboard 不会重置它)`);
     }
+    const legacyInformational = ['preset', 'docsPhases', 'restructuredAt'].filter((k) => Object.prototype.hasOwnProperty.call(old, k));
+    if (legacyInformational.length) {
+      attention.push(`manifest 历史信息字段仅原样保留、不参与运行配置:${legacyInformational.join(', ')}`);
+    }
     if (keptVerify) attention.push('`verify` 已存在,未覆盖;如需 relay 托管请人工核对(模板见 templates/verify.sh)');
     if (docs.exists) {
-      if (docsPhases.length && JSON.stringify(docsPhases) !== JSON.stringify(DEFAULT_DOCS_PHASES)) {
-        attention.push(`docs/ 已有布局(${docsPhases.join('、')})已按实际记入 manifest.docsPhases;R3 将按已有项目宽松模式对待`);
+      if (Array.isArray(docs.phases) && docs.phases.length) {
+        notes.push(`docs/ 已有布局(${docs.phases.join('、')});manifest.docsPhases 已停用,R3 默认按宽松 frontmatter 模式检查`);
       }
     } else {
-      notes.push('docs/ 不存在:onboard 不主动铺文档骨架;docsPhases 已记默认五件套,日后可人工创建');
+      notes.push('docs/ 不存在:onboard 不主动铺文档骨架;可日后人工创建');
     }
     if (!top.filter((n) => n !== '.git').length) {
       notes.push('目录为空:这种情况通常更适合 relay_init(本次 onboard 结果与 init 等效)');

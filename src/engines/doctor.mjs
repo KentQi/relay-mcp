@@ -3,7 +3,7 @@
 //   1) 只读:不写任何文件、不取仓库写锁、不自动修复(自动修=越 fail-closed,修复指令交给人类/下一个会话)。
 //   2) 每条非 OK 结果都以「修复:」开头,给可执行指令,且只引用 relay 原生命令(绝不输出 rm)。
 //   3) 诊断的是「环境/安装面」漂移,不是仓库规范(R1–R13 归 relay_verify)。
-import { readFileSafe, isGitRepoAsync, gitRun, parseLockContent, templatesDir } from '../util.mjs';
+import { readFileSafe, isGitRepoAsync, gitRun, parseLockContent, claimLockExpiry, templatesDir } from '../util.mjs';
 import { readWorktreeRegistryState, resolveRelayRoots } from './worktree.mjs';
 import { generateEntryFiles } from './sync.mjs';
 import { collectUnknownManifestKeys, KNOWN_MANIFEST_KEYS, KNOWN_NESTED_KEYS } from '../config.mjs';
@@ -11,7 +11,6 @@ import { TASK_LINE_RE, DONE_TASK_RE, parseLogEntries } from './verify.mjs';
 import { join, resolve, isAbsolute, sep } from 'node:path';
 import { readdir, lstat, realpath, stat } from 'node:fs/promises';
 
-const CLAIM_TTL_MIN = 240; // 锁文件未记录 ttlMinutes 时的兜底(输出会注明)
 const ok = (id, name, detail) => ({ id, name, result: 'OK', detail, fix: null });
 const warn = (id, name, detail, fix) => ({ id, name, result: 'WARN', detail, fix });
 const bad = (id, name, detail, fix) => ({ id, name, result: 'ERROR', detail, fix });
@@ -199,18 +198,21 @@ const checkClaimLocks = async (root) => {
   try { names = (await readdir(dir)).filter((n) => n.endsWith('.lock')); } catch { return ok('D4', '认领锁', '无 claims 目录(无残留锁)'); }
   if (!names.length) return ok('D4', '认领锁', '无残留锁');
   const stale = [];
+  const now = Date.now();
   for (const n of names) {
     const raw = await readText(join(dir, n));
     const info = parseLockContent(raw);
     const task = n.replace(/\.lock$/, '');
-    if (!info.token) { stale.push(`${task}(空/半初始化锁)`); continue; }
-    const t = info.acquiredAt ? Date.parse(info.acquiredAt) : NaN;
-    const ageMin = Number.isNaN(t) ? null : Math.round((Date.now() - t) / 60000);
-    // P1-13:优先用锁文件里记录的真实 TTL(claim 支持 ttl_minutes 覆盖);旧锁没有该字段时按默认 240 分钟并注明。
-    const ttl = info.ttlMinutes || CLAIM_TTL_MIN;
-    const ttlNote = info.ttlMinutes ? `TTL ${ttl} 分钟` : `按默认 ${ttl} 分钟判定`;
-    if (ageMin == null) stale.push(`${task}(无时间戳,持有者 ${info.holder || '?'})`);
-    else if (ageMin > ttl) stale.push(`${task}(已过期 ${ageMin} 分钟 > ${ttlNote},持有者 ${info.holder || '?'})`);
+    const expiry = claimLockExpiry(info, { now, defaultTtlMinutes: 240 });
+    const ttlNote = expiry.ttlSource === 'lock'
+      ? `TTL ${expiry.ttlMinutes} 分钟`
+      : `按默认 ${expiry.ttlMinutes} 分钟判定`;
+    if (!expiry.expired && expiry.reason && expiry.reason !== 'within-ttl') {
+      const reason = expiry.reason === 'missing-token' ? '空/半初始化锁' : '无有效时间戳';
+      stale.push(`${task}(${reason},持有者 ${info.holder || '?'})`);
+    } else if (expiry.expired) {
+      stale.push(`${task}(已过期 ${Math.ceil(expiry.ageMinutes)} 分钟 > ${ttlNote},持有者 ${info.holder || '?'})`);
+    }
   }
   if (stale.length) {
     return warn('D4', '认领锁', `${stale.length} 把残留锁:${stale.join('; ')}`, '对已过期锁:relay_claim 同一 task 即可按 TTL 接管;或由原持有者 relay_session_end 释放;确认无人使用后可人工删除对应 .relay/claims/<T###>.lock');

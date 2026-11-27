@@ -113,7 +113,8 @@ try {
     const src = mkTmp('src');
     makeSource(repo, src);
     const marker = path.join(mkTmp('marker'), 'prompt.txt');
-    const injected = '完成被中断的任务; touch /tmp/relay-launch-should-not-exist';
+    const sentinel = path.join(mkTmp('sentinel'), 'must-not-exist');
+    const injected = `完成被中断的任务; touch ${sentinel}`;
     // 改元数据 prompt 注入串
     const metaPath = path.join(src, 'parent', 'agent-launch-agent', 'metadata.json');
     const meta = JSON.parse(readFileSync(metaPath, 'utf8'));
@@ -136,7 +137,7 @@ try {
     ok(done && done.exitCode === 0, '记录子进程 exitCode=0', JSON.stringify(done));
     ok(existsSync(marker), '子进程收到 prompt 参数');
     ok(existsSync(marker) && readFileSync(marker, 'utf8') === injected, 'prompt 原样传递(含 shell 元字符)');
-    ok(!existsSync('/tmp/relay-launch-should-not-exist'), 'shell 元字符未被执行(不经 shell)');
+    ok(!existsSync(sentinel), 'shell 元字符未被执行(不经 shell)');
     const log = readFileSync(path.join(cardDir(repo, id), 'dispatch.log'), 'utf8');
     ok(log.includes('LAUNCHED:'), '子进程 stdout 写入 dispatch.log', log.slice(0, 200));
     const shown = out(cli(repo, 'relay_rescue', { id }, {}));

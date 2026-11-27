@@ -378,19 +378,6 @@ export const BUILTIN_PROFILES = Object.freeze([
   jsonMetadataProfile('json-meta', 'JSON metadata-only agent (no copyable transcript)'),
 ]);
 
-// 把用户提供的描述符(manifest.rescue.profiles 或代码传入)与内置合并。
-// 用户描述符只需提供 id 与 roots/discover/parse 的最小子集,其余用内置默认补齐。
-export const resolveProfiles = ({ custom = [], builtin = BUILTIN_PROFILES } = {}) => {
-  const list = [...builtin];
-  for (const p of Array.isArray(custom) ? custom : []) {
-    if (!p || typeof p !== 'object' || !p.id) continue;
-    const idx = list.findIndex((x) => x.id === p.id);
-    const merged = { ...(idx >= 0 ? list[idx] : {}), ...p };
-    if (idx >= 0) list[idx] = merged; else list.push(merged);
-  }
-  return list;
-};
-
 export { parseWithFieldMap, jsonlMessageProfile, jsonMetadataProfile, readJsonl, clip };
 
 /* ------------------------------------------------------------------ */

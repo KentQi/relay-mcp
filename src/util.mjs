@@ -458,6 +458,28 @@ export const parseLockContent = (raw) => {
   return { holder, token, acquiredAt, legacy: true, empty: !token, corrupt: !token };
 };
 
+// 认领锁(heartbeat:false)以锁内 acquiredAt 为唯一年龄真相源;仓库写锁用心跳刷新的 mtime。
+// 无法证明过期时绝不接管:旧文本缺时间、空锁/损坏锁都交给宽限期或人工诊断。
+export const claimLockExpiry = (info, { now = Date.now(), defaultTtlMinutes = 240, overrideTtlMinutes = null } = {}) => {
+  // 优先级:调用方本次显式 TTL(ttl_minutes 覆盖)> 锁内记录的真实 TTL > 默认 240。
+  // 若固定优先锁内值,调用方传更短 TTL 想强制接管时会被旧锁记录的 240 分钟挡住。
+  const hasOverride = Number.isFinite(overrideTtlMinutes) && overrideTtlMinutes > 0;
+  const hasLockTtl = Number.isFinite(info?.ttlMinutes) && info.ttlMinutes > 0;
+  const ttlMinutes = hasOverride ? overrideTtlMinutes : (hasLockTtl ? info.ttlMinutes : defaultTtlMinutes);
+  const ttlSource = hasOverride ? 'override' : (hasLockTtl ? 'lock' : 'default');
+  if (!info?.token) return { expired: false, ageMinutes: null, ttlMinutes, ttlSource, reason: 'missing-token' };
+  const acquiredMs = info.acquiredAt ? Date.parse(info.acquiredAt) : NaN;
+  if (!Number.isFinite(acquiredMs)) {
+    return { expired: false, ageMinutes: null, ttlMinutes, ttlSource, reason: 'missing-or-invalid-acquiredAt' };
+  }
+  const ageMinutes = Math.max(0, now - acquiredMs) / 60000;
+  return {
+    expired: ageMinutes > ttlMinutes,
+    ageMinutes, ttlMinutes, ttlSource,
+    reason: ageMinutes > ttlMinutes ? 'ttl-expired' : 'within-ttl',
+  };
+};
+
 const readLockSnapshot = async (file) => {
   // 锁路径被替换成符号链接:拒绝按内容接管/释放(可能把操作引到仓库外)。
   const lst = await lstat(file).catch(() => null);
@@ -522,22 +544,44 @@ export const acquireFileLock = async (root, relPath, holder, {
         throw e;
       }
     }
-    const snap = await readLockSnapshot(file).catch(() => null);
+    // 所有循环路径共享同一 deadline;ENOENT 可立即重试,其余读取错误(含 EACCES)直接有界失败,
+    // 不再把异常吞成 continue 形成永久忙等。非 ENOENT 不 unlink,避免误删他人锁。
+    if (Date.now() >= deadline && waitMs > 0) {
+      const timedOutSnap = await readLockSnapshot(file).catch(() => null);
+      const holder = timedOutSnap?.info?.holder || '(未知)';
+      return { ok: false, holder, ageMs: timedOutSnap?.ageMs || 0, ageMin: (timedOutSnap?.ageMs || 0) / 60000, staleMs, label, warning: `${label}等待超时(${waitMs}ms)` };
+    }
+    let snap;
+    try {
+      snap = await readLockSnapshot(file);
+    } catch (e) {
+      if (e && e.code === 'ENOENT') continue;
+      throw e;
+    }
     if (!snap) continue; // 锁刚好消失 → 立即重试抢位
-    if (snap.unsafe) throw new Error(`${label}路径是符号链接,拒绝接管:${file}`);
+    if (snap.unsafe) throw new Error(`${label}路径是符号链接,拒绝接管`);
     const lockHolder = snap.info.holder || '(未知持有者)';
     if (sameHolder && sameHolder(snap.info.holder)) {
       // 同持有者幂等:沿用既有 token;旧格式缺 token 时原子补写(不再用非原子 writeFile)
       let adoptToken = snap.info.token;
       if (!adoptToken) {
         adoptToken = token;
-        await writeFileAtomic(file, serializeLock({ holder: lockHolder, token: adoptToken, acquiredAt: snap.info.acquiredAt || acquiredAt }), { label });
+        await writeFileAtomic(file, serializeLock({ holder: lockHolder, token: adoptToken, acquiredAt: snap.info.acquiredAt || acquiredAt, ttlMinutes }), { label });
       }
       return makeLockHandle({ root: rootAbs, relPath, file, token: adoptToken, holder: lockHolder, created: false, tookOver: '', label, heartbeat });
     }
     const halfInitialized = !snap.info.token;
-    const staleThreshold = halfInitialized ? emptyLockGraceMs : staleMs;
-    if (snap.ageMs > staleThreshold) {
+    // 空锁仍走 mtime 宽限期(acquiredAt 不存在);完整认领锁只按 acquiredAt 的精确毫秒裁决。
+    const expiry = !heartbeat && !halfInitialized
+      ? claimLockExpiry(snap.info, {
+        defaultTtlMinutes: Number.isFinite(staleMs) ? staleMs / 60000 : 240,
+        overrideTtlMinutes: Number.isFinite(ttlMinutes) && ttlMinutes > 0 ? ttlMinutes : null,
+      })
+      : null;
+    const canTakeOver = halfInitialized
+      ? snap.ageMs > emptyLockGraceMs
+      : expiry ? expiry.expired : snap.ageMs > staleMs;
+    if (canTakeOver) {
       // 删除前复核内容,避免把等待期间换上的新锁当成旧锁;换上的新锁内容不同 → 不删。
       try {
         const rawAgain = String(await readFile(file, 'utf8'));
@@ -546,14 +590,18 @@ export const acquireFileLock = async (root, relPath, holder, {
           tookOver = lockHolder;
           if (onTakeover) onTakeover(lockHolder);
         }
-      } catch { /* 别的等待者已接管 */ }
+      } catch (e) {
+        // ENOENT = 别的等待者已删除;EACCES/其它错误不能伪装成「已接管」。
+        if (!e || e.code !== 'ENOENT') throw e;
+      }
       continue;
     }
     if (Date.now() >= deadline) {
+      const ageMs = expiry && expiry.ageMinutes != null ? expiry.ageMinutes * 60000 : snap.ageMs;
       return {
-        ok: false, holder: lockHolder, ageMs: snap.ageMs, ageMin: snap.ageMs / 60000,
+        ok: false, holder: snap.info.holder || '(未知持有者)', ageMs, ageMin: ageMs / 60000,
         staleMs, label,
-        warning: `${label}被 ${lockHolder} 持有(约 ${Math.round(snap.ageMs / 1000)}s)`,
+        warning: `${label}被 ${snap.info.holder || '(未知持有者)'} 持有(约 ${Math.round(ageMs / 1000)}s)${expiry ? `;${expiry.reason}` : ''}`,
       };
     }
     await new Promise((r) => setTimeout(r, 200));

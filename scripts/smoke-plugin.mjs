@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // Agent Plugins v1.0.0 冒烟 —— 本仓库插件包合规 + 客户端加载路径 + 规范负例(failure isolation)。
 // 验收: node scripts/smoke-plugin.mjs 全绿;`npm test` 已接入。
-import { spawn } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync, symlinkSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
@@ -58,7 +58,7 @@ const handshake = (command, args, cwd, env) => new Promise((done) => {
     try {
       await call('initialize', { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 'relay-plugin-smoke', version: '1' } });
       const tools = await call('tools/list');
-      finish({ ok: true, tools: (tools.result?.tools || []).map((t) => t.name) });
+      finish({ ok: true, tools: tools.result?.tools || [] });
     } catch (e) { finish({ ok: false, error: e?.message || String(e) }); }
   })();
 });
@@ -81,6 +81,19 @@ try {
   ok(server?.cwd === '${PLUGIN_ROOT}', 'cwd = ${PLUGIN_ROOT}(缺省即插件根)');
   ok(!server?.env || !('PLUGIN_ROOT' in server.env) || true, 'env 未覆盖保留变量(当前无 env)');
 
+  console.log('\n== A2. 打包边界:启动器必须随包,协议/审计状态不得进包 ==');
+  {
+    const pack = spawnSync('npm', ['pack', '--dry-run', '--json'], { cwd: ROOT, encoding: 'utf8', timeout: 120000 });
+    let files = [];
+    try { files = JSON.parse(pack.stdout || '[]')[0]?.files || []; } catch { /* 下面用空集合判负 */ }
+    const paths = files.map((f) => f.path);
+    ok(pack.status === 0 && paths.length > 0, 'npm pack dry-run 可执行', pack.stderr?.slice(0, 300));
+    ok(paths.includes('scripts/relay-mcp-autoupdate.mjs'), '自更新启动器随 npm 包分发');
+    ok(!paths.some((p) => p.startsWith('scripts/audit/')), '已退役审计探针不进包');
+    ok(!paths.some((p) => p === 'TASKS.md' || p === 'LOG.md' || p.startsWith('.relay/') || p.startsWith('docs/')),
+      '协议状态/本机接力单/docs 不进包');
+  }
+
   console.log('\n== B. 模拟客户端:展开占位符并启动 server ==');
   const dataDir = mkTmp('relay-plugin-data-');
   const vars = { pluginRoot: ROOT, pluginData: dataDir };
@@ -94,7 +107,11 @@ try {
   const hs = await handshake(server.command, expArgs, expCwd, { ...process.env, PLUGIN_ROOT: ROOT, PLUGIN_DATA: dataDir });
   ok(hs.ok, '按 mcp.json 启动可完成 MCP initialize + tools/list', hs.error || '');
   ok(hs.tools?.length === 15, '工具清单 = 15 个 relay_*', String(hs.tools?.length));
-  ok(hs.tools?.includes('relay_verify') && hs.tools?.includes('relay_session_end') && hs.tools?.includes('relay_archive_log'), '关键工具在清单内');
+  ok(hs.tools?.some((t) => t.name === 'relay_verify') && hs.tools?.some((t) => t.name === 'relay_session_end') && hs.tools?.some((t) => t.name === 'relay_archive_log'), '关键工具在清单内');
+  const hsProps = (name) => hs.tools?.find((t) => t.name === name)?.inputSchema?.properties || {};
+  ok(hsProps('relay_claim').ttl_minutes?.type === 'number', 'MCP tools/list 实际暴露 claim.ttl_minutes');
+  ok(hsProps('relay_session_end').maintenance?.type === 'boolean', 'MCP tools/list 实际暴露 session_end.maintenance');
+  ok(hsProps('relay_rescue').task?.type === 'string', 'MCP tools/list 实际暴露 rescue.task');
 
   console.log('\n== C. skills/ 发现与 Agent Skills 合规 ==');
   const skillNames = v.skills.map((s) => s.name);

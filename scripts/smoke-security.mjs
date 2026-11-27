@@ -16,6 +16,12 @@ const ok = (cond, label, extra = '') => {
 };
 const run = (root, tool, args = {}) => spawnSync('node', [CLI, tool, '--root', root, '--json', JSON.stringify(args)], { encoding: 'utf8' });
 const out = (r) => `${r.stdout || ''}${r.stderr || ''}`;
+const gitAddCommit = (root) => {
+  const git = (...a) => spawnSync('git', ['-C', root, ...a], { encoding: 'utf8' });
+  if (git('add', '-A').status !== 0) throw new Error('fixture git add failed');
+  const c = git('-c', 'user.name=x', '-c', 'user.email=x@l', 'commit', '-q', '-m', 'fixture');
+  if (c.status !== 0) throw new Error('fixture git commit failed');
+};
 const row = (r, id) => (out(r).split('\n').find((l) => new RegExp(`^\\| ${id} \\|`).test(l)) || '');
 const base = mkdtempSync(path.join(tmpdir(), 'relay-sec-'));
 let n = 0;
@@ -128,6 +134,65 @@ try {
     git('-c', 'user.name=x', '-c', 'user.email=x@l', 'commit', '-q', '-m', 'docs: T003 完成(劫持提交)');
     const v = run(root, 'relay_verify', { full: true });
     ok(/R10\s*\|\s*PASS/.test(row(v, 'R10')), 'R10:仍能定位真正完成提交(不被劫持提交干扰)', row(v, 'R10'));
+  }
+
+  console.log('\n== H1/H4 sync 悬空/目录符号链接不得写穿 ==');
+  {
+    const root = fresh();
+    run(root, 'relay_init', { name: 'sync-link' });
+    rmSync(path.join(root, 'AGENTS.md'));
+    const outside = path.join(base, 'sync-outside.md');
+    symlinkSync(outside, path.join(root, 'AGENTS.md'), process.platform === 'win32' ? 'junction' : 'file');
+    rmSync(outside, { force: true });
+    const r = run(root, 'relay_sync', {});
+    ok(r.status === 1 && /符号链接|拒绝/.test(out(r)), 'sync:AGENTS.md 悬空 symlink → 拒绝', out(r).slice(0, 300));
+    ok(!existsSync(outside), 'sync:仓库外目标未被创建');
+
+    const root2 = fresh();
+    run(root2, 'relay_init', { name: 'sync-dir-link' });
+    const agents = readFileSync(path.join(root2, 'AGENTS.md'), 'utf8');
+    writeFileSync(path.join(root2, 'AGENTS.md'), agents + '\n<!-- drift -->\n');
+    const outside2 = path.join(base, 'sync-outside-dir'); mkdirSync(outside2);
+    const entryDir = path.join(root2, 'nested'); mkdirSync(entryDir);
+    writeFileSync(path.join(entryDir, 'ENTRY.md'), agents + '\n<!-- drift -->\n');
+    const mfPath = path.join(root2, '.relay', 'manifest.json');
+    const mf = JSON.parse(readFileSync(mfPath, 'utf8'));
+    mf.entryFiles.push('nested/ENTRY.md');
+    writeFileSync(mfPath, JSON.stringify(mf, null, 2) + '\n');
+    rmSync(entryDir, { recursive: true });
+    symlinkSync(outside2, entryDir, process.platform === 'win32' ? 'junction' : 'dir');
+    const r2 = run(root2, 'relay_sync', {});
+    ok(r2.status === 1 && /符号链接|拒绝/.test(out(r2)), 'sync:入口父目录 symlink → 拒绝', out(r2).slice(0, 300));
+    ok(readdirSync(outside2).length === 0, 'sync:仓库外目录未被写入');
+  }
+
+  console.log('\n== H4/H5 restructure 协议 symlink / corrupt manifest fail-closed ==');
+  {
+    const root = fresh();
+    run(root, 'relay_init', { name: 'restructure-link' });
+    mkdirSync(path.join(root, 'lib'));
+    writeFileSync(path.join(root, 'lib', 'a.mjs'), 'export const a=1;\n');
+    gitAddCommit(root);
+    const outside = path.join(base, 'restructure-outside.md');
+    rmSync(outside, { force: true });
+    rmSync(path.join(root, 'LOG.md'));
+    symlinkSync(outside, path.join(root, 'LOG.md'), process.platform === 'win32' ? 'junction' : 'file');
+    rmSync(outside, { force: true });
+    const r = run(root, 'relay_restructure', { confirm: true });
+    ok(r.status === 1 && /符号链接|拒绝/.test(out(r)), 'restructure:LOG symlink → 写前拒绝', out(r).slice(0, 300));
+    ok(!existsSync(outside) && existsSync(path.join(root, 'lib', 'a.mjs')), 'restructure:拒绝后未写仓库外也未移动条目');
+
+    const root2 = fresh();
+    run(root2, 'relay_init', { name: 'restructure-corrupt' });
+    mkdirSync(path.join(root2, 'lib'));
+    writeFileSync(path.join(root2, 'lib', 'a.mjs'), 'export const a=1;\n');
+    gitAddCommit(root2);
+    const mf2 = path.join(root2, '.relay', 'manifest.json');
+    writeFileSync(mf2, '{broken');
+    const before = readFileSync(mf2, 'utf8');
+    const r2 = run(root2, 'relay_restructure', { confirm: true });
+    ok(r2.status === 1 && /损坏|拒绝/.test(out(r2)), 'restructure:manifest 损坏 → fail-closed', out(r2).slice(0, 300));
+    ok(readFileSync(mf2, 'utf8') === before && existsSync(path.join(root2, 'lib', 'a.mjs')), 'restructure:损坏 manifest 未被静默重建且目录未移动');
   }
 
   console.log('\n== P2 init force 同秒备份不互覆盖 ==');

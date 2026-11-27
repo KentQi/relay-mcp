@@ -84,8 +84,8 @@ try {
       const lptr = pointerOf(readFileSync(path.join(legacyTmp, 'LOG.md'), 'utf8'));
       ok(/^docs\/archive\/LOG-[^/]+\.md$/.test(lptr), '指针改指新的 LOG-* 归档', lptr);
       ok(readFileSync(legacyPath, 'utf8') === legacyBefore, '旧的非 LOG 归档文件未被改写', legacyRel);
-      const lv = run(legacyTmp, 'relay_verify', { full: true });
-      ok(lv.status === 0 && /R12\s*\|\s*PASS/.test(out(lv)), '新指针被 R12 承认', out(lv).slice(0, 400));
+    const lv = run(legacyTmp, 'relay_verify', { full: true });
+    ok(/R12\s*\|\s*PASS/.test(out(lv)), '新指针被 R12 承认', out(lv).split('\n').filter((l) => l.startsWith('| R12') || l.startsWith('**汇总')).join('\n'));
     } finally { rmSync(legacyTmp, { recursive: true, force: true }); }
   }
 
@@ -100,6 +100,26 @@ try {
   ok(!/m7\b/.test(logDir) && !/m1\b/.test(logDir), 'live 不含旧条目(m7/m1;m1\\b 不误伤 m10)');
   const archDir = readFileSync(path.join(tmp, pointerOf(logDir)), 'utf8');
   ok(/m7/.test(archDir) && /m1/.test(archDir) && !/m10/.test(archDir), '归档文件是最旧 7 条(m7..m1),不含最新');
+
+  console.log('\n== 维护条目不占 R7 的 3 个任务会话配额 ==');
+  {
+    const mixed = ['# 会话日志(最新在上)', ''];
+    const tasks = ['T201 完成', 'T202 完成', 'T203 完成'];
+    tasks.forEach((task, i) => {
+      mixed.push(`## 2026-02-0${i + 1} 10:00 | model=x | task=${task}`, `- 摘要: task-${i + 1}`, '');
+      mixed.push(`## 2026-02-0${i + 1} 11:00 | model=x | task=无`, '- 摘要: maintenance', '');
+    });
+    for (let i = 0; i < 8; i += 1) mixed.push(`## 2026-01-01 10:00 | model=x | task=T3${i} 完成`, '- 摘要: old', '');
+    writeFileSync(logPath, mixed.join('\n'));
+    const mixedRun = run(tmp, 'relay_archive_log', { confirm: true, keep: 3 });
+    ok(mixedRun.status === 0, '混合条目 keep=3 可归档', out(mixedRun).slice(0, 300));
+    const live = readFileSync(logPath, 'utf8');
+    const liveTasks = [...live.matchAll(/task=(T\d+) 完成/g)].map((m) => m[1]);
+    ok(liveTasks.includes('T201') && liveTasks.includes('T202') && liveTasks.includes('T203'),
+      '第 3 个任务会话在 keep 之外时扩展边界保留', liveTasks.join(','));
+    const r7 = out(run(tmp, 'relay_verify', { full: true }));
+    ok(/R7\s*\|\s*PASS/.test(r7) && /最近 3 条任务会话/.test(r7), '归档后 R7 仍有完整 3 会话窗口', r7.match(/R7[^\n]+/)?.[0] || '');
+  }
 
   console.log('\n== R7 不可被归档洗绿(P0-3) ==');
   writeFileSync(tasksPath, ['# 任务队列', '', '## 进行中', '', '## 待办', '', '## 已完成',
