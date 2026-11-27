@@ -197,6 +197,16 @@ try {
     rmSync(mtmp, { recursive: true, force: true });
   }
 
+  console.log('\n== R10 分支已删除路径不得抛 TDZ(CI 回归) ==');
+  {
+    // 「分支不存在但提交可验证」这条路径曾把 branchNote 用在声明之前:
+    // 本地有分支时不触发,CI 新克隆必然触发。直接断言 runChecks 不抛错。
+    const { runChecks } = await import('../src/engines/verify.mjs');
+    let threw = '';
+    try { await runChecks(mtmp, { full: true }); } catch (e) { threw = String((e && e.message) || e); }
+    ok(!threw, 'R10 在所有分支路径上都不抛异常(含分支已删除)', threw);
+  }
+
   console.log('\n== 升级兼容:since 在未来 → SKIP ==');
   const mf2 = readMf();
   mf2.facts.strict = false;

@@ -532,6 +532,9 @@ const checkR10 = async (root, cfg, snap) => {
     return bad('R10', 'ERROR', `事实行机检段自相矛盾:${struct.join('; ')}`,
       '事实行是引擎产物,不允许手改;删除该行后重跑 relay_session_end 重写(机检段=mode/文件数/base/sha/branch)');
   }
+  // 分支归属注记:必须在使用前声明(TDZ 会让 CI 在不同分支路径上直接 ReferenceError)。
+  let branchNote = '';
+
   // 完成提交独立定位:subject 必须含精确任务号,候选重复/缺失一律 WARN;不按文件数挑候选。
   const taskId = taskIdOfEntry(entry);
   let completionSha = '';
@@ -633,7 +636,6 @@ const checkR10 = async (root, cfg, snap) => {
     return bad('R10', 'ERROR', `事实行机检段与 git 事实不一致:${fails.join('; ')}`,
       '事实行是引擎产物,不允许手改;删除该行后重跑 relay_session_end 重写(机检段=mode/文件数/base/sha/branch,managed 另含 ±,叙述段=验收/verify/耗时)');
   }
-  let branchNote = '';
   if (parsed.mode === 'managed') {
     // managed 有**两个**提交:代码提交在任务分支(事实行 sha),完成提交在 controlRoot。
     // 分支归属必须校验事实行声明的代码提交;拿 controlRoot 的完成提交去查任务分支必然落空。
