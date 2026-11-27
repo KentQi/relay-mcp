@@ -1,5 +1,11 @@
 # 会话日志(最新在上)
 
+## 2026-11-27 17:12 | model=codex-audit-followup | task=T073 完成
+- 摘要: 复核 PR #12 基线 4203d78，Node 22/24/26 共 6 个 CI job 成功。补齐 R9/R10 完成证据、半写与重复出场恢复、同日归档保全、不可读配置、验收输出与时限、原始文件名守卫、并发接力和启动器冷却。认领锁与出场恢复冒烟已接入 npm test。审计逐项结果见任务分支 docs/04-test/13-audit-deep-scan-v2.1.md 第 12 节。任务分支 relay/T073 待人工复核。
+- 事实(v2): mode=managed | 文件 67 | ± +4200/-1902 | base=0d8764b11b886c748c6b04544d0c97d95d8d4cd9 | sha=ecad5e455b8f9e1e21ed961388f4ff4d34b5eced | branch=relay/T073 || 验收: 通过 | verify: PASS 15·WARN 1·ERROR 0 | 耗时: 111s
+- worktree: branch=relay/T073; sha=ecad5e455b8f9e1e21ed961388f4ff4d34b5eced; 已验收,未合并(是否合并由人工决定)
+- 负结果: v1 事实行的非 ERROR 结果只证明兼容降级，不能作为分支前移回归。新夹具使用真实受管出场和追加提交，并要求 R10 PASS。
+
 ## 2026-11-27 15:46 | model=hungerg-audit-fix | task=T072 完成
 - 摘要: T072 推进:推送 T071 的三个 CI 修复(813d148 TDZ、27fc10a 分支名假设、4f5b81a R10 锚点改用 LOG 成对证据行)到 origin/relay/T071;PR #12 已更新。等待三矩阵 CI(22/24/26)结果。
 - 事实(v2): mode=single | 文件 1 | ± +7/-1 | base=- | sha=- | branch=main || 验收: 通过 | verify: PASS 12·WARN 0·ERROR 0 | 耗时: 114s

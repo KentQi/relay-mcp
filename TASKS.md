@@ -14,23 +14,19 @@
 (空——认领后由 relay_claim 移入;认领锁在 .relay/claims/,TTL 4 小时,崩溃会话的认领到期自动可接管)
 
 ## 待办
-- [ ] T073 确认 PR #12 三矩阵 CI 全绿并交人工复核
-  验收: npm test && ./verify
-  备注: CI 结果见 gh pr checks 12;若仍红用 gh run view --log-failed 定位。审计报告在分支 docs/04-test/13-audit-deep-scan-v2.1.md。
-- [ ] T070 无待办 — v2.1.1 已发布,新工作需先与人类定义任务
-  验收: npm test && ./verify
-  备注: v2.1.1 已发布(待确认推送后 CI)。仓库无待办;新工作需先与人类定义任务。若再修问题,版本号顺延 2.1.2 并在 CHANGELOG 新段记录。
-- [ ] T069 无待办 — harness 注册面切换已验收入库,新工作需先与人类定义任务
-  验收: npm test && ./verify
-  备注: T066 已闭环:14 个 harness 注册面全部指向 scripts/relay-mcp-autoupdate.mjs(启动器已随 T067 加固并入库),无旧路径残留,JSON 全部合法,备份在各配置旁(.relay-bak-20261127-004651)。~/.relay-mcp/ 旧启动器已无引用,目录保留。注意事项:LOG 历史 T065 条目摘要的「PASS 10」是手写快检口径,事实行「PASS 16」是出场全量机检口径,以事实行为准。仓库当前无待办,远端已同步;新工作需先与人类定义任务。
+
+  T069/T070 曾用于提示队列为空。发布和 harness 注册的实际记录见 T068/T066。
 
 ## 已冻结
   冻结任务 T030:发布 npm — 决策冻结,不执行(见 DECISIONS 2026-11-18 Tier 2);原发布面已移除,分发改为 git clone / Agent Plugins / GitHub Release。冻结任务不进入 session_start 派发;解冻需先在 DECISIONS 记录新决定并恢复为 [ ] 任务行。
 
 ## 已完成
-- [x] T072 人工复核并合并 relay/T071（29 套全绿，verify 0 ERROR）  (2026-11-27)
+- [x] T073 复核 PR #12 的 CI 与深层审计，修复验证仍成立的遗漏  (2026-11-27)
   验收: npm test && ./verify
-  备注: PR 待你复核。R9 的历史 T055–T057 WARN 按 DECISIONS 2026-11-26 T061 有意保留，不得回填。manifest.runtimeTopLevel 已在 controlRoot 与本 worktree 声明 .claude/.v2c/.zcode/out。
+  备注: 以 PR 当前提交 4203d78 为复核基线。报告在任务分支的 `docs/04-test/13-audit-deep-scan-v2.1.md`。修复期间按影响面验证，出场执行项目绿闸。
+- [x] T072 推送 relay/T071 的 CI 修复并更新 PR #12  (2026-11-27)
+  验收: npm test && ./verify
+  备注: 推送 CI 修复已完成，PR #12 留待人工合并。R9 的历史 T055–T057 WARN 按 DECISIONS 2026-11-26 T061 有意保留，不得回填。manifest.runtimeTopLevel 已在 controlRoot 与本 worktree 声明 .claude/.v2c/.zcode/out。
 - [x] T071 全面修复深层审计确认项：核心安全/一致性、自更新、CLI/检索、测试假绿与文档漂移  (2026-11-27)
   验收: npm test && ./verify
   备注: 依据 docs/04-test/13-audit-deep-scan-v2.1.md(工作会话审计快照)。修复 H1–H10 与自更新 HIGH,以及已确认的 CLI/recall/占位任务/归档/测试假绿/文档版式问题;每项补行为回归,保持核心 harness 无关。历史 T055–T057 的 D8 WARN 不回填、不伪造完成证据。交付独立 relay/T071 分支并开 PR,由人类复核合并。
@@ -43,7 +39,7 @@
   备注: 启动器已纳入仓库(scripts/relay-mcp-autoupdate.mjs)并已出验收入库。剩余步骤:合并 relay/T065 到 main 后,把 14 个 harness 注册面(~/.claude.json、~/.zcode/cli/config.json、~/.gemini/settings.json、~/.minimax/mcp.json x2、~/.kimi/mcp.json、~/.kimi-code/mcp.json、~/.mavis/mcp.json、~/Library/Application Support/Code/User/mcp.json、Claude/Claude-3p 的 claude_desktop_config.json、~/.codex/config.toml、~/.dsh/profiles/{desktop,web}/plugins/dsh-mcp-relay-mcp/cordis.patch.yml)里 relay 条目的脚本路径从 ~/.relay-mcp/relay-mcp-autoupdate.mjs 改为 <repo>/scripts/relay-mcp-autoupdate.mjs;逐个先备份 .relay-bak-时间戳再改,改完 grep 确认无残留旧路径并实测 MCP initialize 返回 2.1.0。~/.relay-mcp/ 目录保留(含历史备份与回滚脚本),旧启动器文件不再被引用。
 - [x] T067 修复自更新启动器 max 审计 4 major+minor(分支守卫/rev-list fail-closed/merge 安全终止/流分离等)  (2026-11-27)
   验收: test:scripts/smoke-autoupdate.mjs
-  备注: 见 docs/04-test/13-audit-autoupdate-v1.0.md(如未落盘则以审查会话 446b3766 报告为准)。major:超时 SIGKILL 可截断 merge 留 index.lock;rev-list 失败折算 0 → 假「已是最新」+6h 静默;ff-merge 不校验当前分支/游离 HEAD/linked worktree;另需 DECISIONS 补自动 ff-merge 的授权边界。minor 一并修:stdout/stderr 混流致脏树误判、状态非原子写、预算 NaN 不校验、信号自递归不退出、merge 后无健康检查、冒烟非隔离且 probe 孙进程可致挂起、ff-only 断言为源码 grep 假绿。
+  备注: 见审查会话 446b3766 和 DECISIONS 的 T067 条目。major:超时 SIGKILL 可截断 merge 留 index.lock;rev-list 失败折算 0 → 假「已是最新」+6h 静默;ff-merge 不校验当前分支/游离 HEAD/linked worktree;另需 DECISIONS 补自动 ff-merge 的授权边界。minor 一并修:stdout/stderr 混流致脏树误判、状态非原子写、预算 NaN 不校验、信号自递归不退出、merge 后无健康检查、冒烟非隔离且 probe 孙进程可致挂起、ff-only 断言为源码 grep 假绿。
 - [x] T065 将自更新启动器纳入仓库(scripts/relay-mcp-autoupdate.mjs)+ 自推导仓库路径 + 第 27 套冒烟  (2026-11-27)
   验收: npm test && ./verify
   备注: 现状:14 个 harness 注册面(Claude Code/Desktop/3p、Codex、DeepSeek desktop+web、Gemini、Kimi/Kimi Code、Mavis、MiniMax x2、VS Code、ZCode)都指向 ~/.relay-mcp/relay-mcp-autoupdate.mjs——该启动器承担全部更新通道却不在版本控制里,换机无法迁移、改动无法 review,且硬编码仓库路径。实际交付:(1) 启动器复制为 scripts/relay-mcp-autoupdate.mjs 并支持 argv[2] 缺席时自推导;(2) 新增 scripts/smoke-autoupdate.mjs 接入 npm test(27 套);SPEC/README 套数同步。注:标题首版误写「并把全部 harness 切换到仓库内路径」——该切换在出场后才执行,已顺延至 T066 并于 2026-11-27 完成(证据见 T066 条目与 scripts/smoke-harness-paths.mjs);当时盖 [x] 属顺序失误,此处收窄表述,历史提交不改写。~/.relay-mcp/ 目录保留不删(含历史备份与回滚脚本)。
@@ -230,4 +226,3 @@
   备注: 已本地预演两步全绿;badge 待 CI 绿后补进 README
 - [x] T003 CI workflow 真机验证(模板仅本地推演,未在 GitHub Actions 实跑)  (2026-09-29)
   验收: 推送 GitHub 后 Actions 双版本矩阵(node 22/24)全绿
-(空)
