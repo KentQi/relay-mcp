@@ -14,6 +14,9 @@
 (空——认领后由 relay_claim 移入;认领锁在 .relay/claims/,TTL 4 小时,崩溃会话的认领到期自动可接管)
 
 ## 待办
+- [ ] T072 人工复核并合并 relay/T071（29 套全绿，verify 0 ERROR）
+  验收: npm test && ./verify
+  备注: PR 待你复核。R9 的历史 T055–T057 WARN 按 DECISIONS 2026-11-26 T061 有意保留，不得回填。manifest.runtimeTopLevel 已在 controlRoot 与本 worktree 声明 .claude/.v2c/.zcode/out。
 - [ ] T070 无待办 — v2.1.1 已发布,新工作需先与人类定义任务
   验收: npm test && ./verify
   备注: v2.1.1 已发布(待确认推送后 CI)。仓库无待办;新工作需先与人类定义任务。若再修问题,版本号顺延 2.1.2 并在 CHANGELOG 新段记录。
@@ -25,6 +28,9 @@
   冻结任务 T030:发布 npm — 决策冻结,不执行(见 DECISIONS 2026-11-18 Tier 2);原发布面已移除,分发改为 git clone / Agent Plugins / GitHub Release。冻结任务不进入 session_start 派发;解冻需先在 DECISIONS 记录新决定并恢复为 [ ] 任务行。
 
 ## 已完成
+- [x] T071 全面修复深层审计确认项：核心安全/一致性、自更新、CLI/检索、测试假绿与文档漂移  (2026-11-27)
+  验收: npm test && ./verify
+  备注: 依据 docs/04-test/13-audit-deep-scan-v2.1.md(工作会话审计快照)。修复 H1–H10 与自更新 HIGH,以及已确认的 CLI/recall/占位任务/归档/测试假绿/文档版式问题;每项补行为回归,保持核心 harness 无关。历史 T055–T057 的 D8 WARN 不回填、不伪造完成证据。交付独立 relay/T071 分支并开 PR,由人类复核合并。
 - [x] T068 发布 v2.1.1（版本号/CHANGELOG 定版/tag/GitHub Release）  (2026-11-27)
   验收: npm test && ./verify
   备注: 内容 = v2.1.0 之后的 T064(归档/清理)+T065/T067(自更新启动器入库与审计加固,含验收门环境变量绕过的行为级回归)+T066(harness 注册面切换)。经用户授权执行 tag 与 Release;发布前确认当前 HEAD 的三矩阵 CI 已全绿(45868154259 success)。

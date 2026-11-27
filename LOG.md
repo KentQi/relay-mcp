@@ -1,5 +1,11 @@
 # 会话日志(最新在上)
 
+## 2026-11-27 14:15 | model=hungerg-audit-fix | task=T071 完成
+- 摘要: T071 全面修复深层审计确认项：R10 独立锚定重写（任务分支 tip + registry.baseSha 祖先，字段对账先于分支归属）、R9 全局化并给本会话收尾任务崩溃恢复豁免、R2 改 readdir+git 并集并用 manifest.runtimeTopLevel 显式声明运行时目录、进程组终止修正（child.detached 恒为 undefined 导致只杀直接子进程）、认领锁 claimLockExpiry 单一真相源与 ttl_minutes 覆盖、CLI schema 校验与 stdout 不截断、recall 纳入无 LOG 待办并合并归档、archive 与 R12 共用合法指针且保留 3 个任务会话、sync/restructure/rescue 符号链接防线与 writeProtocolFile、自更新启动器 fail-closed 与并发锁、退役 scripts/audit 与死代码、pack 纳入启动器、文档口径与版式修正。29/29 套件全绿，verify 双层 PASS 10/WARN 1(历史 T055-T057 已批准缺口)/ERROR 0。
+- 事实(v2): mode=managed | 文件 59 | ± +2849/-1157 | base=0d8764b11b886c748c6b04544d0c97d95d8d4cd9 | sha=e3f660d9871b96ff100092fbe86c7c1c9c2a92a0 | branch=relay/T071 || 验收: 通过 | verify: PASS 14·WARN 1·ERROR 0 | 耗时: 100s
+- worktree: branch=relay/T071; sha=e3f660d9871b96ff100092fbe86c7c1c9c2a92a0; 已验收,未合并(是否合并由人工决定)
+- 留给下一个: PR 待你复核。R9 的历史 T055–T057 WARN 按 DECISIONS 2026-11-26 T061 有意保留，不得回填。manifest.runtimeTopLevel 已在 controlRoot 与本 worktree 声明 .claude/.v2c/.zcode/out。
+
 ## 2026-11-27 06:32 | model=hungerg-free | task=T068 完成
 - 摘要: T068 发布 v2.1.1。内容:v2.1.0 之后的 T064(LOG 归档 + worktree/分支清理)+T065/T067(自更新启动器 scripts/relay-mcp-autoupdate.mjs 入库、仓库路径自推导、四重守卫[main 分支/非 linked worktree/工作区干净/无独有提交]、rev-list fail-closed、merge SIGTERM 宽限+postMergeCheck+入口健康复核、状态原子写、预算夹取、DECISIONS ff-merge 授权边界、隔离夹具行为断言 18 条)+T066(14 个 harness 注册面切换到仓库内启动器,新增 smoke-harness-paths.mjs 39 断言本机验收)。版本三方同步:package.json/plugin.json 2.1.1,CHANGELOG [2.1.1] - 2026-11-27(由 [Unreleased] 定版)。验证:npm test 27 套 1122 断言全绿,verify 双根 PASS 10·WARN 0·ERROR 0 / PASS 4·WARN 0·ERROR 0。前置确认:当前 HEAD(8c9d550)的三矩阵 CI 45868154259 success(Node 22/24/26)。推送/tag/Release 为用户已授权的外向动作,出场合并后执行。
 - 事实(v2): mode=managed | 文件 3 | ± +3/-3 | base=8c9d550f1645a2fac47ee81481bf316f388ff8cc | sha=b5d4551662c3d06eedcf3603ddb553548cbf7136 | branch=relay/T068 || 验收: 通过 | verify: PASS 16·WARN 0·ERROR 0 | 耗时: 63s
@@ -89,65 +95,5 @@
 - 负结果: 先发布 running 占位就必须有收尾人:占位后任何抛错会让 dispatch.json 永久停在 running;未知 status 也会被当成「没有任务」
 - 负结果: done_tasks[] 的三条 fail-open 同一个错误:新增入口只接了主路径,缺 done_task 时工具报「绿闸通过」却一字节不记
 - 负结果: 断言必须能失败:report 半写用例的卡从未 takeover,在持有者校验就返回,根本走不到 dispatchBusy 守卫
-
-## 2026-11-26 14:01 | model=hungerg-free | task=T061 完成
-- 摘要: T061 收尾第二轮审计遗留的两件事。(1) autoLaunch prompt 脱敏:注入 argv 的每个占位符变量(含 transcript 派生的 prompt)在替换前统一过 redactSecrets,并显式报告脱敏处数;argv 会出现在 ps/进程审计里,比 .relay/rescue/ 更难清理。补 9 条断言:含密钥 prompt 时 argv/dispatch.json/dispatch.log 均无原文、非密钥部分保留、脱敏可见。原 Finding #2 的 argv 半句至此真正闭环(dispatch.json 从不存 prompt 这半句本就成立,报告已校正)。(2) D8 证据缺口:核实 completionIdsOf 只读 LOG 标题行的 task= 字段,我在附录 B 里『附录第 5 条不成立』的更正是错的,已撤回并新增附录 C 记录根因与处置。根因是 relay_session_end 只接受单个 done_task,一次交付多任务无法留逐任务证据。按用户决定实现 done_tasks[]:每个任务各得独立 LOG 完成条目、自己的 [x]、自己的认领锁释放与各自验收门;仅单根(受管 worktree 拒绝,成对证据无法凑齐)。探针实测 D8 从 WARN 变 OK。历史 T055–T057 缺口按 DECISIONS 决定保留可见,不回填——手写完成条目与引擎条目不可区分,正是 R10/D8 要防的假绿。同步 CONTRACT/README/skills/AGENTS 模板/DECISIONS/CHANGELOG,relay_sync 重投影。修复过程中自己的改动引入一个回归:LOG 幂等去重改成无条件按 (model,task) 全局比对,导致维护出场被误判重复、LOG 不写、提交不发生(smoke-patches P6 挂掉);已改为仅在任务实际已完成时去重。最终 npm test 26 套 1074 断言全绿,verify 双根 PASS 10/WARN 0/ERROR 0,tools/list 10218/10240。
-- 事实(v2): mode=managed | 文件 12 | ± +281/-68 | base=89c1722ef49d941ad01f85aebae561acbf533d09 | sha=8630fde3f383cfc072f479d3f4894004cb340f5e | branch=relay/T061 || 验收: 通过 | verify: PASS 15·WARN 0·ERROR 0 | 耗时: 144s
-- worktree: branch=relay/T061; sha=8630fde3f383cfc072f479d3f4894004cb340f5e; 已验收,未合并(是否合并由人工决定)
-- 负结果: D8/R9 的取证只读 LOG 标题行的 task= 字段(DONE_TASK_RE=^T\d+\s*完成$),摘要正文提到别的任务号不构成证据;我先前采信『T054 条目正文覆盖 T055-T057』是错的,附录 B 的更正已撤回
-- 负结果: 手写 `## ... | task=T055 完成` 与引擎写出的条目不可区分,正是 R10/D8 要防的假绿:历史缺口只能由人批准后回填,不能为了让 WARN 消失而补记
-- 负结果: 受管 worktree 无法支持 done_tasks[]:成对证据要求『一个任务 = 一条分支 + 一条 registry 记录』,多任务同时出场只能凑出半套证据
-- 负结果: LOG 幂等去重不能无条件按 (model, task) 全局比对:维护出场(task=维护/无)会在同一仓库重复出现,那样会把第二次维护出场误判为重复,导致 LOG 不写、提交不发生(smoke-patches P6 实测挂掉)
-- 负结果: autoLaunch 的 argv 会出现在 ps/进程审计里,比 .relay/rescue/ 更难清理:transcript 派生的 prompt 必须在替换占位符之前脱敏,且脱敏发生处数要显式报告
-- 负结果: tools/list 预算只能靠压缩低频描述腾出:加 done_tasks 字段后超 167 字节,压 relay_rescue/init/onboard 的冗余措辞才回到 10218/10240
-- 留给下一个: T061 已交付:done_tasks[] 多任务出场 + autoLaunch prompt 脱敏。发布链仍是 T060。特别注意 D8 仍会对历史 T055–T057 报 WARN——这是有意保留的诚实偏差(见 DECISIONS 2026-11-26 T061 条),不是回归;新交付不会再复现,探针实测 D8 OK。若要消除该 WARN,须由人批准后按 T046 先例补记。发布前还需:推送并观察 Node 22/24/26 三矩阵 CI(本机只有 Node 26)、CHANGELOG 定版、tag、GitHub Release。
-
-## 2026-11-26 12:58 | model=hungerg-free | task=T059 完成
-- 摘要: T059 复核并修复第二轮审计的全部确认缺陷(原 15 条 + 7 条附录 + 复审新发现 2 条)。核心修复:(1) 快照密钥扫描前移到 git add/write-tree 之前,拒绝时对象库不残留 blob;扫描面超过 500 文件改为整体拒绝而非截断。(2) 接力锁 token 持久化进 state.json,report 用真实 token fencing 释放,释放失败即 isError 且保留 takeover;takeover 锁生命周期收敛到统一 finally。(3) dispatch.json 改临时文件+rename 原子发布,损坏态按 invalid→busy,takeover/report/drop 全部 fail-closed;父进程不再回写 state。(4) worker 用 detached 进程组 + kill(-pid) 终止整棵树,并加「超时+8s」有界结算兜底。(5) 分类器只依据最后一个有效轮次:早期 completion 作废、恢复后的 429 不再判 quota、工具报错后的分析文本不再洗成完成;新增 parseIssues 让行级损坏降级为 error。(6) SQLite 的 maxRows 下推 SQL LIMIT,jsonParse 返回 {value,ok},tool_result 按终态生成并安全序列化对象输出。(7) scan 归属推断改为先 stat 再有界前缀读 cwd。(8) 旧卡 harness→profile 映射、显式 metadata.json source、drop/edits 用 snapshotRoot、drop 识别过期锁。(9) autoLaunch 配置校验前移到任何 TASKS/state 写入之前。(10) fieldMap 的 roleMap/嵌套路径/对象型 apiErrorMarker 全部接通。文档:README 默认零扫描口径、CHANGELOG 补齐 T050/T051/T058 与本轮修复、CONTRACT 新增 T059 契约段、审计报告加附录 B 复核校正与闭环矩阵。验证:npm test 26 套 1056 断言全绿(抢救 172+27+40),relay_verify full PASS 11 WARN 0 ERROR 0, tools/list 10219/10240。
-- 事实(v2): mode=managed | 文件 12 | ± +1163/-274 | base=4f1bdda730dbc99f9315976ce5920dd4d87a6970 | sha=19836a7d5d0b7d01d11de86a485a7304bcc5f175 | branch=relay/T059 || 验收: 通过 | verify: PASS 15·WARN 0·ERROR 0 | 耗时: 55s
-- worktree: branch=relay/T059; sha=19836a7d5d0b7d01d11de86a485a7304bcc5f175; 已验收,未合并(是否合并由人工决定)
-- 负结果: 快照密钥不能只靠「文件名规则 + 事后 diff 扫描」:扫描必须在 git add/write-tree 之前,否则拒绝时 blob 已进对象库
-- 负结果: 按前 N 个文件截断扫描不会降低风险:未扫描的文件照样会被 git add -A 暂存,只能整体拒绝
-- 负结果: 接力锁 token 必须随 takeover 一起持久化进 state.json:没有 token 的释放必然失败,而『报成功但留着锁』比直接报错更糟
-- 负结果: dispatch.json 不能用 writeFileSync 截断覆盖:半写会被读成『没有任务』,必须临时文件+rename,损坏态一律按 busy fail-closed
-- 负结果: worker 超时只 kill 直接子进程不够:孙进程继承管道会让 close 永不触发,必须 detached 进程组 + 有界结算兜底
-- 负结果: 分类器的 explicitCompletion/apiError 不能是『一旦置位就永远为真』:只认最后一个有效轮次,否则早期 end_turn/429 会掩盖真正的中断
-- 负结果: 工具报错后只输出分析文本不算恢复:trailingToolError 必须保持到成功结果或明确收尾
-- 负结果: SQLite 行内 JSON 损坏不能当空对象继续分类:必须变成显式 parseIssue 并降级为 error
-- 负结果: SQLite 的 maxRows 必须下推到 SQL LIMIT:先 .all() 再比较等于上限形同虚设
-- 负结果: scan 归属推断不能先整份读 transcript:先 stat 再有界前缀读 cwd,否则大文件在 maxBytes 检查前就 OOM
-- 留给下一个: T052–T058 的功能与第二轮审计修复均已合并到 main 并通过本机 26 套测试(1056 断言)。发布前需人工决定:版本号是否维持 2.1.0、CHANGELOG 是否把本轮修复并入同一版本、是否推送并观察 Node 22/24/26 三矩阵 CI(本机只有 Node 26,CI 未覆盖当前 HEAD)。tag/Release 属人工授权动作。
-
-## 2026-11-26 09:26 | model=hungerg-t051 | task=T051 完成
-- 摘要: T051 完成 manifest 声明的通用自动拉起，保持核心不为任何具体 harness 开发。新增 src/engines/rescue-launch-worker.mjs 独立 detached worker：takeover 后按 manifest.rescue.autoLaunch 的 argv 数组启动子进程(shell:false)，worker 负责 stdout/stderr→dispatch.log、生命周期→dispatch.json(running/completed/failed/timed_out)、超时 SIGTERM→2s 后 SIGKILL、输出字节上限。autoLaunch 默认关闭；command 必须是非空非 NUL 字符串数组；cwd realpath 必须在 controlRoot 内；支持 {{prompt}}/{{root}}/{{task}}/{{rescueId}}/{{model}} 占位符，原样替换不经 shell,prompt 里的 ; touch 等元字符不会被执行。配置非法在启动前 fail-closed，撤销移交、释放接力锁、不写 dispatch。dispatch running 时 report/drop 被拒；同一卡已有 dispatch 不重复启动；show 展示 dispatch 状态。顺带修复一个通用数据建模缺陷：metadata candidate 的 profileId(agent 类型)占用了 profile 字段，覆盖格式描述符 id，导致 metadata 卡 fallback 到 jsonl-agent、running/failed 被误判 complete；改为 agentType 独立字段，格式描述符 id 由 scanSources 强制设置。纯元数据来源现在物化最小 JSONL(user prompt + status/error)，原始任务可哈希校验、可供 {{prompt}} 使用，同时保留 transcriptless 标记让状态分类仍以 metadata 为权威。新增 scripts/smoke-rescue-autolaunch.mjs 26 断言并接入 npm test(26 套)，覆盖默认关闭、argv 原样传递、shell 元字符不执行、状态/日志、幂等、运行中 report/drop 拒绝、超时、非法 command/cwd、核心零 harness 名。npm test 26 套全绿，auto-launch 26/0、rescue 133/0、SQLite 22/0，verify 双根全绿，tools/list 10219/10240。
-- 事实(v2): mode=managed | 文件 11 | ± +533/-26 | base=96ed65dbe8011fc085fe9c9c77b2fd1ac0aedc28 | sha=6fe04b16e9e695c043f10a590571b4a27d208017 | branch=relay/T051 || 验收: 通过 | verify: PASS 15·WARN 0·ERROR 0 | 耗时: 58s
-- worktree: branch=relay/T051; sha=6fe04b16e9e695c043f10a590571b4a27d208017; 已验收,未合并(是否合并由人工决定)
-- 负结果: 自动拉起必须在 manifest 明确启用:默认启动任意命令风险不可接受;未配置时 takeover 只生成接力单。
-- 负结果: command 必须是 argv 数组且 shell:false;经 shell 拼接 prompt 会把 transcript 注入升级成命令执行。
-- 负结果: metadata 的 profileId 是 agent 类型,不能占用格式描述符 id 字段;否则 candidate 会 fallback 到错误描述符,把 running/failed 误判为正常完成。
-- 负结果: 纯元数据卡也要物化最小任务记录:否则自动拉起的 {{prompt}} 无源、原始任务无法哈希校验;但仍须保留 transcriptless 标记,让状态分类以 metadata 为权威。
-- 负结果: dispatch running 时 report/drop 必须拒绝;否则会删掉正在执行的任务与唯一现场。
-- 留给下一个: 所有功能与审计修复已合并 main。发布版本/tag/GitHub Release 属人工授权动作;当前 package.json/plugin.json 为 2.1.0,发布前需人工确认版本策略与 CHANGELOG 定版。
-
-## 2026-11-26 09:06 | model=hungerg-t050 | task=T050 完成
-- 摘要: T050 完成通用只读 SQLite 会话抢救，同时保持 T058 的「核心不为任何具体 harness 开发」。新增 src/engines/rescue-sqlite-profile.mjs，实现 kind=sqlite-conversation 描述符：表名/列名/session-directory 字段/message-part 关联全部由 manifest.rescue.profiles 纯 JSON 声明，核心不认识任何具体库 schema。node:sqlite 用 readOnly:true 打开、查询后 close，绝不写库；受控 SQL 标识符白名单(拒绝 SQL 关键字/非法字符)；message.data.error 为嵌套 JSON 字符串时二次 JSON.parse 后取出 code/statusCode/name，进入统一 toolSignals.apiError，复用 quota/error 分类；session/message/part 物化为标准 JSONL，工具调用与结果拆成 assistant(tool_use)/user(tool_result) 两条记录，step_finish(reason=stop)/stop_reason=end_turn 作为明确正常收尾信号；message/part 行数受 maxRows 限制、物化字节受 manifest.rescue.maxBytes 限制，超限显式失败不静默截断；库损坏/缺表/模块不可用由 scan「说明」明确报告，不静默变 0 候选。描述符新增可选 loadTranscript(candidate) 接口，核心只负责读取字节→hash→parse→capture，文件读取仅是默认路径；resolveAllProfiles 改异步以懒加载 SQLite 模块，未配置该 kind 的项目不付 import 成本。顺带修两个通用缺陷：(1) describeCandidate 对象里 profile 键重复；(2) fence() 改为不可信文本逐行加 │ 前缀，彻底阻断任意长度反引号逃逸(比固定三反引号转义更可判定)。新增 scripts/smoke-rescue-zcode-db.mjs 22 断言并接入 npm test(25 套)，覆盖只读文件不变、quota 分类、完整任务/show/takeover、正常完成不误报、损坏/空库/maxRows、核心零 harness 名。原 rescue 套件 133/0，npm test 25 套全绿，verify 双根全绿。
-- 事实(v2): mode=managed | 文件 10 | ± +611/-39 | base=f4d297b53a0acce19b4be638a3cd33408c8d826b | sha=a499c25c9301591ace17f0624b958ef0fbe1f216 | branch=relay/T050 || 验收: 通过 | verify: PASS 16·WARN 0·ERROR 0 | 耗时: 57s
-- worktree: branch=relay/T050; sha=a499c25c9301591ace17f0624b958ef0fbe1f216; 已验收,未合并(是否合并由人工决定)
-- 负结果: SQLite 描述符不能写死首个用户的表名/列名/错误字段:那会重新引入 T058 禁止的 harness 特例。schema 只能由 manifest 的纯 JSON 声明。
-- 负结果: 固定三反引号围栏不安全:payload 含四反引号或恰好以三反引号开头时可逃逸。改为逐行加 │ 前缀,保证 payload 不可能出现行首围栏标记。
-- 负结果: 工具调用与结果必须拆成 assistant(tool_use)/user(tool_result) 两条记录;塞在同一条 assistant 内容里会导致 pendingToolUse 永远删不掉,正常完成被误判为悬空。
-- 负结果: 正常完成必须有明确信号(end_turn/stop/step_finish),否则历史残留 tool_use 会让分类器误判;这个信号由描述符从来源状态映射,核心不感知具体 schema。
-- 负结果: node:sqlite 是 Node>=22.13 才可用;不可用时要明确报告,不能静默跳过或伪造转录损坏。
-- 留给下一个: T048 只交付「接力单 + 可派发的接力提示词」。自动化需先决定:命令执行面(信任边界,参考 acceptance.commands 的逐字符签字)、后台进程生命周期与回收、重试上限、以及与 relay 认领锁/接力锁的衔接。开工前先记 DECISIONS(减法问)。注意 T058/T050 已确立「核心不为任何具体 harness 开发」,该任务同样不得绑定特定 harness 的 CLI 或启动方式。对应任务 T051。
-
-## 2026-11-26 08:46 | model=zcode-deepseek-t058 | task=T058 完成
-- 摘要: T058 抢救引擎通用化：核心零 harness 耦合。新增 src/engines/rescue-profiles.mjs 描述符层，把「在哪找、怎么读」从核心彻底移出：(1) 描述符契约 {id,title,roots,discover,parse,transcriptless}，discover 返回统一候选、parse 返回统一摘要(含 toolSignals)；(2) 三种接入方式——内置参考描述符(jsonl-agent 一行一条 JSON / json-meta 纯元数据目录)、声明式(manifest.rescue.profiles 纯 JSON，kind=jsonl-message|json-metadata + fieldMap)、函数式(宿主注入 _profiles)；(3) 核心 rescue.mjs 现在零 harness 专有名(注释也算)、零硬编码安装路径，原 31 处耦合全部消除；(4) 默认不扫描任何目录——未声明 manifest.rescue.sources 时 scan 不读 home、不猜安装位置，来源一律显式；(5) 归属 fail-closed(既无 cwd 又无 transcript 佐证的候选跳过并说明)；(6) 分类只看描述符归一后的 toolSignals，不再感知任何 harness 语义；(7) state 用 profile 记录来源描述符 id，未注册时 show/takeover 明确报错而非静默降级。测试全部从 RELAY_RESCUE_HOME 环境变量改为声明式 sources + 自定义描述符(与真实用户用法一致)，并新增 6f 架构段 8 条断言：核心零 harness 正则扫描、不硬编码安装目录、注册表导出、声明式支持、默认零扫描、以及「用一份从未见过的 brand-new 描述符验证不改核心代码即可发现并正确分类」。修复过程中还发现描述符层缺少 import 导致 discover 被 try/catch 静默吞成空结果(与审计对「异常静默吞掉」的警告同型)。rescue 套件 134 断言全绿(连跑 3 次稳定)，npm test 24 套全绿，verify 双根全绿，tools/list 10075/10240。
-- 事实(v2): mode=managed | 文件 8 | ± +802/-351 | base=d63d210cac90c1d0fc247d5edd71bed94cd134b9 | sha=ff71159d572d1a561477bd633f80141385e87674 | branch=relay/T058 || 验收: 通过 | verify: PASS 16·WARN 0·ERROR 0 | 耗时: 59s
-- worktree: branch=relay/T058; sha=ff71159d572d1a561477bd633f80141385e87674; 已验收,未合并(是否合并由人工决定)
-- 负结果: 核心一旦硬编码具体 harness 就不再通用:判断「是不是 API 错误、有没有悬空工具调用」是结构问题,不是 harness 语义问题;抽成描述符后核心的分类/快照/锁/协议写入全部与 harness 无关。
-- 负结果: 描述符层漏了 import 时,discover 的异常被 try/catch 静默吞成「0 候选」,表现为「扫描正常但找不到任何东西」——与审计点名的「异常静默吞掉」同型缺陷,必须靠直接单测 discover 暴露。
-- 负结果: manifest 只能存 JSON,函数无法序列化:自定义描述符必须支持**声明式纯数据**形态(kind + fieldMap),否则用户根本无法在自己的项目里注册新 harness。
-- 负结果: 测试夹具不应依赖环境变量(RELAY_RESCUE_HOME)注入来源:那会让核心保留一条绕过 manifest 的配置通道,违反「配置面只在 manifest」铁律。改用 manifest.rescue.sources 后,测试与真实用法一致。
-- 留给下一个: T048 只交付「接力单 + 可派发的接力提示词」。自动化需先决定:命令执行面(信任边界,参考 acceptance.commands 的逐字符签字)、后台进程生命周期与回收、重试上限、以及与 relay 认领锁/接力锁的衔接。开工前先记 DECISIONS(减法问)。注意 T058 已确立「核心不为任何具体 harness 开发」,该任务同样不得绑定特定 harness 的 CLI 或启动方式。对应任务 T051。ZCode SQLite 抢救为 T050(需人类授权,且应实现为**声明式描述符的一种**,而不是核心特例)。
 
 <!-- relay:log-archive: docs/archive/LOG-2026-09-11.md -->
